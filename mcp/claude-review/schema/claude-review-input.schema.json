@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Claude Review Input",
+  "type": "object",
+  "required": [
+    "run_id",
+    "task_file",
+    "plan_file",
+    "diff_file",
+    "diff_meta_file",
+    "changed_files_file",
+    "verification_file",
+    "review_scope",
+    "output_file",
+    "timeout_seconds",
+    "max_input_chars",
+    "max_files",
+    "max_diff_lines"
+  ],
+  "properties": {
+    "run_id": { "type": "string", "minLength": 1 },
+    "harness_version": { "type": "string" },
+    "prompt_version": { "type": "string" },
+    "task_file": { "type": "string", "minLength": 1 },
+    "plan_file": { "type": "string", "minLength": 1 },
+    "diff_file": { "type": "string", "minLength": 1 },
+    "diff_meta_file": { "type": "string", "minLength": 1 },
+    "changed_files_file": { "type": "string", "minLength": 1 },
+    "verification_file": { "type": "string", "minLength": 1 },
+    "review_scope": {
+      "type": "array",
+      "items": { "type": "string" },
+      "minItems": 1
+    },
+    "output_file": { "type": "string", "minLength": 1 },
+    "timeout_seconds": { "type": "integer", "minimum": 1 },
+    "max_input_chars": { "type": "integer", "minimum": 1 },
+    "max_files": { "type": "integer", "minimum": 1 },
+    "max_diff_lines": { "type": "integer", "minimum": 1 }
+  },
+  "additionalProperties": false
+}

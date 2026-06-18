@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Claude Review Output",
+  "type": "object",
+  "required": [
+    "status",
+    "run_id",
+    "completed",
+    "output_file",
+    "raw_log_file",
+    "duration_seconds"
+  ],
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": [
+        "passed",
+        "findings",
+        "failed",
+        "timeout",
+        "schema_invalid",
+        "not_available"
+      ]
+    },
+    "reason": {
+      "type": "string",
+      "enum": [
+        "tool_missing",
+        "auth_missing",
+        "input_over_budget",
+        "no_review_target",
+        "unsupported_environment",
+        "wrapper_failed_to_start"
+      ]
+    },
+    "run_id": { "type": "string", "minLength": 1 },
+    "completed": { "type": "boolean" },
+    "output_file": { "type": "string", "minLength": 1 },
+    "raw_log_file": { "type": "string", "minLength": 1 },
+    "exit_code": { "type": ["integer", "null"] },
+    "duration_seconds": { "type": "number", "minimum": 0 }
+  },
+  "additionalProperties": false
+}
