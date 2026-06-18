@@ -9,7 +9,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from adapter import run_claude_review  # noqa: E402
+from adapter import build_envelope, run_claude_review  # noqa: E402
 
 
 def load_payload(input_file: str | Path) -> dict:
@@ -17,8 +17,14 @@ def load_payload(input_file: str | Path) -> dict:
 
 
 def run_from_paths(input_file: str | Path, output_file: str | Path, raw_log_file: str | Path) -> dict:
-    del output_file, raw_log_file
     payload = load_payload(input_file)
+    if payload.get("output_file") != str(output_file) or payload.get("raw_log_file") != str(raw_log_file):
+        return build_envelope(
+            payload,
+            "not_available",
+            duration_seconds=0.0,
+            reason="unsupported_environment",
+        )
     return run_claude_review(payload)
 
 

@@ -150,18 +150,40 @@ class ClaudeReviewAdapterTest(unittest.TestCase):
             payload["raw_log_file"] = str(tmp / "outside.raw.log")
             input_file = tmp / "input.json"
             input_file.write_text(json.dumps(payload), encoding="utf-8")
-            safe_output_arg = tmp / "artifacts" / "safe-output.json"
-            safe_raw_arg = tmp / "artifacts" / "safe.raw.log"
 
             if not hasattr(wrapper, "run_from_paths"):
                 self.fail("wrapper must expose run_from_paths")
 
             with mock.patch.object(wrapper, "run_claude_review", return_value={}) as run:
-                wrapper.run_from_paths(input_file, safe_output_arg, safe_raw_arg)
+                wrapper.run_from_paths(
+                    input_file,
+                    payload["output_file"],
+                    payload["raw_log_file"],
+                )
 
             called_payload = run.call_args.args[0]
             self.assertEqual(called_payload["output_file"], str(tmp / "outside-output.json"))
             self.assertEqual(called_payload["raw_log_file"], str(tmp / "outside.raw.log"))
+
+    def test_wrapper_path_mismatch_rejects_without_invoking_adapter(self):
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            payload = self.make_payload(tmp)
+            input_file = tmp / "input.json"
+            input_file.write_text(json.dumps(payload), encoding="utf-8")
+            mismatched_output = tmp / "artifacts" / "other-output.json"
+
+            with mock.patch.object(wrapper, "run_claude_review", return_value={}) as run:
+                result = wrapper.run_from_paths(
+                    input_file,
+                    mismatched_output,
+                    payload["raw_log_file"],
+                )
+
+            run.assert_not_called()
+            self.assertEqual(result["status"], "not_available")
+            self.assertEqual(result["reason"], "unsupported_environment")
+            self.assertFalse(result["completed"])
 
     def test_tool_missing_returns_not_available_tool_missing(self):
         with tempfile.TemporaryDirectory() as raw:
@@ -223,6 +245,119 @@ class ClaudeReviewAdapterTest(unittest.TestCase):
 
             self.assertEqual(result["status"], "passed")
             self.assertEqual(result["findings"], [])
+
+    def test_invalid_tested_item_raises_schema_error(self):
+        with tempfile.TemporaryDirectory() as raw:
+            payload = self.make_payload(Path(raw))
+            fake = {
+                "result": {
+                    "summary": "No issues found.",
+                    "findings": [],
+                    "tested": [123],
+                    "not_tested": ["Real Claude execution."],
+                    "residual_risks": ["None identified."],
+                }
+            }
+
+            with self.assertRaises(adapter.ReviewSchemaError):
+                adapter.normalize_claude_json(fake, payload)
+
+    def test_invalid_finding_line_values_raise_schema_error(self):
+        invalid_values = (12.5, "12")
+        for line_value in invalid_values:
+            with self.subTest(line_value=line_value):
+                with tempfile.TemporaryDirectory() as raw:
+                    payload = self.make_payload(Path(raw))
+                    fake = {
+                        "result": {
+                            "summary": "One issue found.",
+                            "findings": [
+                                {
+                                    "severity": "medium",
+                                    "title": "Invalid line",
+                                    "evidence": "Line was not an integer.",
+                                    "recommendation": "Return an integer line.",
+                                    "line": line_value,
+                                }
+                            ],
+                            "tested": ["Reviewed adapter tests."],
+                            "not_tested": ["Real Claude execution."],
+                            "residual_risks": ["None identified."],
+                        }
+                    }
+
+                    with self.assertRaises(adapter.ReviewSchemaError):
+                        adapter.normalize_claude_json(fake, payload)
+
+    def test_invalid_finding_line_from_subprocess_returns_schema_invalid(self):
+        with tempfile.TemporaryDirectory() as raw:
+            payload = self.make_payload(Path(raw))
+            stdout = json.dumps(
+                {
+                    "result": {
+                        "summary": "One issue found.",
+                        "findings": [
+                            {
+                                "severity": "medium",
+                                "title": "Invalid line",
+                                "evidence": "Line was not an integer.",
+                                "recommendation": "Return an integer line.",
+                                "line": "12",
+                            }
+                        ],
+                        "tested": ["Reviewed adapter tests."],
+                        "not_tested": ["Real Claude execution."],
+                        "residual_risks": ["None identified."],
+                    }
+                }
+            )
+            completed = adapter.subprocess.CompletedProcess(
+                args=[],
+                returncode=0,
+                stdout=stdout,
+                stderr="",
+            )
+
+            with mock.patch.object(adapter.shutil, "which", return_value="claude"):
+                with mock.patch.object(adapter.subprocess, "run", return_value=completed):
+                    result = adapter.run_claude_review(payload)
+
+            self.assertEqual(result["status"], "schema_invalid")
+            self.assertFalse(result["completed"])
+
+    def test_nonzero_authenticated_output_remains_failed(self):
+        with tempfile.TemporaryDirectory() as raw:
+            payload = self.make_payload(Path(raw))
+            completed = adapter.subprocess.CompletedProcess(
+                args=[],
+                returncode=2,
+                stdout="already authenticated but command failed\n",
+                stderr="",
+            )
+
+            with mock.patch.object(adapter.shutil, "which", return_value="claude"):
+                with mock.patch.object(adapter.subprocess, "run", return_value=completed):
+                    result = adapter.run_claude_review(payload)
+
+            self.assertEqual(result["status"], "failed")
+            self.assertNotIn("reason", result)
+
+    def test_nonzero_clear_login_missing_output_returns_auth_missing(self):
+        with tempfile.TemporaryDirectory() as raw:
+            payload = self.make_payload(Path(raw))
+            completed = adapter.subprocess.CompletedProcess(
+                args=[],
+                returncode=2,
+                stdout="",
+                stderr="Error: not logged in. Please log in first.\n",
+            )
+
+            with mock.patch.object(adapter.shutil, "which", return_value="claude"):
+                with mock.patch.object(adapter.subprocess, "run", return_value=completed):
+                    result = adapter.run_claude_review(payload)
+
+            self.assertEqual(result["status"], "not_available")
+            self.assertEqual(result["reason"], "auth_missing")
 
 
 if __name__ == "__main__":

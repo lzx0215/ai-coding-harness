@@ -493,12 +493,18 @@ def output_indicates_auth_missing(output: str) -> bool:
         "login required",
         "please login",
         "please log in",
-        "authentication",
-        "authenticated",
+        "log in first",
+        "not authenticated",
+        "authentication required",
+        "authentication failed",
         "unauthorized",
-        "api key",
-        "auth token",
         "missing auth",
+        "invalid api key",
+        "missing api key",
+        "no api key",
+        "api key required",
+        "missing auth token",
+        "auth token required",
     )
     return any(marker in normalized for marker in markers)
 
@@ -594,22 +600,23 @@ def _normalize_findings(value: Any) -> list[dict[str, Any]]:
 
         file_value = finding.get("file")
         if file_value is not None:
-            file_text = str(file_value).strip()
-            if file_text:
-                normalized_finding["file"] = file_text
+            if not isinstance(file_value, str):
+                raise ReviewSchemaError(f"finding {index} file must be a string")
+            file_text = file_value.strip()
+            if not file_text:
+                raise ReviewSchemaError(f"finding {index} file must be non-empty")
+            normalized_finding["file"] = file_text
 
         if "line" in finding:
             line_value = finding["line"]
             if line_value is None:
                 normalized_finding["line"] = None
             else:
-                try:
-                    line_number = int(line_value)
-                except (TypeError, ValueError) as exc:
-                    raise ReviewSchemaError(f"finding {index} line is invalid") from exc
-                if line_number < 1:
+                if not isinstance(line_value, int) or isinstance(line_value, bool):
+                    raise ReviewSchemaError(f"finding {index} line is invalid")
+                if line_value < 1:
                     raise ReviewSchemaError(f"finding {index} line must be positive")
-                normalized_finding["line"] = line_number
+                normalized_finding["line"] = line_value
 
         normalized.append(normalized_finding)
 
@@ -622,7 +629,9 @@ def _normalize_string_list(value: Any, field: str) -> list[str]:
 
     normalized: list[str] = []
     for index, item in enumerate(value):
-        text = str(item).strip()
+        if not isinstance(item, str):
+            raise ReviewSchemaError(f"{field}[{index}] must be a string")
+        text = item.strip()
         if not text:
             raise ReviewSchemaError(f"{field}[{index}] must be non-empty")
         normalized.append(text)
