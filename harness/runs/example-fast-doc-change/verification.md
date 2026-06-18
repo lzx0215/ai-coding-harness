@@ -2,11 +2,19 @@
 
 ## Commands Run
 
-`Test-Path harness\runs\example-fast-doc-change\state.json`
+```powershell
+Test-Path harness\runs\example-fast-doc-change\task.md; Test-Path harness\runs\example-fast-doc-change\triage.md; Test-Path harness\runs\example-fast-doc-change\verification.md; Test-Path harness\runs\example-fast-doc-change\handoff.md; Test-Path harness\runs\example-fast-doc-change\state.json
+```
 
 ## Results
 
-Expected result is `True`.
+```text
+True
+True
+True
+True
+True
+```
 
 ## Not Verified
 

@@ -6,7 +6,7 @@
   "track": "Fast",
   "current_workflow": "fast-doc-change",
   "owner": "codex",
-  "base_commit": "example",
+  "base_commit": "0c278ac562dd7de1b552ebc3fb0a2cf6de2ac31e",
   "created_at": "2026-06-18T00:00:00Z",
   "updated_at": "2026-06-18T00:00:00Z",
   "external_agents": [
