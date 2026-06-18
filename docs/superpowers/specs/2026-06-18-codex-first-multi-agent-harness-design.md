@@ -410,6 +410,7 @@ Example input:
   "run_id": "2026-06-18-001",
   "harness_version": "0.1.0",
   "prompt_version": "0.1.0",
+  "artifact_dir": "harness/runs/2026-06-18-001/reviews",
   "task_file": "harness/runs/2026-06-18-001/task.md",
   "plan_file": "harness/runs/2026-06-18-001/plan.md",
   "diff_file": "harness/runs/2026-06-18-001/artifacts/diff.patch",
@@ -424,6 +425,8 @@ Example input:
     "maintainability"
   ],
   "output_file": "harness/runs/2026-06-18-001/reviews/claude-review.json",
+  "review_file": "harness/runs/2026-06-18-001/reviews/claude-review.evidence.json",
+  "raw_log_file": "harness/runs/2026-06-18-001/reviews/claude-review.raw.log",
   "timeout_seconds": 900,
   "max_input_chars": 120000,
   "max_files": 30,
@@ -541,10 +544,19 @@ If input exceeds budget, the adapter returns:
 ```json
 {
   "status": "not_available",
-  "reason": "input_over_budget",
+  "run_id": "2026-06-18-001",
   "completed": false,
+  "reason": "input_over_budget",
+  "harness_version": "0.1.0",
+  "adapter_version": "0.1.0",
+  "prompt_version": "0.1.0",
+  "reviewer": "claude-code",
+  "reviewer_model": "unknown",
+  "reviewer_model_version": "unknown",
+  "reviewer_cli_version": "unknown",
   "output_file": "harness/runs/2026-06-18-001/reviews/claude-review.json",
-  "raw_log_file": "harness/runs/2026-06-18-001/reviews/claude-review.raw.log"
+  "raw_log_file": "harness/runs/2026-06-18-001/reviews/claude-review.raw.log",
+  "duration_seconds": 0
 }
 ```
 
