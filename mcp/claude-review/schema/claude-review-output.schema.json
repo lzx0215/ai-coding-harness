@@ -69,6 +69,7 @@
           "severity": {
             "type": "string",
             "enum": [
+              "info",
               "low",
               "medium",
               "high",
@@ -77,7 +78,9 @@
           },
           "title": { "type": "string", "minLength": 1 },
           "evidence": { "type": "string", "minLength": 1 },
-          "recommendation": { "type": "string", "minLength": 1 }
+          "recommendation": { "type": "string", "minLength": 1 },
+          "file": { "type": "string", "minLength": 1 },
+          "line": { "type": ["integer", "null"], "minimum": 1 }
         },
         "additionalProperties": false
       }
@@ -146,7 +149,8 @@
           "residual_risks"
         ],
         "properties": {
-          "completed": { "const": true }
+          "completed": { "const": true },
+          "findings": { "maxItems": 0 }
         }
       }
     },
