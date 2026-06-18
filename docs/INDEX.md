@@ -2,9 +2,18 @@
 
 ## Specs
 
-- [Codex-first Multi-Agent Harness v0.1 Design](superpowers/specs/2026-06-18-codex-first-multi-agent-harness-design.md)
+- `docs/superpowers/specs/2026-06-18-codex-first-multi-agent-harness-design.md` - Codex-first Multi-Agent Harness v0.1 design.
 
 ## Plans
 
-- [Codex-first Multi-Agent Harness Implementation Plan](superpowers/plans/2026-06-18-codex-first-multi-agent-harness-implementation.md)
+- `docs/superpowers/plans/2026-06-18-codex-first-multi-agent-harness-implementation.md` - Implementation plan for the v0.1 scaffold.
 
+## Harness
+
+- `AGENTS.md` - Codex entrypoint and read order.
+- `harness/core/` - Agent-neutral Harness rules.
+- `harness/adapters/` - Agent-specific adapter rules.
+- `harness/templates/` - Copyable task and evidence templates.
+- `harness/schemas/` - JSON schemas for machine-checkable artifacts.
+- `harness/memory/` - Curated long-term memory.
+- `harness/runs/` - Per-task run records and evidence.
