@@ -6,7 +6,7 @@
 
 ## Workflow Registry
 
-| Workflow ID | Track | Applies to | Required stages |
+| Workflow ID | Track | Applies to | Stage path |
 | --- | --- | --- | --- |
 | `fast-doc-change` | Fast | Copy, typo, or formatting-only documentation changes. | Discover, Deliver, Verify, Handoff summary. |
 | `fast-code-change` | Fast | Very small low-risk code edits with obvious local validation. | Discover, Deliver, Verify, Handoff summary. |

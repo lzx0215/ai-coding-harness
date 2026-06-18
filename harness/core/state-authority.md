@@ -28,6 +28,18 @@ Harness defines valid states and transitions. Codex executes transitions for the
 - `timeout` and `not_available` are adapter statuses, not completion evidence.
 - Historical run records are append-only unless the user explicitly requests correction.
 
+## Review Status Mapping
+
+| Review status | Harness state |
+| --- | --- |
+| `passed` | `reviewed` |
+| `findings` with no `high` or `critical` findings | `reviewed` after triage |
+| `findings` with `high` or `critical` findings | `review_blocked` |
+| `failed` | `review_failed` |
+| `timeout` | `review_timeout` |
+| `schema_invalid` | `review_schema_invalid` |
+| `not_available` | `external_review_unavailable` |
+
 ## Resume
 
 On resume, Codex must read `state.json`, validate it against `harness/schemas/state.schema.json`, verify evidence paths, and continue only from a valid transition.
