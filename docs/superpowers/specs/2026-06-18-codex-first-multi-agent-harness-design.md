@@ -453,35 +453,13 @@ unsupported_environment
 wrapper_failed_to_start
 ```
 
-Example successful output:
+Example successful MCP envelope output:
 
 ```json
 {
   "status": "findings",
   "run_id": "2026-06-18-001",
-  "harness_version": "0.1.0",
-  "adapter_version": "0.1.0",
-  "prompt_version": "0.1.0",
   "completed": true,
-  "output_file": "harness/runs/2026-06-18-001/reviews/claude-review.json",
-  "raw_log_file": "harness/runs/2026-06-18-001/reviews/claude-review.raw.log",
-  "exit_code": 0,
-  "duration_seconds": 187,
-  "reviewer": {
-    "name": "claude-code",
-    "model": "unknown",
-    "model_version": "unknown",
-    "cli_version": "unknown"
-  }
-}
-```
-
-Example review result file:
-
-```json
-{
-  "status": "findings",
-  "run_id": "2026-06-18-001",
   "harness_version": "0.1.0",
   "adapter_version": "0.1.0",
   "prompt_version": "0.1.0",
@@ -489,6 +467,11 @@ Example review result file:
   "reviewer_model": "unknown",
   "reviewer_model_version": "unknown",
   "reviewer_cli_version": "unknown",
+  "output_file": "harness/runs/2026-06-18-001/reviews/claude-review.json",
+  "review_file": "harness/runs/2026-06-18-001/reviews/claude-review.evidence.json",
+  "raw_log_file": "harness/runs/2026-06-18-001/reviews/claude-review.raw.log",
+  "exit_code": 0,
+  "duration_seconds": 187,
   "summary": "One medium finding reported.",
   "findings": [
     {
@@ -504,8 +487,30 @@ Example review result file:
   "not_tested": [
     "Did not run the test suite independently."
   ],
-  "residual_risks": [],
-  "raw_log_file": "harness/runs/2026-06-18-001/reviews/claude-review.raw.log"
+  "residual_risks": []
+}
+```
+
+Example structured review evidence written to `review_file`, not the MCP envelope:
+
+```json
+{
+  "summary": "One medium finding reported.",
+  "findings": [
+    {
+      "severity": "medium",
+      "file": "src/example.ts",
+      "line": 42,
+      "title": "Input validation happens after an early return.",
+      "evidence": "The changed branch returns before validation runs.",
+      "recommendation": "Move validation before the early return."
+    }
+  ],
+  "tested": [],
+  "not_tested": [
+    "Did not run the test suite independently."
+  ],
+  "residual_risks": []
 }
 ```
 
