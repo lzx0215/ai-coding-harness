@@ -1,17 +1,21 @@
 {
-  "status": "passed",
-  "run_id": "example-run",
+  "status": "replace-me",
+  "run_id": "replace-with-run-id",
   "harness_version": "0.1.0",
-  "adapter_version": "0.1.0",
-  "prompt_version": "0.1.0",
-  "reviewer": "external-agent",
-  "reviewer_model": "unknown",
-  "reviewer_model_version": "unknown",
-  "reviewer_cli_version": "unknown",
-  "summary": "",
+  "adapter_version": "replace-with-adapter-version",
+  "prompt_version": "replace-with-prompt-version",
+  "reviewer": "replace-with-reviewer",
+  "reviewer_model": "replace-with-reviewer-model",
+  "reviewer_model_version": "replace-with-reviewer-model-version",
+  "reviewer_cli_version": "replace-with-reviewer-cli-version",
+  "summary": "replace with review summary before using as evidence",
   "findings": [],
   "tested": [],
-  "not_tested": [],
-  "residual_risks": [],
-  "raw_log_file": ""
+  "not_tested": [
+    "replace with untested areas before using as evidence"
+  ],
+  "residual_risks": [
+    "replace with residual risks before using as evidence"
+  ],
+  "raw_log_file": "replace-with-raw-log-file"
 }

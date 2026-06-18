@@ -58,23 +58,33 @@
     },
     "owner": { "type": "string", "enum": ["codex"] },
     "base_commit": { "type": "string", "minLength": 1 },
-    "created_at": { "type": "string", "minLength": 1 },
-    "updated_at": { "type": "string", "minLength": 1 },
+    "created_at": {
+      "type": "string",
+      "minLength": 1,
+      "format": "date-time",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?(?:Z|[+-]\\d{2}:\\d{2})$"
+    },
+    "updated_at": {
+      "type": "string",
+      "minLength": 1,
+      "format": "date-time",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?(?:Z|[+-]\\d{2}:\\d{2})$"
+    },
     "external_agents": {
       "type": "array",
       "items": {
         "type": "object",
         "required": ["name", "role", "state_access", "status"],
         "properties": {
-          "name": { "type": "string" },
-          "role": { "type": "string" },
-          "adapter": { "type": "string" },
-          "adapter_version": { "type": "string" },
-          "tool": { "type": "string" },
-          "model": { "type": "string" },
-          "model_version": { "type": "string" },
-          "cli_version": { "type": "string" },
-          "prompt_version": { "type": "string" },
+          "name": { "type": "string", "minLength": 1 },
+          "role": { "type": "string", "minLength": 1 },
+          "adapter": { "type": "string", "minLength": 1 },
+          "adapter_version": { "type": "string", "minLength": 1 },
+          "tool": { "type": "string", "minLength": 1 },
+          "model": { "type": "string", "minLength": 1 },
+          "model_version": { "type": "string", "minLength": 1 },
+          "cli_version": { "type": "string", "minLength": 1 },
+          "prompt_version": { "type": "string", "minLength": 1 },
           "state_access": { "type": "string", "enum": ["none"] },
           "status": {
             "type": "string",
@@ -100,13 +110,67 @@
         "type": "object",
         "required": ["type", "path"],
         "properties": {
-          "type": { "type": "string" },
-          "path": { "type": "string" },
-          "description": { "type": "string" }
+          "type": { "type": "string", "minLength": 1 },
+          "path": { "type": "string", "minLength": 1 },
+          "description": { "type": "string", "minLength": 1 }
         },
         "additionalProperties": false
       }
     }
   },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "current_workflow": {
+            "enum": ["fast-doc-change", "fast-code-change"]
+          }
+        },
+        "required": ["current_workflow"]
+      },
+      "then": {
+        "properties": {
+          "track": { "const": "Fast" }
+        },
+        "required": ["track"]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "current_workflow": {
+            "enum": [
+              "standard-doc-system-change",
+              "standard-code-change",
+              "standard-agent-adapter-change"
+            ]
+          }
+        },
+        "required": ["current_workflow"]
+      },
+      "then": {
+        "properties": {
+          "track": { "const": "Standard" }
+        },
+        "required": ["track"]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "current_workflow": {
+            "enum": ["strict-risk-change", "strict-destructive-change"]
+          }
+        },
+        "required": ["current_workflow"]
+      },
+      "then": {
+        "properties": {
+          "track": { "const": "Strict" }
+        },
+        "required": ["track"]
+      }
+    }
+  ],
   "additionalProperties": false
 }

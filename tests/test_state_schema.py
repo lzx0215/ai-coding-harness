@@ -7,15 +7,18 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class StateSchemaTest(unittest.TestCase):
+    def load_schema(self):
+        return json.loads((ROOT / "harness/schemas/state.schema.json").read_text())
+
     def test_schema_has_required_statuses(self):
-        schema = json.loads((ROOT / "harness/schemas/state.schema.json").read_text())
+        schema = self.load_schema()
         statuses = schema["properties"]["status"]["enum"]
         self.assertIn("review_blocked", statuses)
         self.assertIn("review_failed", statuses)
         self.assertIn("external_review_unavailable", statuses)
 
     def test_schema_has_registered_workflows(self):
-        schema = json.loads((ROOT / "harness/schemas/state.schema.json").read_text())
+        schema = self.load_schema()
         workflows = schema["properties"]["current_workflow"]["enum"]
         self.assertEqual(
             workflows,
@@ -29,6 +32,76 @@ class StateSchemaTest(unittest.TestCase):
                 "strict-destructive-change",
             ],
         )
+
+    def test_schema_ties_workflows_to_tracks(self):
+        schema = self.load_schema()
+        constraints = {}
+        for clause in schema["allOf"]:
+            self.assertEqual(clause["if"]["required"], ["current_workflow"])
+            self.assertEqual(clause["then"]["required"], ["track"])
+            workflows = tuple(clause["if"]["properties"]["current_workflow"]["enum"])
+            track = clause["then"]["properties"]["track"]["const"]
+            constraints[workflows] = track
+
+        self.assertEqual(
+            constraints,
+            {
+                ("fast-doc-change", "fast-code-change"): "Fast",
+                (
+                    "standard-doc-system-change",
+                    "standard-code-change",
+                    "standard-agent-adapter-change",
+                ): "Standard",
+                ("strict-risk-change", "strict-destructive-change"): "Strict",
+            },
+        )
+
+    def test_schema_rejects_empty_nested_identity_and_evidence_strings(self):
+        schema = self.load_schema()
+        agent_properties = schema["properties"]["external_agents"]["items"]["properties"]
+        for field in [
+            "name",
+            "role",
+            "adapter",
+            "adapter_version",
+            "tool",
+            "model",
+            "model_version",
+            "cli_version",
+            "prompt_version",
+        ]:
+            self.assertEqual(agent_properties[field]["minLength"], 1, field)
+
+        evidence_properties = schema["properties"]["evidence"]["items"]["properties"]
+        for field in ["type", "path", "description"]:
+            self.assertEqual(evidence_properties[field]["minLength"], 1, field)
+
+    def test_schema_requires_iso_timestamps(self):
+        schema = self.load_schema()
+        for field in ["created_at", "updated_at"]:
+            timestamp = schema["properties"][field]
+            self.assertEqual(timestamp["minLength"], 1)
+            self.assertEqual(timestamp["format"], "date-time")
+            self.assertIn("pattern", timestamp)
+
+    def test_external_review_template_is_not_successful_evidence_by_default(self):
+        template = json.loads(
+            (ROOT / "harness/templates/external-review-template.json").read_text()
+        )
+        self.assertEqual(template["status"], "replace-me")
+        self.assertNotEqual(template["status"], "passed")
+        for field in [
+            "run_id",
+            "adapter_version",
+            "prompt_version",
+            "reviewer",
+            "reviewer_model",
+            "reviewer_model_version",
+            "reviewer_cli_version",
+            "summary",
+            "raw_log_file",
+        ]:
+            self.assertNotEqual(template[field], "", field)
 
 
 if __name__ == "__main__":
