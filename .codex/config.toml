@@ -6,6 +6,7 @@ job_max_runtime_seconds = 1800
 [mcp_servers.claude_review]
 command = "python"
 args = ["mcp/claude-review/server.py"]
+cwd = ".."
 startup_timeout_sec = 20
 tool_timeout_sec = 960
 enabled = true
