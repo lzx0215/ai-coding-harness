@@ -489,13 +489,13 @@ Example review result file:
   "reviewer_model": "unknown",
   "reviewer_model_version": "unknown",
   "reviewer_cli_version": "unknown",
-  "summary": "One medium issue found.",
+  "summary": "One medium finding reported.",
   "findings": [
     {
       "severity": "medium",
       "file": "src/example.ts",
       "line": 42,
-      "issue": "Input validation happens after an early return.",
+      "title": "Input validation happens after an early return.",
       "evidence": "The changed branch returns before validation runs.",
       "recommendation": "Move validation before the early return."
     }
