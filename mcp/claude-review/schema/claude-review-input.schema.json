@@ -4,6 +4,7 @@
   "type": "object",
   "required": [
     "run_id",
+    "artifact_dir",
     "task_file",
     "plan_file",
     "diff_file",
@@ -12,6 +13,8 @@
     "verification_file",
     "review_scope",
     "output_file",
+    "review_file",
+    "raw_log_file",
     "timeout_seconds",
     "max_input_chars",
     "max_files",
@@ -21,6 +24,11 @@
     "run_id": { "type": "string", "minLength": 1 },
     "harness_version": { "type": "string" },
     "prompt_version": { "type": "string" },
+    "artifact_dir": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Current run's review artifact directory. output_file, review_file, and raw_log_file must resolve under this directory after path normalization."
+    },
     "task_file": { "type": "string", "minLength": 1 },
     "plan_file": { "type": "string", "minLength": 1 },
     "diff_file": { "type": "string", "minLength": 1 },
@@ -32,7 +40,21 @@
       "items": { "type": "string" },
       "minItems": 1
     },
-    "output_file": { "type": "string", "minLength": 1 },
+    "output_file": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Destination for the MCP envelope JSON. Must resolve under artifact_dir."
+    },
+    "review_file": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Destination for structured review evidence on successful passed/findings results. Must resolve under artifact_dir."
+    },
+    "raw_log_file": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Destination for captured reviewer stdout/stderr. Must resolve under artifact_dir."
+    },
     "timeout_seconds": { "type": "integer", "minimum": 1 },
     "max_input_chars": { "type": "integer", "minimum": 1 },
     "max_files": { "type": "integer", "minimum": 1 },
