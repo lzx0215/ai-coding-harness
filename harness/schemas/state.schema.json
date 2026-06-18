@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Harness Run State",
+  "type": "object",
+  "required": [
+    "run_id",
+    "harness_version",
+    "state_schema_version",
+    "status",
+    "track",
+    "current_workflow",
+    "owner",
+    "base_commit",
+    "created_at",
+    "updated_at",
+    "external_agents",
+    "evidence"
+  ],
+  "properties": {
+    "run_id": { "type": "string", "minLength": 1 },
+    "harness_version": { "type": "string", "pattern": "^0\\.1\\.0$" },
+    "state_schema_version": { "type": "string", "pattern": "^0\\.1\\.0$" },
+    "status": {
+      "type": "string",
+      "enum": [
+        "draft",
+        "triaged",
+        "planned",
+        "in_progress",
+        "implemented",
+        "verified",
+        "reviewing",
+        "reviewed",
+        "completed",
+        "blocked",
+        "needs_user_decision",
+        "failed_verification",
+        "review_blocked",
+        "review_failed",
+        "review_timeout",
+        "review_schema_invalid",
+        "external_review_unavailable",
+        "risk_accepted"
+      ]
+    },
+    "track": { "type": "string", "enum": ["Fast", "Standard", "Strict"] },
+    "current_workflow": {
+      "type": "string",
+      "enum": [
+        "fast-doc-change",
+        "fast-code-change",
+        "standard-doc-system-change",
+        "standard-code-change",
+        "standard-agent-adapter-change",
+        "strict-risk-change",
+        "strict-destructive-change"
+      ]
+    },
+    "owner": { "type": "string", "enum": ["codex"] },
+    "base_commit": { "type": "string", "minLength": 1 },
+    "created_at": { "type": "string", "minLength": 1 },
+    "updated_at": { "type": "string", "minLength": 1 },
+    "external_agents": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "role", "state_access", "status"],
+        "properties": {
+          "name": { "type": "string" },
+          "role": { "type": "string" },
+          "adapter": { "type": "string" },
+          "adapter_version": { "type": "string" },
+          "tool": { "type": "string" },
+          "model": { "type": "string" },
+          "model_version": { "type": "string" },
+          "cli_version": { "type": "string" },
+          "prompt_version": { "type": "string" },
+          "state_access": { "type": "string", "enum": ["none"] },
+          "status": {
+            "type": "string",
+            "enum": [
+              "not_requested",
+              "requested",
+              "running",
+              "passed",
+              "findings",
+              "failed",
+              "timeout",
+              "schema_invalid",
+              "not_available"
+            ]
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["type", "path"],
+        "properties": {
+          "type": { "type": "string" },
+          "path": { "type": "string" },
+          "description": { "type": "string" }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

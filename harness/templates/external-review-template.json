@@ -1,0 +1,17 @@
+{
+  "status": "passed",
+  "run_id": "example-run",
+  "harness_version": "0.1.0",
+  "adapter_version": "0.1.0",
+  "prompt_version": "0.1.0",
+  "reviewer": "external-agent",
+  "reviewer_model": "unknown",
+  "reviewer_model_version": "unknown",
+  "reviewer_cli_version": "unknown",
+  "summary": "",
+  "findings": [],
+  "tested": [],
+  "not_tested": [],
+  "residual_risks": [],
+  "raw_log_file": ""
+}
