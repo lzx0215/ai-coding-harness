@@ -14,6 +14,15 @@ adapter = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = adapter
 spec.loader.exec_module(adapter)
 
+WRAPPER_PATH = ROOT / "mcp" / "claude-review" / "scripts" / "invoke-claude-reviewer.py"
+wrapper_spec = importlib.util.spec_from_file_location(
+    "invoke_claude_reviewer",
+    WRAPPER_PATH,
+)
+wrapper = importlib.util.module_from_spec(wrapper_spec)
+sys.modules[wrapper_spec.name] = wrapper
+wrapper_spec.loader.exec_module(wrapper)
+
 
 class ClaudeReviewAdapterTest(unittest.TestCase):
     def make_payload(self, tmp: Path) -> dict:
@@ -68,6 +77,15 @@ class ClaudeReviewAdapterTest(unittest.TestCase):
 
             self.assertEqual(adapter.check_budget(payload), "input_over_budget")
 
+    def test_budget_blocks_large_prompt_input_outside_diff(self):
+        with tempfile.TemporaryDirectory() as raw:
+            payload = self.make_payload(Path(raw))
+            Path(payload["diff_file"]).write_text("x\n", encoding="utf-8")
+            Path(payload["task_file"]).write_text("x" * 50, encoding="utf-8")
+            payload["max_input_chars"] = 20
+
+            self.assertEqual(adapter.check_budget(payload), "input_over_budget")
+
     def test_path_containment_rejects_outside_artifact_dir_without_invoking_claude(self):
         with tempfile.TemporaryDirectory() as raw:
             tmp = Path(raw)
@@ -81,6 +99,69 @@ class ClaudeReviewAdapterTest(unittest.TestCase):
             self.assertEqual(result["status"], "not_available")
             self.assertEqual(result["reason"], "unsupported_environment")
             self.assertFalse((tmp / "outside-review.json").exists())
+
+    def test_missing_artifact_dir_rejects_without_invoking_claude(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            payload = self.make_payload(Path(raw))
+            payload.pop("artifact_dir")
+
+            with mock.patch.object(adapter.shutil, "which", return_value="claude"):
+                with mock.patch.object(adapter.subprocess, "run") as run:
+                    run.return_value = adapter.subprocess.CompletedProcess(
+                        args=[],
+                        returncode=1,
+                        stdout="",
+                        stderr="failed\n",
+                    )
+                    result = adapter.run_claude_review(payload)
+
+            run.assert_not_called()
+            self.assertEqual(result["status"], "not_available")
+            self.assertEqual(result["reason"], "unsupported_environment")
+            self.assertFalse(Path(payload["output_file"]).exists())
+            self.assertFalse(Path(payload["raw_log_file"]).exists())
+            self.assertFalse(Path(payload["output_file"]).exists())
+            self.assertFalse(Path(payload["raw_log_file"]).exists())
+
+    def test_empty_artifact_dir_rejects_without_invoking_claude(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            payload = self.make_payload(Path(raw))
+            payload["artifact_dir"] = "   "
+
+            with mock.patch.object(adapter.shutil, "which", return_value="claude"):
+                with mock.patch.object(adapter.subprocess, "run") as run:
+                    run.return_value = adapter.subprocess.CompletedProcess(
+                        args=[],
+                        returncode=1,
+                        stdout="",
+                        stderr="failed\n",
+                    )
+                    result = adapter.run_claude_review(payload)
+
+            run.assert_not_called()
+            self.assertEqual(result["status"], "not_available")
+            self.assertEqual(result["reason"], "unsupported_environment")
+
+    def test_payload_write_paths_remain_authoritative_over_cli_args(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            tmp = Path(raw)
+            payload = self.make_payload(tmp)
+            payload["output_file"] = str(tmp / "outside-output.json")
+            payload["raw_log_file"] = str(tmp / "outside.raw.log")
+            input_file = tmp / "input.json"
+            input_file.write_text(json.dumps(payload), encoding="utf-8")
+            safe_output_arg = tmp / "artifacts" / "safe-output.json"
+            safe_raw_arg = tmp / "artifacts" / "safe.raw.log"
+
+            if not hasattr(wrapper, "run_from_paths"):
+                self.fail("wrapper must expose run_from_paths")
+
+            with mock.patch.object(wrapper, "run_claude_review", return_value={}) as run:
+                wrapper.run_from_paths(input_file, safe_output_arg, safe_raw_arg)
+
+            called_payload = run.call_args.args[0]
+            self.assertEqual(called_payload["output_file"], str(tmp / "outside-output.json"))
+            self.assertEqual(called_payload["raw_log_file"], str(tmp / "outside.raw.log"))
 
     def test_tool_missing_returns_not_available_tool_missing(self):
         with tempfile.TemporaryDirectory() as raw:

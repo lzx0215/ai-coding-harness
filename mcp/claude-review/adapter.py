@@ -33,6 +33,14 @@ ALLOWED_REASONS = {
 }
 ALLOWED_SEVERITIES = {"info", "low", "medium", "high", "critical"}
 WRITE_PATH_KEYS = ("output_file", "review_file", "raw_log_file")
+PROMPT_INPUT_FILE_KEYS = (
+    "task_file",
+    "plan_file",
+    "diff_file",
+    "diff_meta_file",
+    "changed_files_file",
+    "verification_file",
+)
 
 
 class ReviewSchemaError(ValueError):
@@ -89,12 +97,13 @@ def check_budget(payload: dict[str, Any]) -> str | None:
 
     changed_file_count = count_lines(changed_files_file)
     diff_text = read_text(diff_file)
+    input_chars = sum(len(read_text(str(payload.get(key, "")))) for key in PROMPT_INPUT_FILE_KEYS)
 
     if changed_file_count > max_files:
         return "input_over_budget"
     if len(diff_text.splitlines()) > max_diff_lines:
         return "input_over_budget"
-    if len(diff_text) > max_input_chars:
+    if input_chars > max_input_chars:
         return "input_over_budget"
     return None
 
@@ -117,9 +126,16 @@ def is_path_under(path: Path | str, directory: Path | str) -> bool:
 
 
 def inspect_artifact_paths(payload: dict[str, Any]) -> PathSafety:
-    artifact_dir = resolve_path(str(payload.get("artifact_dir", "")))
+    artifact_dir_value = payload.get("artifact_dir")
+    artifact_dir_missing = (
+        not isinstance(artifact_dir_value, str) or not artifact_dir_value.strip()
+    )
+    artifact_dir = Path() if artifact_dir_missing else resolve_path(artifact_dir_value)
     resolved_paths: dict[str, Path] = {}
     unsafe_keys: list[str] = []
+
+    if artifact_dir_missing:
+        unsafe_keys.extend(("artifact_dir", *WRITE_PATH_KEYS))
 
     for key in WRITE_PATH_KEYS:
         value = payload.get(key)
@@ -128,7 +144,7 @@ def inspect_artifact_paths(payload: dict[str, Any]) -> PathSafety:
             continue
         resolved = resolve_path(str(value))
         resolved_paths[key] = resolved
-        if not is_path_under(resolved, artifact_dir):
+        if not artifact_dir_missing and not is_path_under(resolved, artifact_dir):
             unsafe_keys.append(key)
 
     return PathSafety(

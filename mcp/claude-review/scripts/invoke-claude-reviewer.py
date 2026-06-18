@@ -12,6 +12,16 @@ sys.path.insert(0, str(ROOT))
 from adapter import run_claude_review  # noqa: E402
 
 
+def load_payload(input_file: str | Path) -> dict:
+    return json.loads(Path(input_file).read_text(encoding="utf-8"))
+
+
+def run_from_paths(input_file: str | Path, output_file: str | Path, raw_log_file: str | Path) -> dict:
+    del output_file, raw_log_file
+    payload = load_payload(input_file)
+    return run_claude_review(payload)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", required=True)
@@ -19,11 +29,7 @@ def main() -> int:
     parser.add_argument("--raw-log", required=True)
     args = parser.parse_args()
 
-    payload = json.loads(Path(args.input).read_text(encoding="utf-8"))
-    payload["output_file"] = args.output
-    payload["raw_log_file"] = args.raw_log
-
-    envelope = run_claude_review(payload)
+    envelope = run_from_paths(args.input, args.output, args.raw_log)
     print(json.dumps(envelope, indent=2))
     return 0
 
