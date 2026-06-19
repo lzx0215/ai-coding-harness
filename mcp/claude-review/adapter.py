@@ -629,6 +629,13 @@ def build_reviewer_provenance(
     if not unknowns <= UNKNOWN_VOCABULARY:
         raise ReviewSchemaError("reviewer provenance contains unsupported unknowns")
 
+    if models:
+        model_names = {entry["name"] for entry in models}
+        if primary not in model_names:
+            raise ReviewSchemaError(
+                "reviewer provenance primary_model must reference a listed model"
+            )
+
     return {
         "schema_version": PROVENANCE_SCHEMA_VERSION,
         "reviewer": REVIEWER,

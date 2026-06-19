@@ -349,6 +349,43 @@ class ClaudeReviewAdapterTest(unittest.TestCase):
         self.assertIn("primary_model", provenance["unknowns"])
         self.assertIn("token_usage", provenance["unknowns"])
 
+    def test_build_reviewer_provenance_primary_model_is_always_a_listed_model(self):
+        # The membership guard in build_reviewer_provenance asserts that
+        # primary_model references a name in models[]. The builder's own logic
+        # guarantees this, so the guard is defensive against future refactors;
+        # it cannot be coerced into firing via normal input. These checks
+        # confirm the invariant holds on both single- and multi-model paths,
+        # i.e. the guard does not reject valid provenance.
+        with tempfile.TemporaryDirectory() as raw:
+            payload = self.make_payload(Path(raw))
+            fake_multi = {
+                "modelUsage": {
+                    "small-model": {"inputTokens": 5, "outputTokens": 5},
+                    "large-model": {"inputTokens": 100, "outputTokens": 1},
+                },
+                "structured_output": {
+                    "summary": "No issues found.",
+                    "findings": [],
+                    "tested": ["Reviewed adapter tests."],
+                    "not_tested": ["Real Claude execution."],
+                    "residual_risks": ["None identified."],
+                },
+            }
+
+            multi = adapter.normalize_claude_json(fake_multi, payload)
+            fake_single = {
+                "modelUsage": {
+                    "only-model": {"inputTokens": 3, "outputTokens": 4},
+                },
+                "structured_output": fake_multi["structured_output"],
+            }
+
+            single = adapter.normalize_claude_json(fake_single, payload)
+
+        for provenance in (multi["reviewer_provenance"], single["reviewer_provenance"]):
+            names = {model["name"] for model in provenance["models"]}
+            self.assertIn(provenance["primary_model"], names)
+
     def test_normalize_records_structured_provenance_for_model_usage(self):
         with tempfile.TemporaryDirectory() as raw:
             payload = self.make_payload(Path(raw))
