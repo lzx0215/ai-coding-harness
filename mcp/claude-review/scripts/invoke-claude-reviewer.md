@@ -25,7 +25,9 @@ For successful `passed` and `findings` results, the wrapper writes `review_file`
 
 The wrapper uses:
 
-`claude -p --output-format json --permission-mode plan --tools "" --no-session-persistence --max-budget-usd 1 "<review prompt>"`
+`claude -p --output-format json --system-prompt "<json-only reviewer prompt>" --json-schema "<review schema>" --permission-mode plan --tools "" --no-session-persistence --max-budget-usd 1`
+
+The review prompt is passed on stdin. Do not pass multi-line review content as a command-line argument on Windows; npm `.cmd` shims may not preserve the full prompt reliably.
 
 ## Rules
 

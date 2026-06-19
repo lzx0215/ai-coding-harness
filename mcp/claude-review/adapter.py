@@ -32,6 +32,12 @@ ALLOWED_REASONS = {
     "wrapper_failed_to_start",
 }
 ALLOWED_SEVERITIES = {"info", "low", "medium", "high", "critical"}
+REVIEW_SYSTEM_PROMPT = (
+    "You are a JSON-only read-only code review function. "
+    "Use only the review target embedded in the user prompt. "
+    "Do not inspect the repository, do not ask follow-up questions, and do not "
+    "modify files. Return a JSON object matching the provided schema."
+)
 WRITE_PATH_KEYS = ("output_file", "review_file", "raw_log_file")
 PROMPT_INPUT_FILE_KEYS = (
     "task_file",
@@ -291,7 +297,8 @@ def run_claude_review(payload: dict[str, Any]) -> dict[str, Any]:
         )
         return envelope
 
-    if shutil.which("claude") is None:
+    claude_executable = shutil.which("claude")
+    if claude_executable is None:
         envelope = build_envelope(
             payload,
             "not_available",
@@ -308,10 +315,14 @@ def run_claude_review(payload: dict[str, Any]) -> dict[str, Any]:
 
     prompt = build_review_prompt(payload)
     command = [
-        "claude",
+        claude_executable,
         "-p",
         "--output-format",
         "json",
+        "--system-prompt",
+        REVIEW_SYSTEM_PROMPT,
+        "--json-schema",
+        review_content_json_schema(),
         "--permission-mode",
         "plan",
         "--tools",
@@ -319,14 +330,16 @@ def run_claude_review(payload: dict[str, Any]) -> dict[str, Any]:
         "--no-session-persistence",
         "--max-budget-usd",
         "1",
-        prompt,
     ]
 
     try:
         completed = subprocess.run(
             command,
+            input=prompt,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=int(payload.get("timeout_seconds", 900)),
             check=False,
         )
@@ -429,8 +442,8 @@ def build_review_prompt(payload: dict[str, Any]) -> str:
 
     return "\n".join(
         [
-            "You are Claude Code acting as a read-only reviewer.",
-            "Do not modify files. Do not request write permissions.",
+            "The review target is fully embedded below. Do not use repository state.",
+            "Do not ask follow-up questions. If evidence is insufficient, record it in not_tested or residual_risks.",
             "Return only JSON with keys: summary, findings, tested, not_tested, residual_risks.",
             "Each finding must include severity, title, evidence, and recommendation.",
             "Allowed severities: info, low, medium, high, critical.",
@@ -467,6 +480,62 @@ def build_review_prompt(payload: dict[str, Any]) -> str:
             "DIFF_CONTENT:",
             diff_text,
         ]
+    )
+
+
+def review_content_json_schema() -> str:
+    return json.dumps(
+        {
+            "type": "object",
+            "required": [
+                "summary",
+                "findings",
+                "tested",
+                "not_tested",
+                "residual_risks",
+            ],
+            "properties": {
+                "summary": {"type": "string", "minLength": 1},
+                "findings": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "required": [
+                            "severity",
+                            "title",
+                            "evidence",
+                            "recommendation",
+                        ],
+                        "properties": {
+                            "severity": {
+                                "type": "string",
+                                "enum": sorted(ALLOWED_SEVERITIES),
+                            },
+                            "title": {"type": "string", "minLength": 1},
+                            "evidence": {"type": "string", "minLength": 1},
+                            "recommendation": {"type": "string", "minLength": 1},
+                            "file": {"type": "string", "minLength": 1},
+                            "line": {"type": "integer", "minimum": 1},
+                        },
+                        "additionalProperties": False,
+                    },
+                },
+                "tested": {
+                    "type": "array",
+                    "items": {"type": "string", "minLength": 1},
+                },
+                "not_tested": {
+                    "type": "array",
+                    "items": {"type": "string", "minLength": 1},
+                },
+                "residual_risks": {
+                    "type": "array",
+                    "items": {"type": "string", "minLength": 1},
+                },
+            },
+            "additionalProperties": False,
+        },
+        separators=(",", ":"),
     )
 
 
@@ -511,7 +580,9 @@ def output_indicates_auth_missing(output: str) -> bool:
 
 def _extract_review_content(parsed: dict[str, Any]) -> dict[str, Any]:
     content: Any
-    if "result" in parsed:
+    if parsed.get("structured_output"):
+        content = parsed["structured_output"]
+    elif "result" in parsed:
         content = parsed["result"]
     elif "content" in parsed:
         content = parsed["content"]

@@ -185,6 +185,19 @@ class ClaudeReviewAdapterTest(unittest.TestCase):
             self.assertEqual(result["reason"], "unsupported_environment")
             self.assertFalse(result["completed"])
 
+    def test_wrapper_load_payload_accepts_utf8_bom(self):
+        with tempfile.TemporaryDirectory() as raw:
+            payload = self.make_payload(Path(raw))
+            input_file = Path(raw) / "input.json"
+            input_file.write_text(
+                "\ufeff" + json.dumps(payload),
+                encoding="utf-8",
+            )
+
+            loaded = wrapper.load_payload(input_file)
+
+        self.assertEqual(loaded["run_id"], "test-run")
+
     def test_tool_missing_returns_not_available_tool_missing(self):
         with tempfile.TemporaryDirectory() as raw:
             payload = self.make_payload(Path(raw))
@@ -245,6 +258,47 @@ class ClaudeReviewAdapterTest(unittest.TestCase):
 
             self.assertEqual(result["status"], "passed")
             self.assertEqual(result["findings"], [])
+
+    def test_normalize_prefers_structured_output(self):
+        with tempfile.TemporaryDirectory() as raw:
+            payload = self.make_payload(Path(raw))
+            fake = {
+                "result": "Natural language wrapper text.",
+                "structured_output": {
+                    "summary": "No issues found.",
+                    "findings": [],
+                    "tested": ["Reviewed embedded diff."],
+                    "not_tested": ["Did not run tests."],
+                    "residual_risks": ["Smoke review only."],
+                },
+            }
+
+            result = adapter.normalize_claude_json(fake, payload)
+
+        self.assertEqual(result["status"], "passed")
+        self.assertEqual(result["summary"], "No issues found.")
+        self.assertEqual(result["tested"], ["Reviewed embedded diff."])
+
+    def test_normalize_falls_back_when_structured_output_is_null(self):
+        with tempfile.TemporaryDirectory() as raw:
+            payload = self.make_payload(Path(raw))
+            fake = {
+                "structured_output": None,
+                "result": json.dumps(
+                    {
+                        "summary": "No issues found.",
+                        "findings": [],
+                        "tested": ["Reviewed diff."],
+                        "not_tested": ["Real Claude execution."],
+                        "residual_risks": ["None identified."],
+                    }
+                ),
+            }
+
+            result = adapter.normalize_claude_json(fake, payload)
+
+        self.assertEqual(result["status"], "passed")
+        self.assertEqual(result["summary"], "No issues found.")
 
     def test_invalid_tested_item_raises_schema_error(self):
         with tempfile.TemporaryDirectory() as raw:
@@ -358,6 +412,49 @@ class ClaudeReviewAdapterTest(unittest.TestCase):
 
             self.assertEqual(result["status"], "not_available")
             self.assertEqual(result["reason"], "auth_missing")
+
+    def test_run_uses_resolved_claude_executable(self):
+        with tempfile.TemporaryDirectory() as raw:
+            payload = self.make_payload(Path(raw))
+            stdout = json.dumps(
+                {
+                    "result": {
+                        "summary": "No issues found.",
+                        "findings": [],
+                        "tested": ["Reviewed adapter tests."],
+                        "not_tested": ["Real Claude execution."],
+                        "residual_risks": ["None identified."],
+                    }
+                }
+            )
+            completed = adapter.subprocess.CompletedProcess(
+                args=[],
+                returncode=0,
+                stdout=stdout,
+                stderr="",
+            )
+            resolved_claude = r"C:\Tools\claude.cmd"
+
+            with mock.patch.object(adapter.shutil, "which", return_value=resolved_claude):
+                with mock.patch.object(adapter.subprocess, "run", return_value=completed) as run:
+                    result = adapter.run_claude_review(payload)
+
+            self.assertEqual(result["status"], "passed")
+            command = run.call_args.args[0]
+            self.assertEqual(command[0], resolved_claude)
+            self.assertEqual(run.call_args.kwargs["encoding"], "utf-8")
+            self.assertEqual(run.call_args.kwargs["errors"], "replace")
+            self.assertIn("TASK_CONTENT", run.call_args.kwargs["input"])
+            self.assertNotIn("TASK_CONTENT", " ".join(command))
+            self.assertIn("--system-prompt", command)
+            self.assertIn("--json-schema", command)
+            self.assertEqual(command[command.index("--permission-mode") + 1], "plan")
+
+            schema = json.loads(command[command.index("--json-schema") + 1])
+            self.assertEqual(
+                schema["required"],
+                ["summary", "findings", "tested", "not_tested", "residual_risks"],
+            )
 
 
 if __name__ == "__main__":

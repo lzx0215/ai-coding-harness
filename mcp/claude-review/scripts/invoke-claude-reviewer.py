@@ -13,7 +13,7 @@ from adapter import build_envelope, run_claude_review  # noqa: E402
 
 
 def load_payload(input_file: str | Path) -> dict:
-    return json.loads(Path(input_file).read_text(encoding="utf-8"))
+    return json.loads(Path(input_file).read_text(encoding="utf-8-sig"))
 
 
 def run_from_paths(input_file: str | Path, output_file: str | Path, raw_log_file: str | Path) -> dict:
