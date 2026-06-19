@@ -2,3 +2,9 @@
 __pycache__/
 *.py[cod]
 *$py.class
+
+# Reserved Windows device name (NUL) — an untracked 0-byte/stray file created
+# by a `2>nul` redirect cannot be deleted via Win32 path APIs because "nul"
+# resolves to the NUL device. Keep it out of version control rather than risk
+# it being committed.
+nul
