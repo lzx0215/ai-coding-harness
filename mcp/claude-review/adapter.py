@@ -1043,24 +1043,6 @@ def _metadata_value(
     return None
 
 
-def _reviewer_model(parsed: dict[str, Any], content: dict[str, Any]) -> str | None:
-    return (
-        _metadata_value(parsed, content, "reviewer_model", "model")
-        or _model_usage_name(parsed)
-    )
-
-
-def _model_usage_name(parsed: dict[str, Any]) -> str | None:
-    model_usage = parsed.get("modelUsage")
-    if not isinstance(model_usage, dict):
-        return None
-
-    for model_name in model_usage:
-        if isinstance(model_name, str) and model_name.strip():
-            return model_name.strip()
-    return None
-
-
 def _nonempty_string(value: Any, default: str) -> str:
     if isinstance(value, str) and value.strip():
         return value.strip()
