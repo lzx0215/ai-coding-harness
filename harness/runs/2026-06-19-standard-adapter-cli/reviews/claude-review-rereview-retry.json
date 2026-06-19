@@ -1,0 +1,103 @@
+{
+  "status": "findings",
+  "run_id": "2026-06-19-standard-adapter-cli-rereview-retry",
+  "completed": true,
+  "harness_version": "0.1.0",
+  "adapter_version": "0.1.0",
+  "prompt_version": "0.1.0",
+  "reviewer": "claude-code",
+  "reviewer_model": "unknown",
+  "reviewer_model_version": "unknown",
+  "reviewer_cli_version": "unknown",
+  "output_file": "C:\\ai\\ai-coding-harness\\harness\\runs\\2026-06-19-standard-adapter-cli\\reviews\\claude-review-rereview-retry.json",
+  "raw_log_file": "C:\\ai\\ai-coding-harness\\harness\\runs\\2026-06-19-standard-adapter-cli\\reviews\\claude-review-rereview-retry.raw.log",
+  "exit_code": 0,
+  "duration_seconds": 133.64,
+  "review_file": "C:\\ai\\ai-coding-harness\\harness\\runs\\2026-06-19-standard-adapter-cli\\reviews\\claude-review-rereview-retry.evidence.json",
+  "summary": "The diff adds a minimal Harness CLI (validate/advance), static contract tests, and adapter wrapper hardening (resolved claude executable, stdin prompt, system-prompt/json-schema flags, structured_output preference, BOM-tolerant payload loading). Changes are largely backward-compatible and well-tested. One defense-in-depth regression stands out: the Claude permission mode changed from `plan` (read-only enforced at CLI level) to `default`, relying on `--tools \"\"` and prompt instructions to enforce read-only behavior. Several minor robustness gaps (null structured_output, hardcoded budget, permissive evidence-path checks) are noted but not blocking. Real-wrapper smoke and unit suite (33 tests) pass per verification.",
+  "findings": [
+    {
+      "severity": "medium",
+      "title": "Permission mode regression: `plan` -> `default` weakens read-only guarantee",
+      "evidence": "The adapter command list changed `--permission-mode` from `plan` to `default`. The previous mode enforced read-only behavior at the Claude CLI level; the new mode relies entirely on `--tools \"\"` plus a system prompt that says 'Do not modify files'. If `--tools \"\"` does not fully suppress every built-in tool (e.g., bash/shell on some Claude builds) or if a future change relaxes the tools list, the reviewer invocation could attempt file modifications. The original code paired the read-only system prompt with a read-only permission mode as defense in depth; that pairing is now broken. No test or comment explains why `plan` was incompatible with the new `--system-prompt`/`--json-schema` flags.",
+      "recommendation": "Re-test whether `--permission-mode plan` works with `--system-prompt` and `--json-schema`; if it does, revert to `plan`. If `default` is required, document why, and add a regression test asserting that `--tools` remains empty and that the resolved command cannot include write-capable tools. Consider also adding `--allowedTools` or `--disallowedTools` as an explicit allow-list instead of relying on an empty `--tools` string.",
+      "file": "mcp/claude-review/adapter.py",
+      "line": 326
+    },
+    {
+      "severity": "low",
+      "title": "`_extract_review_content` does not handle null/empty `structured_output`",
+      "evidence": "The new branch `if \"structured_output\" in parsed: content = parsed[\"structured_output\"]` checks only key presence. If Claude emits `{\"structured_output\": null}` or `{\"structured_output\": \"\"}` alongside a valid `result`, the function will set `content = None`/empty and never fall through to the `result` branch, which can produce a downstream schema error or empty review. No test covers this null/empty case.",
+      "recommendation": "Guard the branch, e.g. `if parsed.get(\"structured_output\"): content = parsed[\"structured_output\"]`, and add a unit test where `structured_output` is null/empty but `result` contains valid JSON.",
+      "file": "mcp/claude-review/adapter.py",
+      "line": 583
+    },
+    {
+      "severity": "low",
+      "title": "`--max-budget-usd` hardcoded to 1 with no payload override",
+      "evidence": "The command list hardcodes `\"--max-budget-usd\", \"1\"`. Other parameters (timeout, prompt contents) are payload-driven, but the cost ceiling is not. A larger diff or stricter review cannot raise the budget without code changes, and an operator cannot cap it lower for smoke runs.",
+      "recommendation": "Read the budget from `payload.get(\"max_budget_usd\", 1)` (validated to be a positive number) so it is configurable per invocation while preserving the safe default.",
+      "file": "mcp/claude-review/adapter.py",
+      "line": 331
+    },
+    {
+      "severity": "info",
+      "title": "Evidence path validation accepts absolute paths and does not confine to run directory",
+      "evidence": "`validate_evidence_paths` checks `evidence_path.is_absolute()` and only verifies existence; relative paths are checked under `root` and `run_dir` but are not normalized, so `../../etc/passwd`-style relative paths would be resolved and accepted if the file happens to exist. This is a validation-only helper (no content is read), so impact is limited, but it can mask evidence that points outside the intended run tree.",
+      "recommendation": "Resolve evidence paths with `(run_dir / raw_path).resolve()` and assert the resolved path is within `run_dir.resolve()` (and/or `root.resolve()`) before accepting. At minimum, document the intended scope.",
+      "file": "harness/cli.py",
+      "line": 103
+    },
+    {
+      "severity": "info",
+      "title": "Static-contract test loads adapter as a second module instance",
+      "evidence": "`test_static_contracts.py` uses `importlib.util.spec_from_file_location(\"claude_review_adapter\", ADAPTER_PATH)` and registers it in `sys.modules` under a name distinct from the `adapter` module used by `test_claude_review_adapter.py`. Constants like `TERMINAL_STATUSES` are therefore evaluated against a separately loaded copy. If module-level state or imported dependencies diverge between the two load paths, drift could pass here while failing in the other test file (or vice versa).",
+      "recommendation": "Import the adapter through the same path the wrapper uses (e.g., add `mcp/claude-review` to sys.path and `import adapter`), or factor the contract assertions into a shared helper that both test files consume, so there is a single source of truth for the loaded module.",
+      "file": "tests/test_static_contracts.py",
+      "line": 12
+    },
+    {
+      "severity": "info",
+      "title": "Local `pip install` mutated environment without a root lockfile",
+      "evidence": "Verification notes: 'The local `python -m pip install` changed the current Python environment but did not add a root dependency lockfile.' Reproducing the run on another machine or in CI may install different versions of `mcp` and transitive deps, which could affect both server startup and adapter parsing of Claude output.",
+      "recommendation": "Commit a lockfile (e.g., `pip-compile` output or `uv.lock`) for `mcp/claude-review/requirements.txt` so the MCP server runtime is reproducible.",
+      "file": "harness/runs/2026-06-19-standard-adapter-cli/verification.md",
+      "line": 1
+    }
+  ],
+  "tested": [
+    "Resolved `claude` executable is used as command[0] (test_run_uses_resolved_claude_executable)",
+    "Prompt is passed via stdin (`input=`) and NOT embedded in argv; TASK_CONTENT asserted in kwargs['input'] and absent from command join",
+    "`--system-prompt`, `--json-schema`, and `--permission-mode default` are present in the constructed command",
+    "JSON schema passed via `--json-schema` requires summary/findings/tested/not_tested/residual_risks",
+    "`structured_output` is preferred over `result` when both are present (test_normalize_prefers_structured_output)",
+    "UTF-8 BOM-prefixed payload input loads correctly (test_wrapper_load_payload_accepts_utf8_bom)",
+    "CLI validate accepts example-fast-doc-change run and BOM-prefixed state.json",
+    "CLI validate rejects missing evidence paths",
+    "CLI advance permits codex normal transitions and refreshes updated_at",
+    "CLI advance does not write candidate state when candidate validation fails (atomicity)",
+    "CLI advance rejects invalid transitions and non-codex actors",
+    "Static contracts: workflow registry, status enum, and review-status mapping match docs and schema",
+    "Real Claude wrapper smoke produced terminal findings and wrote output/review/raw-log files",
+    "Full unit suite (33 tests) passed",
+    "MCP server import and startup smoke after requirements install"
+  ],
+  "not_tested": [
+    "Long-lived MCP client session through Codex's MCP runtime (explicitly noted in verification)",
+    "Cloud or CI environment behavior (explicitly noted in verification)",
+    "Whether `--permission-mode plan` is actually incompatible with the new `--system-prompt`/`--json-schema` flags (no A/B test in diff)",
+    "Behavior when Claude emits `structured_output: null` alongside a valid `result`",
+    "Real Claude review of this exact Standard diff (referenced in plan but output not embedded in the review target)",
+    "Concurrent or repeated CLI advance calls (no locking test)",
+    "Evidence path traversal (e.g., `../` escapes) \u2014 no test asserts rejection",
+    "Behavior on non-Windows hosts when `shutil.which('claude')` resolves a shell script or symlink chain"
+  ],
+  "residual_risks": [
+    "Switching `--permission-mode` from `plan` to `default` shifts the read-only guarantee from enforced to advisory; correctness depends on `--tools \"\"` fully suppressing all tools across Claude CLI versions.",
+    "Claude output shape may vary across model versions; even with `--json-schema`, schema-constrained parsing could fall back to `result` strings that need tolerant normalization.",
+    "Hardcoded `--max-budget-usd 1` may truncate large reviews or reject long diffs without a clear terminal status if Claude aborts mid-run.",
+    "No dependency lockfile means reproducibility of the MCP server runtime is not guaranteed across machines.",
+    "The CLI's state machine is duplicated in spirit by `harness/core/state-authority.md` and `state.schema.json`; future drift between these three sources is only caught if static-contract tests are kept in sync.",
+    "Evidence path validation is existence-only and path-confinement-agnostic, so a malformed run could pass validation while pointing at unrelated files."
+  ]
+}

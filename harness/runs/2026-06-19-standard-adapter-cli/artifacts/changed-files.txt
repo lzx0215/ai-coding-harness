@@ -1,0 +1,7 @@
+﻿mcp/claude-review/adapter.py
+mcp/claude-review/scripts/invoke-claude-reviewer.py
+mcp/claude-review/scripts/invoke-claude-reviewer.md
+tests/test_claude_review_adapter.py
+harness/cli.py
+tests/test_harness_cli.py
+tests/test_static_contracts.py

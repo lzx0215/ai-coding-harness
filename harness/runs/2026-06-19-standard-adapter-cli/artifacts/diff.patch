@@ -1,0 +1,813 @@
+﻿
+diff --git a/mcp/claude-review/adapter.py b/mcp/claude-review/adapter.py
+index 7117d21..b73cd0e 100644
+--- a/mcp/claude-review/adapter.py
++++ b/mcp/claude-review/adapter.py
+@@ -32,6 +32,12 @@ ALLOWED_REASONS = {
+     "wrapper_failed_to_start",
+ }
+ ALLOWED_SEVERITIES = {"info", "low", "medium", "high", "critical"}
++REVIEW_SYSTEM_PROMPT = (
++    "You are a JSON-only read-only code review function. "
++    "Use only the review target embedded in the user prompt. "
++    "Do not inspect the repository, do not ask follow-up questions, and do not "
++    "modify files. Return a JSON object matching the provided schema."
++)
+ WRITE_PATH_KEYS = ("output_file", "review_file", "raw_log_file")
+ PROMPT_INPUT_FILE_KEYS = (
+     "task_file",
+@@ -291,7 +297,8 @@ def run_claude_review(payload: dict[str, Any]) -> dict[str, Any]:
+         )
+         return envelope
+ 
+-    if shutil.which("claude") is None:
++    claude_executable = shutil.which("claude")
++    if claude_executable is None:
+         envelope = build_envelope(
+             payload,
+             "not_available",
+@@ -308,10 +315,14 @@ def run_claude_review(payload: dict[str, Any]) -> dict[str, Any]:
+ 
+     prompt = build_review_prompt(payload)
+     command = [
+-        "claude",
++        claude_executable,
+         "-p",
+         "--output-format",
+         "json",
++        "--system-prompt",
++        REVIEW_SYSTEM_PROMPT,
++        "--json-schema",
++        review_content_json_schema(),
+         "--permission-mode",
+         "plan",
+         "--tools",
+@@ -319,14 +330,16 @@ def run_claude_review(payload: dict[str, Any]) -> dict[str, Any]:
+         "--no-session-persistence",
+         "--max-budget-usd",
+         "1",
+-        prompt,
+     ]
+ 
+     try:
+         completed = subprocess.run(
+             command,
++            input=prompt,
+             capture_output=True,
+             text=True,
++            encoding="utf-8",
++            errors="replace",
+             timeout=int(payload.get("timeout_seconds", 900)),
+             check=False,
+         )
+@@ -429,8 +442,8 @@ def build_review_prompt(payload: dict[str, Any]) -> str:
+ 
+     return "\n".join(
+         [
+-            "You are Claude Code acting as a read-only reviewer.",
+-            "Do not modify files. Do not request write permissions.",
++            "The review target is fully embedded below. Do not use repository state.",
++            "Do not ask follow-up questions. If evidence is insufficient, record it in not_tested or residual_risks.",
+             "Return only JSON with keys: summary, findings, tested, not_tested, residual_risks.",
+             "Each finding must include severity, title, evidence, and recommendation.",
+             "Allowed severities: info, low, medium, high, critical.",
+@@ -470,6 +483,62 @@ def build_review_prompt(payload: dict[str, Any]) -> str:
+     )
+ 
+ 
++def review_content_json_schema() -> str:
++    return json.dumps(
++        {
++            "type": "object",
++            "required": [
++                "summary",
++                "findings",
++                "tested",
++                "not_tested",
++                "residual_risks",
++            ],
++            "properties": {
++                "summary": {"type": "string", "minLength": 1},
++                "findings": {
++                    "type": "array",
++                    "items": {
++                        "type": "object",
++                        "required": [
++                            "severity",
++                            "title",
++                            "evidence",
++                            "recommendation",
++                        ],
++                        "properties": {
++                            "severity": {
++                                "type": "string",
++                                "enum": sorted(ALLOWED_SEVERITIES),
++                            },
++                            "title": {"type": "string", "minLength": 1},
++                            "evidence": {"type": "string", "minLength": 1},
++                            "recommendation": {"type": "string", "minLength": 1},
++                            "file": {"type": "string", "minLength": 1},
++                            "line": {"type": "integer", "minimum": 1},
++                        },
++                        "additionalProperties": False,
++                    },
++                },
++                "tested": {
++                    "type": "array",
++                    "items": {"type": "string", "minLength": 1},
++                },
++                "not_tested": {
++                    "type": "array",
++                    "items": {"type": "string", "minLength": 1},
++                },
++                "residual_risks": {
++                    "type": "array",
++                    "items": {"type": "string", "minLength": 1},
++                },
++            },
++            "additionalProperties": False,
++        },
++        separators=(",", ":"),
++    )
++
++
+ def build_review_evidence(envelope: dict[str, Any]) -> dict[str, Any]:
+     return {
+         "run_id": envelope["run_id"],
+@@ -511,7 +580,9 @@ def output_indicates_auth_missing(output: str) -> bool:
+ 
+ def _extract_review_content(parsed: dict[str, Any]) -> dict[str, Any]:
+     content: Any
+-    if "result" in parsed:
++    if parsed.get("structured_output"):
++        content = parsed["structured_output"]
++    elif "result" in parsed:
+         content = parsed["result"]
+     elif "content" in parsed:
+         content = parsed["content"]
+diff --git a/mcp/claude-review/scripts/invoke-claude-reviewer.md b/mcp/claude-review/scripts/invoke-claude-reviewer.md
+index 2c9d360..87f5faf 100644
+--- a/mcp/claude-review/scripts/invoke-claude-reviewer.md
++++ b/mcp/claude-review/scripts/invoke-claude-reviewer.md
+@@ -25,7 +25,9 @@ For successful `passed` and `findings` results, the wrapper writes `review_file`
+ 
+ The wrapper uses:
+ 
+-`claude -p --output-format json --permission-mode plan --tools "" --no-session-persistence --max-budget-usd 1 "<review prompt>"`
++`claude -p --output-format json --system-prompt "<json-only reviewer prompt>" --json-schema "<review schema>" --permission-mode plan --tools "" --no-session-persistence --max-budget-usd 1`
++
++The review prompt is passed on stdin. Do not pass multi-line review content as a command-line argument on Windows; npm `.cmd` shims may not preserve the full prompt reliably.
+ 
+ ## Rules
+ 
+diff --git a/mcp/claude-review/scripts/invoke-claude-reviewer.py b/mcp/claude-review/scripts/invoke-claude-reviewer.py
+index 115b196..d3b3585 100644
+--- a/mcp/claude-review/scripts/invoke-claude-reviewer.py
++++ b/mcp/claude-review/scripts/invoke-claude-reviewer.py
+@@ -13,7 +13,7 @@ from adapter import build_envelope, run_claude_review  # noqa: E402
+ 
+ 
+ def load_payload(input_file: str | Path) -> dict:
+-    return json.loads(Path(input_file).read_text(encoding="utf-8"))
++    return json.loads(Path(input_file).read_text(encoding="utf-8-sig"))
+ 
+ 
+ def run_from_paths(input_file: str | Path, output_file: str | Path, raw_log_file: str | Path) -> dict:
+diff --git a/tests/test_claude_review_adapter.py b/tests/test_claude_review_adapter.py
+index 09a626b..becec5e 100644
+--- a/tests/test_claude_review_adapter.py
++++ b/tests/test_claude_review_adapter.py
+@@ -185,6 +185,19 @@ class ClaudeReviewAdapterTest(unittest.TestCase):
+             self.assertEqual(result["reason"], "unsupported_environment")
+             self.assertFalse(result["completed"])
+ 
++    def test_wrapper_load_payload_accepts_utf8_bom(self):
++        with tempfile.TemporaryDirectory() as raw:
++            payload = self.make_payload(Path(raw))
++            input_file = Path(raw) / "input.json"
++            input_file.write_text(
++                "\ufeff" + json.dumps(payload),
++                encoding="utf-8",
++            )
++
++            loaded = wrapper.load_payload(input_file)
++
++        self.assertEqual(loaded["run_id"], "test-run")
++
+     def test_tool_missing_returns_not_available_tool_missing(self):
+         with tempfile.TemporaryDirectory() as raw:
+             payload = self.make_payload(Path(raw))
+@@ -246,6 +259,47 @@ class ClaudeReviewAdapterTest(unittest.TestCase):
+             self.assertEqual(result["status"], "passed")
+             self.assertEqual(result["findings"], [])
+ 
++    def test_normalize_prefers_structured_output(self):
++        with tempfile.TemporaryDirectory() as raw:
++            payload = self.make_payload(Path(raw))
++            fake = {
++                "result": "Natural language wrapper text.",
++                "structured_output": {
++                    "summary": "No issues found.",
++                    "findings": [],
++                    "tested": ["Reviewed embedded diff."],
++                    "not_tested": ["Did not run tests."],
++                    "residual_risks": ["Smoke review only."],
++                },
++            }
++
++            result = adapter.normalize_claude_json(fake, payload)
++
++        self.assertEqual(result["status"], "passed")
++        self.assertEqual(result["summary"], "No issues found.")
++        self.assertEqual(result["tested"], ["Reviewed embedded diff."])
++
++    def test_normalize_falls_back_when_structured_output_is_null(self):
++        with tempfile.TemporaryDirectory() as raw:
++            payload = self.make_payload(Path(raw))
++            fake = {
++                "structured_output": None,
++                "result": json.dumps(
++                    {
++                        "summary": "No issues found.",
++                        "findings": [],
++                        "tested": ["Reviewed diff."],
++                        "not_tested": ["Real Claude execution."],
++                        "residual_risks": ["None identified."],
++                    }
++                ),
++            }
++
++            result = adapter.normalize_claude_json(fake, payload)
++
++        self.assertEqual(result["status"], "passed")
++        self.assertEqual(result["summary"], "No issues found.")
++
+     def test_invalid_tested_item_raises_schema_error(self):
+         with tempfile.TemporaryDirectory() as raw:
+             payload = self.make_payload(Path(raw))
+@@ -359,6 +413,49 @@ class ClaudeReviewAdapterTest(unittest.TestCase):
+             self.assertEqual(result["status"], "not_available")
+             self.assertEqual(result["reason"], "auth_missing")
+ 
++    def test_run_uses_resolved_claude_executable(self):
++        with tempfile.TemporaryDirectory() as raw:
++            payload = self.make_payload(Path(raw))
++            stdout = json.dumps(
++                {
++                    "result": {
++                        "summary": "No issues found.",
++                        "findings": [],
++                        "tested": ["Reviewed adapter tests."],
++                        "not_tested": ["Real Claude execution."],
++                        "residual_risks": ["None identified."],
++                    }
++                }
++            )
++            completed = adapter.subprocess.CompletedProcess(
++                args=[],
++                returncode=0,
++                stdout=stdout,
++                stderr="",
++            )
++            resolved_claude = r"C:\Tools\claude.cmd"
++
++            with mock.patch.object(adapter.shutil, "which", return_value=resolved_claude):
++                with mock.patch.object(adapter.subprocess, "run", return_value=completed) as run:
++                    result = adapter.run_claude_review(payload)
++
++            self.assertEqual(result["status"], "passed")
++            command = run.call_args.args[0]
++            self.assertEqual(command[0], resolved_claude)
++            self.assertEqual(run.call_args.kwargs["encoding"], "utf-8")
++            self.assertEqual(run.call_args.kwargs["errors"], "replace")
++            self.assertIn("TASK_CONTENT", run.call_args.kwargs["input"])
++            self.assertNotIn("TASK_CONTENT", " ".join(command))
++            self.assertIn("--system-prompt", command)
++            self.assertIn("--json-schema", command)
++            self.assertEqual(command[command.index("--permission-mode") + 1], "plan")
++
++            schema = json.loads(command[command.index("--json-schema") + 1])
++            self.assertEqual(
++                schema["required"],
++                ["summary", "findings", "tested", "not_tested", "residual_risks"],
++            )
++
+ 
+ if __name__ == "__main__":
+     unittest.main()
+diff --git a/harness/cli.py b/harness/cli.py
+new file mode 100644
+index 0000000..d18fc46
+--- /dev/null
++++ b/harness/cli.py
+@@ -0,0 +1,220 @@
++from __future__ import annotations
++
++import argparse
++import json
++from dataclasses import dataclass
++from datetime import datetime, timezone
++from pathlib import Path
++from typing import Any, Iterable
++
++from jsonschema import Draft202012Validator
++
++
++ROOT = Path(__file__).resolve().parents[1]
++STATE_SCHEMA = ROOT / "harness" / "schemas" / "state.schema.json"
++CODEX_ACTOR = "codex"
++
++NORMAL_TRANSITIONS = {
++    "draft": {"triaged"},
++    "triaged": {"planned"},
++    "planned": {"in_progress"},
++    "in_progress": {"implemented"},
++    "implemented": {"verified", "failed_verification"},
++    "failed_verification": {"implemented"},
++    "verified": {"reviewing", "reviewed"},
++    "reviewing": {
++        "reviewed",
++        "review_blocked",
++        "review_failed",
++        "review_timeout",
++        "review_schema_invalid",
++        "external_review_unavailable",
++    },
++    "review_blocked": {"implemented"},
++    "review_failed": {"reviewing"},
++    "review_timeout": {"reviewing"},
++    "review_schema_invalid": {"reviewing"},
++    "external_review_unavailable": {"risk_accepted"},
++    "reviewed": {"completed"},
++    "risk_accepted": {"completed"},
++}
++NON_TERMINAL_STATES = set(NORMAL_TRANSITIONS)
++EXCEPTION_TARGETS = {"blocked", "needs_user_decision"}
++ALLOWED_TRANSITIONS = {
++    state: targets | EXCEPTION_TARGETS
++    for state, targets in NORMAL_TRANSITIONS.items()
++}
++
++
++class HarnessCliError(RuntimeError):
++    pass
++
++
++@dataclass(frozen=True)
++class ValidationResult:
++    run_dir: Path
++    errors: list[str]
++
++    @property
++    def ok(self) -> bool:
++        return not self.errors
++
++
++def load_json(path: Path) -> dict[str, Any]:
++    return json.loads(path.read_text(encoding="utf-8-sig"))
++
++
++def state_path(run_dir: Path) -> Path:
++    return run_dir / "state.json"
++
++
++def validate_run(run_dir: Path | str, *, root: Path = ROOT) -> ValidationResult:
++    resolved_run_dir = Path(run_dir)
++    errors: list[str] = []
++    state_file = state_path(resolved_run_dir)
++
++    if not state_file.exists():
++        return ValidationResult(resolved_run_dir, [f"missing state file: {state_file}"])
++
++    try:
++        state = load_json(state_file)
++    except json.JSONDecodeError as exc:
++        return ValidationResult(resolved_run_dir, [f"invalid state JSON: {exc}"])
++
++    errors.extend(validate_state(state, root=root, run_dir=resolved_run_dir))
++
++    return ValidationResult(resolved_run_dir, errors)
++
++
++def validate_state(
++    state: dict[str, Any],
++    *,
++    root: Path = ROOT,
++    run_dir: Path,
++) -> list[str]:
++    errors: list[str] = []
++    schema = load_json(root / "harness" / "schemas" / "state.schema.json")
++    validator = Draft202012Validator(schema)
++    for error in sorted(validator.iter_errors(state), key=lambda item: list(item.path)):
++        location = ".".join(str(part) for part in error.path) or "<root>"
++        errors.append(f"schema error at {location}: {error.message}")
++
++    errors.extend(validate_evidence_paths(state, root=root, run_dir=run_dir))
++    return errors
++
++
++def validate_evidence_paths(
++    state: dict[str, Any],
++    *,
++    root: Path,
++    run_dir: Path,
++) -> list[str]:
++    errors: list[str] = []
++    for index, evidence in enumerate(state.get("evidence", [])):
++        raw_path = evidence.get("path")
++        if not isinstance(raw_path, str) or not raw_path.strip():
++            continue
++
++        evidence_path = Path(raw_path)
++        candidates = [evidence_path]
++        if not evidence_path.is_absolute():
++            candidates = [root / evidence_path, run_dir / evidence_path]
++
++        if not any(candidate.exists() for candidate in candidates):
++            errors.append(f"evidence path does not exist at evidence[{index}]: {raw_path}")
++
++    return errors
++
++
++def can_transition(current_status: str, next_status: str) -> bool:
++    return next_status in ALLOWED_TRANSITIONS.get(current_status, set())
++
++
++def advance_run(
++    run_dir: Path | str,
++    next_status: str,
++    *,
++    actor: str = CODEX_ACTOR,
++    root: Path = ROOT,
++) -> dict[str, Any]:
++    if actor != CODEX_ACTOR:
++        raise HarnessCliError("only codex may advance harness run state")
++
++    resolved_run_dir = Path(run_dir)
++    before = validate_run(resolved_run_dir, root=root)
++    if not before.ok:
++        raise HarnessCliError(format_errors(before.errors))
++
++    path = state_path(resolved_run_dir)
++    state = load_json(path)
++    current_status = state["status"]
++    if not can_transition(current_status, next_status):
++        raise HarnessCliError(
++            f"invalid transition: {current_status} -> {next_status}",
++        )
++
++    candidate = dict(state)
++    candidate["status"] = next_status
++    candidate["updated_at"] = utc_now()
++    candidate_errors = validate_state(candidate, root=root, run_dir=resolved_run_dir)
++    if candidate_errors:
++        raise HarnessCliError(format_errors(candidate_errors))
++
++    path.write_text(json.dumps(candidate, indent=2) + "\n", encoding="utf-8")
++
++    return candidate
++
++
++def utc_now() -> str:
++    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace(
++        "+00:00",
++        "Z",
++    )
++
++
++def format_errors(errors: Iterable[str]) -> str:
++    return "\n".join(errors)
++
++
++def build_parser() -> argparse.ArgumentParser:
++    parser = argparse.ArgumentParser(description="Validate and advance Harness runs.")
++    subparsers = parser.add_subparsers(dest="command", required=True)
++
++    validate = subparsers.add_parser("validate", help="Validate a Harness run directory.")
++    validate.add_argument("run_dir")
++
++    advance = subparsers.add_parser("advance", help="Advance a Harness run status.")
++    advance.add_argument("run_dir")
++    advance.add_argument("status")
++    advance.add_argument("--actor", default=CODEX_ACTOR)
++
++    return parser
++
++
++def main(argv: list[str] | None = None) -> int:
++    parser = build_parser()
++    args = parser.parse_args(argv)
++
++    try:
++        if args.command == "validate":
++            result = validate_run(args.run_dir)
++            if not result.ok:
++                print(format_errors(result.errors))
++                return 1
++            print(f"valid: {result.run_dir}")
++            return 0
++
++        if args.command == "advance":
++            state = advance_run(args.run_dir, args.status, actor=args.actor)
++            print(f"advanced: {state['run_id']} -> {state['status']}")
++            return 0
++    except HarnessCliError as exc:
++        print(str(exc))
++        return 1
++
++    parser.error("unknown command")
++    return 2
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+diff --git a/tests/test_harness_cli.py b/tests/test_harness_cli.py
+new file mode 100644
+index 0000000..398c6cb
+--- /dev/null
++++ b/tests/test_harness_cli.py
+@@ -0,0 +1,134 @@
++import json
++import tempfile
++import unittest
++from pathlib import Path
++from unittest import mock
++
++from harness import cli
++
++
++ROOT = Path(__file__).resolve().parents[1]
++
++
++def minimal_state(status: str = "draft") -> dict:
++    return {
++        "run_id": "test-run",
++        "harness_version": "0.1.0",
++        "state_schema_version": "0.1.0",
++        "status": status,
++        "track": "Fast",
++        "current_workflow": "fast-doc-change",
++        "owner": "codex",
++        "base_commit": "HEAD",
++        "created_at": "2026-06-19T00:00:00Z",
++        "updated_at": "2026-06-19T00:00:00Z",
++        "external_agents": [
++            {
++                "name": "claude-code",
++                "role": "reviewer",
++                "state_access": "none",
++                "status": "not_requested",
++            }
++        ],
++        "evidence": [],
++    }
++
++
++def write_state(run_dir: Path, state: dict) -> None:
++    run_dir.mkdir(parents=True, exist_ok=True)
++    (run_dir / "state.json").write_text(
++        json.dumps(state, indent=2) + "\n",
++        encoding="utf-8",
++    )
++
++
++class HarnessCliTest(unittest.TestCase):
++    def test_validate_accepts_example_run(self):
++        result = cli.validate_run(
++            ROOT / "harness" / "runs" / "example-fast-doc-change",
++            root=ROOT,
++        )
++
++        self.assertEqual(result.errors, [])
++
++    def test_validate_rejects_missing_evidence_path(self):
++        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
++            run_dir = Path(raw)
++            state = minimal_state(status="verified")
++            state["evidence"] = [
++                {
++                    "type": "verification",
++                    "path": "harness/runs/test-run/missing-verification.md",
++                    "description": "Missing evidence file.",
++                }
++            ]
++            write_state(run_dir, state)
++
++            result = cli.validate_run(run_dir, root=ROOT)
++
++        self.assertTrue(
++            any("evidence path does not exist" in error for error in result.errors),
++            result.errors,
++        )
++
++    def test_validate_accepts_bom_prefixed_state_json(self):
++        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
++            run_dir = Path(raw)
++            run_dir.mkdir(parents=True, exist_ok=True)
++            (run_dir / "state.json").write_text(
++                "\ufeff" + json.dumps(minimal_state()),
++                encoding="utf-8",
++            )
++
++            result = cli.validate_run(run_dir, root=ROOT)
++
++        self.assertEqual(result.errors, [])
++
++    def test_advance_allows_codex_normal_transition_and_updates_timestamp(self):
++        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
++            run_dir = Path(raw)
++            state = minimal_state(status="draft")
++            write_state(run_dir, state)
++
++            advanced = cli.advance_run(run_dir, "triaged", actor="codex", root=ROOT)
++
++            saved = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
++
++        self.assertEqual(advanced["status"], "triaged")
++        self.assertEqual(saved["status"], "triaged")
++        self.assertNotEqual(saved["updated_at"], "2026-06-19T00:00:00Z")
++
++    def test_advance_does_not_write_candidate_when_validation_fails(self):
++        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
++            run_dir = Path(raw)
++            state = minimal_state(status="draft")
++            write_state(run_dir, state)
++
++            with mock.patch.object(cli, "utc_now", return_value="not-a-date"):
++                with self.assertRaises(cli.HarnessCliError):
++                    cli.advance_run(run_dir, "triaged", actor="codex", root=ROOT)
++
++            saved = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
++
++        self.assertEqual(saved["status"], "draft")
++        self.assertEqual(saved["updated_at"], "2026-06-19T00:00:00Z")
++
++    def test_advance_rejects_invalid_transition(self):
++        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
++            run_dir = Path(raw)
++            write_state(run_dir, minimal_state(status="completed"))
++
++            with self.assertRaises(cli.HarnessCliError):
++                cli.advance_run(run_dir, "planned", actor="codex", root=ROOT)
++
++    def test_advance_rejects_external_actor(self):
++        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
++            run_dir = Path(raw)
++            write_state(run_dir, minimal_state(status="draft"))
++
++            with self.assertRaises(cli.HarnessCliError):
++                cli.advance_run(run_dir, "triaged", actor="claude-code", root=ROOT)
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/tests/test_static_contracts.py b/tests/test_static_contracts.py
+new file mode 100644
+index 0000000..1653bb0
+--- /dev/null
++++ b/tests/test_static_contracts.py
+@@ -0,0 +1,144 @@
++import importlib.util
++import json
++import re
++import sys
++import unittest
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[1]
++STATE_SCHEMA = ROOT / "harness" / "schemas" / "state.schema.json"
++LIFECYCLE = ROOT / "harness" / "core" / "lifecycle.md"
++STATE_AUTHORITY = ROOT / "harness" / "core" / "state-authority.md"
++ADAPTER_PATH = ROOT / "mcp" / "claude-review" / "adapter.py"
++
++spec = importlib.util.spec_from_file_location("claude_review_adapter", ADAPTER_PATH)
++adapter = importlib.util.module_from_spec(spec)
++sys.modules[spec.name] = adapter
++spec.loader.exec_module(adapter)
++
++
++def read_text(path: Path) -> str:
++    return path.read_text(encoding="utf-8")
++
++
++def load_schema() -> dict:
++    return json.loads(STATE_SCHEMA.read_text(encoding="utf-8"))
++
++
++def parse_markdown_table(text: str, header_first_cell: str) -> list[list[str]]:
++    lines = text.splitlines()
++    rows: list[list[str]] = []
++    in_table = False
++
++    for line in lines:
++        stripped = line.strip()
++        if not stripped.startswith("|"):
++            if in_table:
++                break
++            continue
++
++        cells = [cell.strip() for cell in stripped.strip("|").split("|")]
++        if not in_table:
++            if cells and cells[0] == header_first_cell:
++                in_table = True
++            continue
++
++        if cells and all(set(cell) <= {"-", ":", " "} for cell in cells):
++            continue
++        rows.append(cells)
++
++    return rows
++
++
++def code_spans(text: str) -> list[str]:
++    return re.findall(r"`([^`]+)`", text)
++
++
++class StaticContractsTest(unittest.TestCase):
++    def test_lifecycle_workflow_registry_matches_state_schema(self):
++        schema = load_schema()
++        lifecycle_rows = parse_markdown_table(read_text(LIFECYCLE), "Workflow ID")
++
++        workflows_from_docs = [code_spans(row[0])[0] for row in lifecycle_rows]
++        tracks_from_docs = {
++            code_spans(row[0])[0]: row[1]
++            for row in lifecycle_rows
++        }
++
++        self.assertEqual(
++            workflows_from_docs,
++            schema["properties"]["current_workflow"]["enum"],
++        )
++
++        expected_constraints = {
++            tuple(
++                workflow
++                for workflow, track in tracks_from_docs.items()
++                if track == expected_track
++            ): expected_track
++            for expected_track in ("Fast", "Standard", "Strict")
++        }
++        actual_constraints = {
++            tuple(clause["if"]["properties"]["current_workflow"]["enum"]):
++            clause["then"]["properties"]["track"]["const"]
++            for clause in schema["allOf"]
++        }
++
++        self.assertEqual(actual_constraints, expected_constraints)
++
++    def test_state_authority_states_match_state_schema(self):
++        schema_statuses = load_schema()["properties"]["status"]["enum"]
++        text = read_text(STATE_AUTHORITY)
++
++        normal_line = next(
++            line for line in text.splitlines()
++            if line.startswith("`draft ->")
++        )
++        normal_states = [part.strip() for part in code_spans(normal_line)[0].split("->")]
++
++        exceptional_section = text.split("## Exceptional States", 1)[1].split(
++            "## Transition Rules",
++            1,
++        )[0]
++        exceptional_states = [
++            code_spans(line)[0]
++            for line in exceptional_section.splitlines()
++            if line.strip().startswith("- `")
++        ]
++
++        self.assertEqual(schema_statuses, normal_states + exceptional_states)
++
++    def test_review_status_mapping_matches_adapter_terminal_statuses(self):
++        rows = parse_markdown_table(read_text(STATE_AUTHORITY), "Review status")
++        statuses_from_docs = {code_spans(row[0])[0] for row in rows}
++
++        self.assertEqual(statuses_from_docs, adapter.TERMINAL_STATUSES)
++
++        mapping = {
++            code_spans(row[0])[0]: code_spans(row[1])[0]
++            for row in rows
++            if code_spans(row[0])[0] != "findings"
++        }
++        self.assertEqual(
++            mapping,
++            {
++                "passed": "reviewed",
++                "failed": "review_failed",
++                "timeout": "review_timeout",
++                "schema_invalid": "review_schema_invalid",
++                "not_available": "external_review_unavailable",
++            },
++        )
++
++        findings_rows = [
++            row for row in rows
++            if code_spans(row[0])[0] == "findings"
++        ]
++        self.assertEqual(len(findings_rows), 2)
++        self.assertIn("reviewed", code_spans(findings_rows[0][1]))
++        self.assertIn("review_blocked", code_spans(findings_rows[1][1]))
++
++
++if __name__ == "__main__":
++    unittest.main()

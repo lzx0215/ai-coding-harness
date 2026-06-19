@@ -1,0 +1,16 @@
+{
+  "status": "timeout",
+  "run_id": "2026-06-19-standard-adapter-cli-rereview",
+  "completed": false,
+  "harness_version": "0.1.0",
+  "adapter_version": "0.1.0",
+  "prompt_version": "0.1.0",
+  "reviewer": "claude-code",
+  "reviewer_model": "unknown",
+  "reviewer_model_version": "unknown",
+  "reviewer_cli_version": "unknown",
+  "output_file": "C:\\ai\\ai-coding-harness\\harness\\runs\\2026-06-19-standard-adapter-cli\\reviews\\claude-review-rereview.json",
+  "raw_log_file": "C:\\ai\\ai-coding-harness\\harness\\runs\\2026-06-19-standard-adapter-cli\\reviews\\claude-review-rereview.raw.log",
+  "exit_code": null,
+  "duration_seconds": 228.625
+}

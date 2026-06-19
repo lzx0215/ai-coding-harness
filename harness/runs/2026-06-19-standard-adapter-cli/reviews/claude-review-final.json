@@ -1,0 +1,89 @@
+{
+  "status": "findings",
+  "run_id": "2026-06-19-standard-adapter-cli-final-review",
+  "completed": true,
+  "harness_version": "0.1.0",
+  "adapter_version": "0.1.0",
+  "prompt_version": "0.1.0",
+  "reviewer": "claude-code",
+  "reviewer_model": "unknown",
+  "reviewer_model_version": "unknown",
+  "reviewer_cli_version": "unknown",
+  "output_file": "C:\\ai\\ai-coding-harness\\harness\\runs\\2026-06-19-standard-adapter-cli\\reviews\\claude-review-final.json",
+  "raw_log_file": "C:\\ai\\ai-coding-harness\\harness\\runs\\2026-06-19-standard-adapter-cli\\reviews\\claude-review-final.raw.log",
+  "exit_code": 0,
+  "duration_seconds": 183.938,
+  "review_file": "C:\\ai\\ai-coding-harness\\harness\\runs\\2026-06-19-standard-adapter-cli\\reviews\\claude-review-final.evidence.json",
+  "summary": "The adapter hardening (stdin prompt delivery, resolved executable path, --system-prompt/--json-schema enforcement, UTF-8 errors=replace) and the new harness CLI (validate/advance with schema + transition guards) are well-implemented and well-tested. No blocking regressions or security defects found. Static contract tests meaningfully cover schema/workflow/state/review-mapping drift. Findings below are minor robustness/consistency items. Notable gap: verification.md confirms wrapper smoke but does not record the real Claude review against this Standard diff (this very review is the missing evidence).",
+  "findings": [
+    {
+      "severity": "low",
+      "title": "Non-atomic state.json write in advance_run can corrupt state on interruption",
+      "evidence": "advance_run writes via `path.write_text(json.dumps(candidate, indent=2) + \"\\n\", encoding=\"utf-8\")` directly to state.json. If the process is interrupted mid-write (Ctrl+C, power loss, disk full), the state file can be left partially written and fail future schema validation. For a state-authority CLI this is a durability risk; the test suite does not cover interruption during write.",
+      "recommendation": "Write to a temporary sibling file (e.g. state.json.tmp) and atomically os.replace() it over state.json. Add a regression test that simulates failure before replace and confirms the original state remains valid.",
+      "file": "harness/cli.py",
+      "line": 178
+    },
+    {
+      "severity": "low",
+      "title": "_extract_review_content uses truthiness check on structured_output, skipping empty-but-present containers",
+      "evidence": "`if parsed.get(\"structured_output\"):` is falsy for empty dict {} or empty list []. The test only covers the None case (test_normalize_falls_back_when_structured_output_is_null). An empty container would silently fall through to `result`. The provided JSON schema requires summary/findings/etc., so an empty object should not occur in practice, but the check is imprecise.",
+      "recommendation": "Use `if parsed.get(\"structured_output\") is not None:` to distinguish missing/null from empty, then let downstream normalize/schema validation reject genuinely empty content.",
+      "file": "mcp/claude-review/adapter.py",
+      "line": 583
+    },
+    {
+      "severity": "info",
+      "title": "STATE_SCHEMA module constant is declared but never used",
+      "evidence": "harness/cli.py declares `STATE_SCHEMA = ROOT / \"harness\" / \"schemas\" / \"state.schema.json\"` but validate_state re-constructs the path inline as `root / \"harness\" / \"schemas\" / \"state.schema.json\"`. The constant is dead; if the schema location changes, the constant and the inline path can drift.",
+      "recommendation": "Either reference STATE_SCHEMA (parameterized by root) in validate_state or remove the unused module-level constant.",
+      "file": "harness/cli.py",
+      "line": 22
+    },
+    {
+      "severity": "info",
+      "title": "advance actor check is a soft guard, not a security boundary",
+      "evidence": "`advance.add_argument(\"--actor\", default=CODEX_ACTOR)` plus `if actor != CODEX_ACTOR: raise HarnessCliError(...)` lets any caller pass `--actor codex`. This correctly prevents non-codex agents (e.g. claude-code) from advancing state, but any human or script can override. Acceptable for a local CLI but should be documented as a convention rather than an ACL.",
+      "recommendation": "Document in invoke/handoff docs that the actor check is a process-discipline guard, not authentication. If real enforcement is ever required, derive actor from environment/identity rather than a CLI flag.",
+      "file": "harness/cli.py",
+      "line": 132
+    },
+    {
+      "severity": "info",
+      "title": "verification.md does not capture the real Claude review against this Standard diff",
+      "evidence": "The task acceptance criteria and verification plan both require running a real Claude review against this Standard diff, but verification.md Results only confirm the wrapper smoke (`invoke-claude-reviewer.py`), not a review of this run's diff.patch. The diff under review here appears to be that missing evidence, but it is not recorded in the run artifacts.",
+      "recommendation": "After this review completes, append its terminal adapter evidence (review_file/raw_log_file) to the run and update verification.md Results to cite the real Standard-diff review.",
+      "file": "harness/runs/2026-06-19-standard-adapter-cli/verification.md",
+      "line": 1
+    }
+  ],
+  "tested": [
+    "Adapter command construction: resolved claude_executable, --system-prompt, --json-schema, --permission-mode plan, --tools empty, --max-budget-usd, prompt on stdin (verified via test_run_uses_resolved_claude_executable assertions)",
+    "structured_output extraction precedence over result and null-fallback (test_normalize_prefers_structured_output, test_normalize_falls_back_when_structured_output_is_null)",
+    "JSON schema returned by review_content_json_schema matches the StructuredOutput contract (required keys, severity enum sorted == [critical,high,info,low,medium], additionalProperties false, optional file/line)",
+    "CLI validate: missing state file, missing evidence path, BOM-prefixed state.json (test_harness_cli)",
+    "CLI advance: codex normal transition + timestamp update, candidate not written on validation failure, invalid transition rejected, non-codex actor rejected (test_harness_cli)",
+    "State transition table including exception targets (blocked, needs_user_decision) available from every non-terminal state",
+    "UTF-8-sig BOM handling in wrapper.load_payload and cli.load_json (test_wrapper_load_payload_accepts_utf8_bom, test_validate_accepts_bom_prefixed_state_json)",
+    "Static contract tests assert lifecycle.md workflow registry, state-authority.md states, and review-status mapping match state.schema.json and adapter.TERMINAL_STATUSES",
+    "build_review_prompt intro lines match the active reviewer system prompt contract",
+    "subprocess.run uses list-form command (no shell=True), encoding=utf-8, errors=replace, input=prompt \u2014 mitigates argv injection and UnicodeDecodeError"
+  ],
+  "not_tested": [
+    "Existence/contents of run artifacts not in diff: state.json, triage.md, review.md, handoff.md for this Standard run (acceptance criterion #5 cannot be fully confirmed from embedded content)",
+    "Real MCP server exercised through Codex's MCP client runtime (verification.md explicitly lists this as Not Verified)",
+    "Real Claude CLI honoring --json-schema to populate structured_output (inferred from wrapper smoke; flag-level contract not directly asserted)",
+    "Behavior when Claude returns malformed structured_output or non-JSON result (normalize backstop exists but no dedicated fuzz test)",
+    "Concurrent advance_run invocations on the same run_dir (no file locking)",
+    "advance_run when harness/schemas/state.schema.json is missing or corrupt (FileNotFoundError/JSONDecodeError would propagate uncaught past main's HarnessCliError handler)",
+    "Non-Windows platform behavior of shutil.which PATHEXT resolution (code is portable but only Windows path asserted in test)"
+  ],
+  "residual_risks": [
+    "Claude CLI output shape (result/structured_output/content keys) may change across versions; adapter parsing assumes current field names",
+    "--system-prompt and --json-schema are Claude CLI features; if the installed CLI version lacks them, real reviews will fail at invocation",
+    "Local `pip install -r mcp/claude-review/requirements.txt` mutated the active Python environment without adding a root lockfile (noted in verification.md)",
+    "No CI/cloud validation; all evidence is local single-machine smoke",
+    "Schema-constrained parsing still needs monitoring against model/version drift in Claude output",
+    "Evidence path validation only checks existence (read-only), but relative paths with `..` could resolve outside repo root \u2014 low impact since no content is read or written"
+  ]
+}

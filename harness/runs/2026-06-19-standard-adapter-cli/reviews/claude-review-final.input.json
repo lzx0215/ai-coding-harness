@@ -1,0 +1,24 @@
+﻿{
+    "run_id":  "2026-06-19-standard-adapter-cli-final-review",
+    "harness_version":  "0.1.0",
+    "prompt_version":  "0.1.0",
+    "artifact_dir":  "harness\\runs\\2026-06-19-standard-adapter-cli\\reviews",
+    "task_file":  "harness\\runs\\2026-06-19-standard-adapter-cli\\task.md",
+    "plan_file":  "harness\\runs\\2026-06-19-standard-adapter-cli\\plan.md",
+    "diff_file":  "harness\\runs\\2026-06-19-standard-adapter-cli\\artifacts\\diff.patch",
+    "diff_meta_file":  "harness\\runs\\2026-06-19-standard-adapter-cli\\artifacts\\diff.meta.json",
+    "changed_files_file":  "harness\\runs\\2026-06-19-standard-adapter-cli\\artifacts\\changed-files.txt",
+    "verification_file":  "harness\\runs\\2026-06-19-standard-adapter-cli\\verification.md",
+    "review_scope":  [
+                         "correctness",
+                         "security",
+                         "blocking regressions only"
+                     ],
+    "output_file":  "harness\\runs\\2026-06-19-standard-adapter-cli\\reviews\\claude-review-final.json",
+    "review_file":  "harness\\runs\\2026-06-19-standard-adapter-cli\\reviews\\claude-review-final.evidence.json",
+    "raw_log_file":  "harness\\runs\\2026-06-19-standard-adapter-cli\\reviews\\claude-review-final.raw.log",
+    "timeout_seconds":  240,
+    "max_input_chars":  120000,
+    "max_files":  30,
+    "max_diff_lines":  2000
+}

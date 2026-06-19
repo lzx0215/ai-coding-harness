@@ -1,0 +1,11 @@
+﻿{
+    "diff_schema_version":  "0.1.0",
+    "source":  "git-working-tree-selected-files",
+    "base_commit":  "f3bb9b9f20b2407cbc7e9487414781b506d161a5",
+    "head_commit":  "f3bb9b9f20b2407cbc7e9487414781b506d161a5",
+    "includes_uncommitted_changes":  true,
+    "includes_untracked_files":  true,
+    "command":  "git diff --binary -- selected tracked files; git diff --binary --no-index -- /dev/null selected untracked files",
+    "changed_files_file":  "harness\\runs\\2026-06-19-standard-adapter-cli\\artifacts/changed-files.txt",
+    "generated_at":  "2026-06-19T03:18:42Z"
+}
