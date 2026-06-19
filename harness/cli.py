@@ -135,9 +135,19 @@ def validate_state(
     return errors
 
 
+def evidence_items(state: dict[str, Any]) -> Iterable[tuple[int, dict[str, Any]]]:
+    evidence_entries = state.get("evidence", [])
+    if not isinstance(evidence_entries, list):
+        return
+
+    for index, evidence in enumerate(evidence_entries):
+        if isinstance(evidence, dict):
+            yield index, evidence
+
+
 def validate_evidence_types(state: dict[str, Any]) -> list[str]:
     errors: list[str] = []
-    for index, evidence in enumerate(state.get("evidence", [])):
+    for index, evidence in evidence_items(state):
         evidence_type = evidence.get("type")
         if not isinstance(evidence_type, str):
             continue
@@ -157,7 +167,7 @@ def validate_evidence_paths(
     errors: list[str] = []
     resolved_root = root.resolve()
     resolved_run_dir = run_dir.resolve()
-    for index, evidence in enumerate(state.get("evidence", [])):
+    for index, evidence in evidence_items(state):
         raw_path = evidence.get("path")
         if not isinstance(raw_path, str) or not raw_path.strip():
             continue
@@ -218,7 +228,7 @@ def validate_completion_evidence(
     errors: list[str] = []
     evidence_types = {
         evidence.get("type")
-        for evidence in state.get("evidence", [])
+        for _index, evidence in evidence_items(state)
         if isinstance(evidence.get("type"), str)
     }
 

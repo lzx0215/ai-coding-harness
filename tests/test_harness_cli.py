@@ -143,6 +143,34 @@ class HarnessCliTest(unittest.TestCase):
             result.errors,
         )
 
+    def test_validate_reports_null_evidence_as_schema_error(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            state = minimal_state(status="verified")
+            state["evidence"] = None
+            write_state(run_dir, state)
+
+            result = cli.validate_run(run_dir, root=ROOT)
+
+        self.assertTrue(
+            any("schema error at evidence" in error for error in result.errors),
+            result.errors,
+        )
+
+    def test_validate_reports_non_object_evidence_item_as_schema_error(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            state = minimal_state(status="verified")
+            state["evidence"] = ["not-an-object"]
+            write_state(run_dir, state)
+
+            result = cli.validate_run(run_dir, root=ROOT)
+
+        self.assertTrue(
+            any("schema error at evidence.0" in error for error in result.errors),
+            result.errors,
+        )
+
     def test_validate_rejects_missing_evidence_path(self):
         with tempfile.TemporaryDirectory(dir=ROOT) as raw:
             run_dir = Path(raw)
