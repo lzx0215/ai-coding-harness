@@ -14,6 +14,8 @@ The adapter writes an MCP envelope JSON to `output_file`. The envelope contains:
 - Audit metadata: `harness_version`, `adapter_version`, `prompt_version`, `reviewer`, `reviewer_model`, `reviewer_model_version`, and `reviewer_cli_version`.
 - Artifact paths: `output_file`, `raw_log_file`, and, for successful `passed` or `findings` results, `review_file`.
 
+`reviewer_cli_version` is detected from `claude --version` when the CLI can be executed. `reviewer_model` is taken from explicit Claude output metadata or, for current real raw logs, from the first `modelUsage` key. `reviewer_model_version` is nullable because current real raw logs do not expose a distinct model-version field. If a value cannot be proven from CLI output, the adapter records `null` instead of an invented sentinel.
+
 For v0.1, structured review evidence is included directly in the same envelope instead of a nested evidence object. Successful `passed` and `findings` results must include `summary`, `findings`, `tested`, `not_tested`, and `residual_risks`. A `passed` result may have an empty `findings` array. A `findings` result must include at least one finding with `severity`, `title`, `evidence`, and `recommendation`.
 
 Status-specific requirements:
@@ -26,6 +28,6 @@ Input must include `artifact_dir`, the current run's review artifact directory. 
 
 ## Local check
 
-Run `python -m pip install -r mcp/claude-review/requirements.txt`.
+Run `python -m pip install --require-hashes -r mcp/claude-review/requirements.lock.txt`.
 
 Run `python mcp/claude-review/server.py`.

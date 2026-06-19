@@ -239,6 +239,72 @@ class ClaudeReviewAdapterTest(unittest.TestCase):
             self.assertEqual(result["status"], "findings")
             self.assertEqual(result["findings"][0]["title"], "Missing path guard")
 
+    def test_normalize_extracts_model_from_model_usage(self):
+        with tempfile.TemporaryDirectory() as raw:
+            payload = self.make_payload(Path(raw))
+            fake = {
+                "modelUsage": {
+                    "glm-5.2[1m]": {
+                        "inputTokens": 10,
+                        "outputTokens": 20,
+                    }
+                },
+                "result": {
+                    "summary": "No issues found.",
+                    "findings": [],
+                    "tested": ["Reviewed adapter tests."],
+                    "not_tested": ["Real Claude execution."],
+                    "residual_risks": ["None identified."],
+                },
+            }
+
+            result = adapter.normalize_claude_json(fake, payload)
+
+        self.assertEqual(result["reviewer_model"], "glm-5.2[1m]")
+        self.assertIsNone(result["reviewer_model_version"])
+
+    def test_normalize_prefers_explicit_model_metadata_over_model_usage(self):
+        with tempfile.TemporaryDirectory() as raw:
+            payload = self.make_payload(Path(raw))
+            fake = {
+                "model": "claude-explicit",
+                "modelUsage": {
+                    "glm-5.2[1m]": {
+                        "inputTokens": 10,
+                        "outputTokens": 20,
+                    }
+                },
+                "result": {
+                    "summary": "No issues found.",
+                    "findings": [],
+                    "tested": ["Reviewed adapter tests."],
+                    "not_tested": ["Real Claude execution."],
+                    "residual_risks": ["None identified."],
+                },
+            }
+
+            result = adapter.normalize_claude_json(fake, payload)
+
+        self.assertEqual(result["reviewer_model"], "claude-explicit")
+
+    def test_normalize_ignores_non_dict_model_usage(self):
+        with tempfile.TemporaryDirectory() as raw:
+            payload = self.make_payload(Path(raw))
+            fake = {
+                "modelUsage": [],
+                "result": {
+                    "summary": "No issues found.",
+                    "findings": [],
+                    "tested": ["Reviewed adapter tests."],
+                    "not_tested": ["Real Claude execution."],
+                    "residual_risks": ["None identified."],
+                },
+            }
+
+            result = adapter.normalize_claude_json(fake, payload)
+
+        self.assertIsNone(result["reviewer_model"])
+
     def test_normalize_no_findings_yields_passed(self):
         with tempfile.TemporaryDirectory() as raw:
             payload = self.make_payload(Path(raw))
@@ -278,6 +344,28 @@ class ClaudeReviewAdapterTest(unittest.TestCase):
         self.assertEqual(result["status"], "passed")
         self.assertEqual(result["summary"], "No issues found.")
         self.assertEqual(result["tested"], ["Reviewed embedded diff."])
+
+    def test_normalize_prefers_detected_cli_version_over_output_metadata(self):
+        with tempfile.TemporaryDirectory() as raw:
+            payload = self.make_payload(Path(raw))
+            fake = {
+                "cli_version": "stale-output-version",
+                "result": {
+                    "summary": "No issues found.",
+                    "findings": [],
+                    "tested": ["Reviewed adapter tests."],
+                    "not_tested": ["Real Claude execution."],
+                    "residual_risks": ["None identified."],
+                },
+            }
+
+            result = adapter.normalize_claude_json(
+                fake,
+                payload,
+                reviewer_cli_version="2.1.168 (Claude Code)",
+            )
+
+        self.assertEqual(result["reviewer_cli_version"], "2.1.168 (Claude Code)")
 
     def test_normalize_falls_back_when_structured_output_is_null(self):
         with tempfile.TemporaryDirectory() as raw:
@@ -371,13 +459,24 @@ class ClaudeReviewAdapterTest(unittest.TestCase):
                 stdout=stdout,
                 stderr="",
             )
+            version = adapter.subprocess.CompletedProcess(
+                args=[],
+                returncode=0,
+                stdout="2.1.168 (Claude Code)\n",
+                stderr="",
+            )
 
             with mock.patch.object(adapter.shutil, "which", return_value="claude"):
-                with mock.patch.object(adapter.subprocess, "run", return_value=completed):
+                with mock.patch.object(
+                    adapter.subprocess,
+                    "run",
+                    side_effect=[version, completed],
+                ):
                     result = adapter.run_claude_review(payload)
 
             self.assertEqual(result["status"], "schema_invalid")
             self.assertFalse(result["completed"])
+            self.assertEqual(result["reviewer_cli_version"], "2.1.168 (Claude Code)")
 
     def test_nonzero_authenticated_output_remains_failed(self):
         with tempfile.TemporaryDirectory() as raw:
@@ -388,13 +487,24 @@ class ClaudeReviewAdapterTest(unittest.TestCase):
                 stdout="already authenticated but command failed\n",
                 stderr="",
             )
+            version = adapter.subprocess.CompletedProcess(
+                args=[],
+                returncode=0,
+                stdout="2.1.168 (Claude Code)\n",
+                stderr="",
+            )
 
             with mock.patch.object(adapter.shutil, "which", return_value="claude"):
-                with mock.patch.object(adapter.subprocess, "run", return_value=completed):
+                with mock.patch.object(
+                    adapter.subprocess,
+                    "run",
+                    side_effect=[version, completed],
+                ):
                     result = adapter.run_claude_review(payload)
 
             self.assertEqual(result["status"], "failed")
             self.assertNotIn("reason", result)
+            self.assertEqual(result["reviewer_cli_version"], "2.1.168 (Claude Code)")
 
     def test_nonzero_clear_login_missing_output_returns_auth_missing(self):
         with tempfile.TemporaryDirectory() as raw:
@@ -405,13 +515,96 @@ class ClaudeReviewAdapterTest(unittest.TestCase):
                 stdout="",
                 stderr="Error: not logged in. Please log in first.\n",
             )
+            version = adapter.subprocess.CompletedProcess(
+                args=[],
+                returncode=0,
+                stdout="2.1.168 (Claude Code)\n",
+                stderr="",
+            )
 
             with mock.patch.object(adapter.shutil, "which", return_value="claude"):
-                with mock.patch.object(adapter.subprocess, "run", return_value=completed):
+                with mock.patch.object(
+                    adapter.subprocess,
+                    "run",
+                    side_effect=[version, completed],
+                ):
                     result = adapter.run_claude_review(payload)
 
             self.assertEqual(result["status"], "not_available")
             self.assertEqual(result["reason"], "auth_missing")
+            self.assertEqual(result["reviewer_cli_version"], "2.1.168 (Claude Code)")
+
+    def test_detect_claude_cli_version_returns_none_for_unavailable_outputs(self):
+        cases = [
+            OSError("missing"),
+            adapter.subprocess.TimeoutExpired(cmd=["claude", "--version"], timeout=10),
+            adapter.subprocess.CompletedProcess(
+                args=[],
+                returncode=1,
+                stdout="",
+                stderr="failed",
+            ),
+            adapter.subprocess.CompletedProcess(
+                args=[],
+                returncode=0,
+                stdout="",
+                stderr="",
+            ),
+        ]
+
+        for case in cases:
+            with self.subTest(case=type(case).__name__):
+                with mock.patch.object(adapter.subprocess, "run", side_effect=[case]):
+                    result = adapter.detect_claude_cli_version("claude")
+
+            self.assertIsNone(result)
+
+    def test_run_records_detected_cli_version_and_model_usage_metadata(self):
+        with tempfile.TemporaryDirectory() as raw:
+            payload = self.make_payload(Path(raw))
+            stdout = json.dumps(
+                {
+                    "modelUsage": {
+                        "glm-5.2[1m]": {
+                            "inputTokens": 10,
+                            "outputTokens": 20,
+                        }
+                    },
+                    "structured_output": {
+                        "summary": "No issues found.",
+                        "findings": [],
+                        "tested": ["Reviewed adapter tests."],
+                        "not_tested": ["Real Claude execution."],
+                        "residual_risks": ["None identified."],
+                    },
+                }
+            )
+            version = adapter.subprocess.CompletedProcess(
+                args=[],
+                returncode=0,
+                stdout="2.1.168 (Claude Code)\n",
+                stderr="",
+            )
+            review = adapter.subprocess.CompletedProcess(
+                args=[],
+                returncode=0,
+                stdout=stdout,
+                stderr="",
+            )
+
+            with mock.patch.object(adapter.shutil, "which", return_value="claude"):
+                with mock.patch.object(
+                    adapter.subprocess,
+                    "run",
+                    side_effect=[version, review],
+                ) as run:
+                    result = adapter.run_claude_review(payload)
+
+            self.assertEqual(result["status"], "passed")
+            self.assertEqual(result["reviewer_cli_version"], "2.1.168 (Claude Code)")
+            self.assertEqual(result["reviewer_model"], "glm-5.2[1m]")
+            self.assertIsNone(result["reviewer_model_version"])
+            self.assertEqual(run.call_args_list[0].args[0], ["claude", "--version"])
 
     def test_run_uses_resolved_claude_executable(self):
         with tempfile.TemporaryDirectory() as raw:
@@ -436,15 +629,25 @@ class ClaudeReviewAdapterTest(unittest.TestCase):
             resolved_claude = r"C:\Tools\claude.cmd"
 
             with mock.patch.object(adapter.shutil, "which", return_value=resolved_claude):
-                with mock.patch.object(adapter.subprocess, "run", return_value=completed) as run:
+                version = adapter.subprocess.CompletedProcess(
+                    args=[],
+                    returncode=0,
+                    stdout="2.1.168 (Claude Code)\n",
+                    stderr="",
+                )
+                with mock.patch.object(
+                    adapter.subprocess,
+                    "run",
+                    side_effect=[version, completed],
+                ) as run:
                     result = adapter.run_claude_review(payload)
 
             self.assertEqual(result["status"], "passed")
-            command = run.call_args.args[0]
+            command = run.call_args_list[1].args[0]
             self.assertEqual(command[0], resolved_claude)
-            self.assertEqual(run.call_args.kwargs["encoding"], "utf-8")
-            self.assertEqual(run.call_args.kwargs["errors"], "replace")
-            self.assertIn("TASK_CONTENT", run.call_args.kwargs["input"])
+            self.assertEqual(run.call_args_list[1].kwargs["encoding"], "utf-8")
+            self.assertEqual(run.call_args_list[1].kwargs["errors"], "replace")
+            self.assertIn("TASK_CONTENT", run.call_args_list[1].kwargs["input"])
             self.assertNotIn("TASK_CONTENT", " ".join(command))
             self.assertIn("--system-prompt", command)
             self.assertIn("--json-schema", command)

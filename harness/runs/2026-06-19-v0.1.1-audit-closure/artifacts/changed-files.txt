@@ -1,0 +1,10 @@
+﻿README.md
+harness/schemas/state.schema.json
+harness/templates/external-review-template.json
+mcp/claude-review/README.md
+mcp/claude-review/adapter.py
+mcp/claude-review/requirements.lock.txt
+mcp/claude-review/schema/claude-review-output.schema.json
+tests/test_claude_review_adapter.py
+tests/test_state_schema.py
+tests/test_static_contracts.py

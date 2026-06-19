@@ -52,7 +52,7 @@ python -m unittest discover -s tests -v
 运行 Claude review adapter 的本地依赖安装：
 
 ```powershell
-python -m pip install -r mcp/claude-review/requirements.lock.txt
+python -m pip install --require-hashes -r mcp/claude-review/requirements.lock.txt
 ```
 
 启动 MCP server：

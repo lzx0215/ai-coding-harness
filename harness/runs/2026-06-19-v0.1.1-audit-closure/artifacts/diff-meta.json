@@ -1,0 +1,6 @@
+﻿{
+    "base_commit":  "a23ef6d",
+    "diff_scope":  "tracked implementation files only, excluding run evidence",
+    "stat":  " README.md                                          |   2 +-\n harness/schemas/state.schema.json                  |   6 +-\n harness/templates/external-review-template.json    |   6 +-\n mcp/claude-review/README.md                        |   4 +-\n mcp/claude-review/adapter.py                       |  85 ++-\n mcp/claude-review/requirements.lock.txt            | 583 +++++++++++++++++++--\n .../schema/claude-review-output.schema.json        |   6 +-\n tests/test_claude_review_adapter.py                | 219 +++++++-\n tests/test_state_schema.py                         |   7 +-\n tests/test_static_contracts.py                     | 102 +++-\n 10 files changed, 936 insertions(+), 84 deletions(-)",
+    "numstat":  "1\t1\tREADME.md\n3\t3\tharness/schemas/state.schema.json\n3\t3\tharness/templates/external-review-template.json\n3\t1\tmcp/claude-review/README.md\n70\t15\tmcp/claude-review/adapter.py\n551\t32\tmcp/claude-review/requirements.lock.txt\n3\t3\tmcp/claude-review/schema/claude-review-output.schema.json\n211\t8\ttests/test_claude_review_adapter.py\n4\t3\ttests/test_state_schema.py\n87\t15\ttests/test_static_contracts.py"
+}

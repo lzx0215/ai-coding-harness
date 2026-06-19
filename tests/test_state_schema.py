@@ -65,11 +65,12 @@ class StateSchemaTest(unittest.TestCase):
             "adapter",
             "adapter_version",
             "tool",
-            "model",
-            "model_version",
-            "cli_version",
             "prompt_version",
         ]:
+            self.assertEqual(agent_properties[field]["minLength"], 1, field)
+
+        for field in ["model", "model_version", "cli_version"]:
+            self.assertEqual(agent_properties[field]["type"], ["string", "null"], field)
             self.assertEqual(agent_properties[field]["minLength"], 1, field)
 
         evidence_properties = schema["properties"]["evidence"]["items"]["properties"]

@@ -1,0 +1,85 @@
+{
+  "run_id": "2026-06-19-v0.1.1-audit-closure",
+  "status": "findings",
+  "reviewer": "claude-code",
+  "reviewer_model": "glm-5.2[1m]",
+  "reviewer_model_version": null,
+  "reviewer_cli_version": "2.1.168 (Claude Code)",
+  "summary": "The v0.1.1 audit-closure change makes reviewer-identity metadata honestly nullable, adds real `claude --version` CLI detection, extracts `reviewer_model` from `modelUsage`, regenerates the Claude review adapter lockfile with sha256 hashes (restoring the pywin32 Windows marker), and adds targeted regression tests. The implementation is conservative and well-tested: schemas, templates, adapter, and tests are updated consistently; the `\"unknown\"` sentinel is replaced by `null`; CLI-version detection is separated from review execution and threaded through all run paths; and lockfile hash validation is both statically asserted and verified live behind an opt-in env gate. I found no critical, high, or correctness-breaking defects. Findings are limited to low/info robustness, determinism, and test-coverage observations, plus documented residual risks around downstream null consumers and the unverifiable model version.",
+  "findings": [
+    {
+      "severity": "low",
+      "title": "CLI version detection trusts the first non-empty line without shape validation",
+      "evidence": "`detect_claude_cli_version` returns the first non-empty stripped line from stdout/stderr of `claude --version` (`for line in _to_text(value).splitlines(): ... if text: return text`). If a CLI build ever prints a banner, telemetry notice, or warning before the version token, that line becomes the recorded `reviewer_cli_version`. The verification only confirms `2.1.168 (Claude Code)` for the current install.",
+      "recommendation": "Prefer a line matching a version-like regex (e.g. digits separated by dots) before falling back to the first non-empty line, or document that the recorded value is the raw first line and therefore advisory.",
+      "file": "mcp/claude-review/adapter.py"
+    },
+    {
+      "severity": "low",
+      "title": "modelUsage extraction records only the first key and is order-dependent",
+      "evidence": "`_model_usage_name` iterates `parsed.get(\"modelUsage\")` and returns the first string key. When a review uses multiple models, which model is recorded as `reviewer_model` depends on JSON insertion order, and the actual reviewing model may not be the first one. The README documents 'first modelUsage key' but not the multi-model ambiguity.",
+      "recommendation": "Either aggregate all modelUsage keys (e.g. into a secondary field) or define an explicit selection rule (primary/longest-usage model) so recorded metadata is deterministic across runs that use multiple models.",
+      "file": "mcp/claude-review/adapter.py"
+    },
+    {
+      "severity": "low",
+      "title": "Lockfile hash correctness is only validated by an opt-in, network-dependent test",
+      "evidence": "`test_claude_review_adapter_lockfile_hash_validation_passes` is gated behind `HARNESS_RUN_PIP_HASH_CHECK=1` and shells out to real pip. The default suite (`test_claude_review_adapter_dependencies_are_locked`) only asserts that `--hash=sha256:` substrings are present, not that hashes match the pinned distributions. A corrupted or mistyped hash would pass default CI and only surface in opt-in runs.",
+      "recommendation": "Run the opt-in hash validation in the release/CI pipeline (or a periodic scheduled job) so hash regressions are caught before merge rather than only when a contributor remembers to set the env var.",
+      "file": "tests/test_static_contracts.py"
+    },
+    {
+      "severity": "low",
+      "title": "Synchronous version probe adds latency to every review path",
+      "evidence": "`run_claude_review` now calls `detect_claude_cli_version(claude_executable)` (10s timeout) before every review, including failure paths (auth_missing, nonzero, schema_invalid). For long-lived server runs this re-detects the version on every invocation.",
+      "recommendation": "Cache the detected version per process (or per executable mtime) and only re-probe when the cache is empty, since CLI version rarely changes within a process lifetime.",
+      "file": "mcp/claude-review/adapter.py"
+    },
+    {
+      "severity": "info",
+      "title": "reviewer identity ('claude-code') can diverge from the actual inference model",
+      "evidence": "`REVIEWER = \"claude-code\"` is hardcoded while real `modelUsage` exposes `glm-5.2[1m]` (a GLM-family model). Recording is honest, but a reader of the envelope could infer Claude executed the review when a backed/proxied model did.",
+      "recommendation": "Clarify in the schema/template docs that `reviewer` denotes the adapter/prompt identity (Claude Code CLI) while `reviewer_model` is the proven inference model, so the two are not conflated in audit trails.",
+      "file": "mcp/claude-review/adapter.py"
+    },
+    {
+      "severity": "info",
+      "title": "minLength:1 on nullable identity fields is correct but partially redundant",
+      "evidence": "Schemas now declare `\"type\": [\"string\", \"null\"], \"minLength\": 1` for model/model_version/cli_version and the reviewer_* fields. Under JSON Schema draft-07+ (jsonschema 4.26 is in use), `minLength` only constrains string instances, so null validates and empty strings are rejected. This is the intended 'non-empty-or-null' contract.",
+      "recommendation": "No change required; consider a one-line schema comment clarifying that minLength applies only to the string variant, to aid future maintainers unfamiliar with nullable-string constraints.",
+      "file": "harness/schemas/state.schema.json"
+    }
+  ],
+  "tested": [
+    "Schema nullability for model/model_version/cli_version in state.schema.json and claude-review-output.schema.json (test_state_schema, test_static_contracts.test_claude_review_output_schema_allows_nullable_identity_metadata)",
+    "External review template now emits null for reviewer_model/reviewer_model_version/reviewer_cli_version",
+    "reviewer_model extracted from explicit 'model' field with precedence over modelUsage (test_normalize_prefers_explicit_model_metadata_over_model_usage)",
+    "reviewer_model extracted from first modelUsage key (test_normalize_extracts_model_from_model_usage)",
+    "Non-dict modelUsage (e.g. list) yields null reviewer_model (test_normalize_ignores_non_dict_model_usage)",
+    "reviewer_model_version remains null when no real version field exists",
+    "Detected CLI version wins over stale JSON metadata (test_normalize_prefers_detected_cli_version_over_output_metadata)",
+    "detect_claude_cli_version returns None on OSError, TimeoutExpired, nonzero returncode, and empty output (test_detect_claude_cli_version_returns_none_for_unavailable_outputs)",
+    "run_claude_review records detected CLI version and modelUsage metadata and calls claude --version first (test_run_records_detected_cli_version_and_model_usage_metadata)",
+    "Failure paths (schema_invalid, failed, auth_missing) now carry reviewer_cli_version and updated subprocess side-effect ordering",
+    "Lockfile pins exact versions with --hash=sha256 entries and preserves pywin32==312 Windows marker (test_claude_review_adapter_dependencies_are_locked)",
+    "Live pip --require-hashes --dry-run resolves the full lockfile closure when HARNESS_RUN_PIP_HASH_CHECK=1",
+    "README and mcp/claude-review/README.md updated to install with --require-hashes",
+    "Harness CLI validation passes for example-fast-doc-change, 2026-06-19-standard-adapter-cli, and this run; pip check clean; server import smoke ok"
+  ],
+  "not_tested": [
+    "Cross-platform lockfile install behavior outside Windows/Python 3.12 (only the current Windows env was exercised)",
+    "Clean virtual-environment install that bypasses pip's existing cache",
+    "Non-Windows execution of the opt-in pip hash integration test",
+    "Behavior when claude --version prints a non-version banner line first (no regex/shape validation in code or tests)",
+    "Multi-model modelUsage scenarios and determinism of which key is recorded as reviewer_model",
+    "Long-lived MCP client registration under Codex's MCP runtime",
+    "Full repository scan for downstream consumers of the now-nullable model/model_version/cli_version and reviewer_* fields (review was limited to the embedded diff)"
+  ],
+  "residual_risks": [
+    "Downstream code (review aggregation, state transitions, reporting, evidence rendering) that previously treated model/model_version/cli_version and reviewer_* as non-null strings could raise AttributeError/TypeError on null values; only schema, adapter, template, and tests are visible in this diff, so unshown consumers are unverified.",
+    "reviewer_model_version will remain null until the CLI or Claude output exposes a distinct, verifiable model-version field; current real logs only expose a model name via modelUsage.",
+    "The opt-in hash-validation test depends on network or pip cache availability and is skipped by default, so hash regressions are not caught in the default suite.",
+    "Lockfile was generated against Python 3.12 on Windows; resolver/hashes could differ for other interpreters or platforms despite the pywin32 marker.",
+    "Recorded reviewer_cli_version and reviewer_model are advisory strings derived from CLI/output text without structural validation, so malformed or re-ordered CLI output could be recorded verbatim."
+  ]
+}

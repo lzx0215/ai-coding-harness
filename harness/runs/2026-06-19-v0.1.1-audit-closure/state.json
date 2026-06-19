@@ -1,0 +1,89 @@
+{
+  "run_id": "2026-06-19-v0.1.1-audit-closure",
+  "harness_version": "0.1.0",
+  "state_schema_version": "0.1.0",
+  "status": "completed",
+  "track": "Standard",
+  "current_workflow": "standard-agent-adapter-change",
+  "owner": "codex",
+  "base_commit": "a23ef6d",
+  "created_at": "2026-06-19T04:40:32Z",
+  "updated_at": "2026-06-19T05:07:26Z",
+  "external_agents": [
+    {
+      "name": "claude-code",
+      "role": "reviewer",
+      "adapter": "claude-review",
+      "adapter_version": "0.1.0",
+      "tool": "claude_review",
+      "model": "glm-5.2[1m]",
+      "model_version": null,
+      "cli_version": "2.1.168 (Claude Code)",
+      "prompt_version": "0.1.0",
+      "state_access": "none",
+      "status": "findings"
+    }
+  ],
+  "evidence": [
+    {
+      "type": "task",
+      "path": "harness/runs/2026-06-19-v0.1.1-audit-closure/task.md",
+      "description": "Task and empirical reviewer metadata discovery."
+    },
+    {
+      "type": "triage",
+      "path": "harness/runs/2026-06-19-v0.1.1-audit-closure/triage.md",
+      "description": "Standard workflow triage."
+    },
+    {
+      "type": "plan",
+      "path": "harness/runs/2026-06-19-v0.1.1-audit-closure/plan.md",
+      "description": "Implementation and verification plan."
+    },
+    {
+      "type": "diff",
+      "path": "harness/runs/2026-06-19-v0.1.1-audit-closure/artifacts/diff.patch",
+      "description": "Tracked implementation diff reviewed by Claude."
+    },
+    {
+      "type": "diff-meta",
+      "path": "harness/runs/2026-06-19-v0.1.1-audit-closure/artifacts/diff-meta.json",
+      "description": "Diff stats and scope metadata."
+    },
+    {
+      "type": "changed-files",
+      "path": "harness/runs/2026-06-19-v0.1.1-audit-closure/artifacts/changed-files.txt",
+      "description": "Changed implementation files reviewed by Claude."
+    },
+    {
+      "type": "verification",
+      "path": "harness/runs/2026-06-19-v0.1.1-audit-closure/verification.md",
+      "description": "Verification commands, results, not-verified areas, and residual risks."
+    },
+    {
+      "type": "review",
+      "path": "harness/runs/2026-06-19-v0.1.1-audit-closure/review.md",
+      "description": "Claude review triage and follow-up."
+    },
+    {
+      "type": "review-output",
+      "path": "harness/runs/2026-06-19-v0.1.1-audit-closure/reviews/claude-review-closure.json",
+      "description": "Final Claude review adapter envelope."
+    },
+    {
+      "type": "review-evidence",
+      "path": "harness/runs/2026-06-19-v0.1.1-audit-closure/reviews/claude-review-closure.evidence.json",
+      "description": "Final Claude review evidence."
+    },
+    {
+      "type": "review-raw-log",
+      "path": "harness/runs/2026-06-19-v0.1.1-audit-closure/reviews/claude-review-closure.raw.log",
+      "description": "Final Claude review raw log."
+    },
+    {
+      "type": "handoff",
+      "path": "harness/runs/2026-06-19-v0.1.1-audit-closure/handoff.md",
+      "description": "Completion report and next step."
+    }
+  ]
+}

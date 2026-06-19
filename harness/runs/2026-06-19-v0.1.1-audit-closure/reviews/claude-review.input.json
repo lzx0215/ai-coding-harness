@@ -1,0 +1,27 @@
+﻿{
+    "run_id":  "2026-06-19-v0.1.1-audit-closure",
+    "harness_version":  "0.1.0",
+    "prompt_version":  "0.1.0",
+    "artifact_dir":  "C:\\ai\\ai-coding-harness\\harness\\runs\\2026-06-19-v0.1.1-audit-closure\\reviews",
+    "task_file":  "C:\\ai\\ai-coding-harness\\harness\\runs\\2026-06-19-v0.1.1-audit-closure\\task.md",
+    "plan_file":  "C:\\ai\\ai-coding-harness\\harness\\runs\\2026-06-19-v0.1.1-audit-closure\\plan.md",
+    "diff_file":  "C:\\ai\\ai-coding-harness\\harness\\runs\\2026-06-19-v0.1.1-audit-closure\\artifacts\\diff.patch",
+    "diff_meta_file":  "C:\\ai\\ai-coding-harness\\harness\\runs\\2026-06-19-v0.1.1-audit-closure\\artifacts\\diff-meta.json",
+    "changed_files_file":  "C:\\ai\\ai-coding-harness\\harness\\runs\\2026-06-19-v0.1.1-audit-closure\\artifacts\\changed-files.txt",
+    "verification_file":  "C:\\ai\\ai-coding-harness\\harness\\runs\\2026-06-19-v0.1.1-audit-closure\\verification.md",
+    "review_scope":  [
+                         "correctness",
+                         "security",
+                         "regression",
+                         "test_gaps",
+                         "maintainability",
+                         "auditability"
+                     ],
+    "output_file":  "C:\\ai\\ai-coding-harness\\harness\\runs\\2026-06-19-v0.1.1-audit-closure\\reviews\\claude-review.json",
+    "review_file":  "C:\\ai\\ai-coding-harness\\harness\\runs\\2026-06-19-v0.1.1-audit-closure\\reviews\\claude-review.evidence.json",
+    "raw_log_file":  "C:\\ai\\ai-coding-harness\\harness\\runs\\2026-06-19-v0.1.1-audit-closure\\reviews\\claude-review.raw.log",
+    "timeout_seconds":  900,
+    "max_input_chars":  120000,
+    "max_files":  30,
+    "max_diff_lines":  2000
+}

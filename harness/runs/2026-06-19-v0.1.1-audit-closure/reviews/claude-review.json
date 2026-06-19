@@ -1,0 +1,114 @@
+{
+  "status": "findings",
+  "run_id": "2026-06-19-v0.1.1-audit-closure",
+  "completed": true,
+  "harness_version": "0.1.0",
+  "adapter_version": "0.1.0",
+  "prompt_version": "0.1.0",
+  "reviewer": "claude-code",
+  "reviewer_model": "glm-5.2[1m]",
+  "reviewer_model_version": null,
+  "reviewer_cli_version": "2.1.168 (Claude Code)",
+  "output_file": "C:\\ai\\ai-coding-harness\\harness\\runs\\2026-06-19-v0.1.1-audit-closure\\reviews\\claude-review.json",
+  "raw_log_file": "C:\\ai\\ai-coding-harness\\harness\\runs\\2026-06-19-v0.1.1-audit-closure\\reviews\\claude-review.raw.log",
+  "exit_code": 0,
+  "duration_seconds": 198.391,
+  "review_file": "C:\\ai\\ai-coding-harness\\harness\\runs\\2026-06-19-v0.1.1-audit-closure\\reviews\\claude-review.evidence.json",
+  "summary": "The v0.1.1 audit-closure change successfully closes the named auditability gaps: it removes the synthetic \"unknown\" sentinel in favor of nullable reviewer-identity fields, derives reviewer_model from explicit metadata with a modelUsage fallback, records reviewer_cli_version via `claude --version`, regenerates the adapter lockfile with sha256 hashes, and adds targeted regressions for schema nullability, model extraction, CLI version detection, and hash-locked install validation. Verification evidence is thorough (targeted tests, full suite, harness validate, pip check, hash dry-run, server smoke). The implementation is internally consistent across adapter, schemas, templates, README, and tests. The most material concern is a portability regression: the regenerated lockfile dropped the `pywin32==312; platform_system == \"Windows\"` environment marker, making the hash-locked install Windows-only. Secondary issues are test robustness (live pip invocation), untested failure paths in detect_claude_cli_version, and an arbitrary first-key selection in _model_usage_name. No correctness or security defects were found in the core code paths.",
+  "findings": [
+    {
+      "severity": "medium",
+      "title": "Regenerated lockfile dropped the cross-platform environment marker for pywin32",
+      "evidence": "The old lockfile pinned `pywin32==312; platform_system == \"Windows\"`; the regenerated file pins `pywin32==312 \\` with hashes and no marker (diff: requirements.lock.txt). Because README.md and mcp/claude-review/README.md now instruct `pip install --require-hashes -r ...requirements.lock.txt`, a Linux/macOS install will attempt to resolve pywin32 and fail under --require-hashes. verification.md acknowledges this only as a residual risk ('pip-compile resolved Windows-only pywin32 directly'). The static-contracts test was relaxed in lockstep: it previously asserted `'pywin32==312; platform_system == \"Windows\"'` and now only asserts `any(locked.startswith(\"pywin32==312\") ...)`.",
+      "recommendation": "Either restore an environment marker for pywin32 (e.g., regenerate with the marker preserved, or hand-augment the pywin32 line with `; platform_system == \"Windows\"` while keeping hashes), or explicitly document that the lockfile is Windows-only and gate the README install instructions by platform. Consider regenerating on a non-Windows host or using pip-compile's `--no-emit-index-url/--resolver` options that retain markers.",
+      "file": "mcp/claude-review/requirements.lock.txt",
+      "line": 1
+    },
+    {
+      "severity": "low",
+      "title": "Hash-validation regression invokes real pip and depends on environment/cache/network",
+      "evidence": "test_claude_review_adapter_lockfile_hash_validation_passes (tests/test_static_contracts.py) shells out via `subprocess.run([sys.executable, '-m', 'pip', 'install', '--dry-run', '--require-hashes', '--ignore-installed', '--no-deps', '--no-input', '-r', lockfile])` and asserts returncode == 0. This requires pip on PATH and either network access or a populated wheel cache, and adds real latency to the unittest suite. It will be flaky or non-portable in offline/sandboxed CI.",
+      "recommendation": "Keep one end-to-end pip dry-run as an opt-in integration test, but add a fast pure-Python check that parses each lockfile entry and asserts every pinned distribution has at least one `--hash=sha256:` line and that hashes match a known shape (the existing logical_requirements parser already does most of this). Mark the live pip test with a skip decorator (e.g., unittest.skipUnless) gated on env var or network availability.",
+      "file": "tests/test_static_contracts.py",
+      "line": 126
+    },
+    {
+      "severity": "low",
+      "title": "detect_claude_cli_version failure paths are not unit-tested",
+      "evidence": "detect_claude_cli_version (mcp/claude-review/adapter.py) catches OSError and subprocess.TimeoutExpired and returns None on non-zero exit, but the only test exercising it (test_run_records_detected_cli_version_and_model_usage_metadata) mocks subprocess.run with returncode 0 success. No test covers: CLI missing (OSError), CLI hang (TimeoutExpired), non-zero exit code, or empty stdout/stderr. As a result the None-propagation path through build_envelope/normalize_claude_json is not asserted for this codepath.",
+      "recommendation": "Add unit tests for detect_claude_cli_version directly: raise OSError, raise TimeoutExpired, return non-zero returncode, and return empty stdout/stderr. Assert None is returned and that downstream envelopes still validate with reviewer_cli_version=null.",
+      "file": "mcp/claude-review/adapter.py",
+      "line": 440
+    },
+    {
+      "severity": "low",
+      "title": "_model_usage_name selects first modelUsage key arbitrarily and lacks precedence tests",
+      "evidence": "_model_usage_name iterates `for model_name in model_usage` and returns the first string key stripped. Real Claude logs may contain multiple model entries, so the selected reviewer_model depends on JSON insertion order and may not be the primary model. README documents 'first modelUsage key' but no test covers the multi-model case or asserts precedence when both explicit `model`/`reviewer_model` and modelUsage exist (_reviewer_model's `or` precedence is also untested).",
+      "recommendation": "Add tests: (1) _reviewer_model prefers explicit 'model'/'reviewer_model' over modelUsage; (2) _model_usage_name with multiple keys returns a deterministic, documented choice (consider selecting the entry with the largest token usage or the first alphabetically, and document the rule); (3) non-dict modelUsage returns None.",
+      "file": "mcp/claude-review/adapter.py",
+      "line": 872
+    },
+    {
+      "severity": "info",
+      "title": "reviewer_cli_version records the entire first output line, not a parsed version",
+      "evidence": "detect_claude_cli_version returns the first non-empty stripped line from stdout/stderr, so reviewer_cli_version is stored as e.g. '2.1.168 (Claude Code)' rather than '2.1.168'. The test asserts the full string. This is more auditable than 'unknown', but the field name suggests a bare version and downstream consumers may parse it as semver.",
+      "recommendation": "Either rename the field/intent in documentation to 'reviewer_cli_version_line', or parse the leading semver-like token via regex (e.g., re.match(r'([0-9][^\\s]*)', line)) and store that, falling back to the full line on no match. Document whichever rule is chosen.",
+      "file": "mcp/claude-review/adapter.py",
+      "line": 457
+    },
+    {
+      "severity": "info",
+      "title": "TOCTOU between CLI version detection and review execution",
+      "evidence": "run_claude_review calls detect_claude_cli_version(claude_executable) once before invoking the actual review subprocess. If the CLI binary is updated between these calls (e.g., auto-update), the recorded reviewer_cli_version may not match the version that performed the review. The detected version is also reused across all failure envelopes built later in the same call.",
+      "recommendation": "Acceptable for v0.1.1; note as a known limitation. If stricter provenance is required later, capture the CLI version immediately after the review completes from the same process, or hash the resolved binary path and record both version and binary digest.",
+      "file": "mcp/claude-review/adapter.py",
+      "line": 314
+    },
+    {
+      "severity": "info",
+      "title": "Schema nullability uses minLength alongside null type (correct but non-obvious)",
+      "evidence": "state.schema.json and claude-review-output.schema.json use `{ \"type\": [\"string\", \"null\"], \"minLength\": 1 }`. Per JSON Schema, minLength only constrains strings, so null passes; the test_state_schema and test_static_contracts tests verify both type and minLength. Behavior is correct, but the combination can mislead future editors into thinking null is rejected.",
+      "recommendation": "Add a one-line schema comment (if your meta-schema allows) or a test that explicitly constructs an instance with null values and asserts validation passes, to lock in the intent.",
+      "file": "harness/schemas/state.schema.json",
+      "line": 84
+    }
+  ],
+  "tested": [
+    "reviewer_model extracted from explicit metadata with modelUsage fallback (test_normalize_extracts_model_from_model_usage)",
+    "reviewer_cli_version detected via `claude --version` and propagated through run_claude_review (test_run_records_detected_cli_version_and_model_usage_metadata)",
+    "reviewer_cli_version attached to all envelope paths (auth_missing, wrapper_failed, schema_invalid) via build_envelope/normalize_claude_json plumbing",
+    "reviewer_model_version remains null when no real version field exists",
+    "state.schema.json allows null for model/model_version/cli_version while preserving minLength on strings (test_state_schema)",
+    "claude-review-output.schema.json allows null for reviewer identity fields (test_static_contracts)",
+    "external-review-template.json defaults identity fields to null",
+    "Lockfile regenerated with sha256 hashes for every pinned distribution",
+    "Direct requirements are a subset of locked requirements (logical_requirements parser)",
+    "Hash-locked pip install dry-run passes with --require-hashes --ignore-installed --no-deps",
+    "Full unittest suite (50 tests) passes",
+    "python -m harness.cli validate passes for example-fast-doc-change, 2026-06-19-standard-adapter-cli, and this run",
+    "pip check reports No broken requirements",
+    "MCP server (server.py) exits 0; import smoke returns server_import_ok",
+    "Resolved claude executable path is used for both --version and review calls (test_run_uses_resolved_claude_executable)"
+  ],
+  "not_tested": [
+    "detect_claude_cli_version OSError, TimeoutExpired, non-zero-exit, and empty-output paths",
+    "_model_usage_name behavior with multiple modelUsage keys or non-dict input",
+    "_reviewer_model precedence between explicit 'model'/'reviewer_model' and modelUsage fallback",
+    "Cross-platform install of the regenerated lockfile on Linux/macOS (no environment marker on pywin32)",
+    "Clean virtualenv install without leveraging pip's existing wheel cache",
+    "Long-lived MCP client registration through Codex's MCP runtime",
+    "End-to-end real (non-mocked) Claude review for this change",
+    "pywin32 environment-marker behavior (the contract was relaxed in lockstep with the regression)",
+    "Lockfile hash-validation on a non-Windows interpreter",
+    "Concurrent or repeated detect_claude_cli_version invocations under subprocess resource limits"
+  ],
+  "residual_risks": [
+    "The regenerated lockfile is effectively Windows-only: pywin32==312 lost its `; platform_system == \"Windows\"` marker, so `pip install --require-hashes -r requirements.lock.txt` will fail on non-Windows hosts.",
+    "reviewer_model_version will remain null until Claude CLI output or raw logs expose a distinct, verifiable model-version field; consumers must tolerate null.",
+    "_model_usage_name's first-key selection may not identify the primary model when raw logs reference multiple models.",
+    "Installing pip-tools to regenerate the lockfile altered the local tooling environment (runtime deps remain locked).",
+    "The hash-validation regression test is environment-dependent (pip + network/cache) and may be flaky in CI.",
+    "Live pip dry-run validates hashes but uses --no-deps/--ignore-installed, so transitive resolution under --require-hashes on a clean environment is not exercised.",
+    "TOCTOU: reviewer_cli_version is captured before the review runs; an auto-updating CLI could record a version that differs from the one that performed the review."
+  ]
+}

@@ -1,6 +1,8 @@
 import importlib.util
 import json
+import os
 import re
+import subprocess
 import sys
 import unittest
 from pathlib import Path
@@ -13,6 +15,9 @@ STATE_AUTHORITY = ROOT / "harness" / "core" / "state-authority.md"
 ADAPTER_PATH = ROOT / "mcp" / "claude-review" / "adapter.py"
 ADAPTER_REQUIREMENTS = ROOT / "mcp" / "claude-review" / "requirements.txt"
 ADAPTER_LOCKFILE = ROOT / "mcp" / "claude-review" / "requirements.lock.txt"
+ADAPTER_OUTPUT_SCHEMA = (
+    ROOT / "mcp" / "claude-review" / "schema" / "claude-review-output.schema.json"
+)
 
 spec = importlib.util.spec_from_file_location("claude_review_adapter", ADAPTER_PATH)
 adapter = importlib.util.module_from_spec(spec)
@@ -57,28 +62,66 @@ def code_spans(text: str) -> list[str]:
     return re.findall(r"`([^`]+)`", text)
 
 
+def logical_requirements(path: Path) -> list[str]:
+    requirements: list[str] = []
+    current: list[str] = []
+
+    for line in read_text(path).splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if stripped.startswith("--") and not stripped.startswith("--hash="):
+            continue
+
+        value = stripped[:-1].rstrip() if stripped.endswith("\\") else stripped
+        if value.startswith("--hash="):
+            current.append(value)
+            continue
+
+        if current:
+            requirements.append(" ".join(current))
+        current = [value]
+
+    if current:
+        requirements.append(" ".join(current))
+
+    return requirements
+
+
 class StaticContractsTest(unittest.TestCase):
+    def test_claude_review_output_schema_allows_nullable_identity_metadata(self):
+        schema = json.loads(read_text(ADAPTER_OUTPUT_SCHEMA))
+        for field in [
+            "reviewer_model",
+            "reviewer_model_version",
+            "reviewer_cli_version",
+        ]:
+            self.assertEqual(schema["properties"][field]["type"], ["string", "null"])
+            self.assertEqual(schema["properties"][field]["minLength"], 1)
+
     def test_claude_review_adapter_dependencies_are_locked(self):
-        direct_requirements = [
-            line.strip()
-            for line in read_text(ADAPTER_REQUIREMENTS).splitlines()
-            if line.strip() and not line.strip().startswith("#")
-        ]
-        locked_requirements = [
-            line.strip()
-            for line in read_text(ADAPTER_LOCKFILE).splitlines()
-            if line.strip() and not line.strip().startswith("#")
-        ]
+        direct_requirements = logical_requirements(ADAPTER_REQUIREMENTS)
+        locked_requirements = logical_requirements(ADAPTER_LOCKFILE)
 
         self.assertTrue(locked_requirements)
         for requirement in locked_requirements:
             self.assertIn("==", requirement)
             self.assertNotIn(">=", requirement)
             self.assertNotIn("<=", requirement)
+            self.assertIn("--hash=sha256:", requirement)
 
-        self.assertTrue(set(direct_requirements).issubset(set(locked_requirements)))
-        self.assertIn(
-            'pywin32==312; platform_system == "Windows"',
+        for requirement in direct_requirements:
+            self.assertTrue(
+                any(locked.startswith(requirement) for locked in locked_requirements),
+                requirement,
+            )
+
+        self.assertTrue(
+            any(
+                locked.startswith("pywin32==312")
+                and 'platform_system == "Windows"' in locked
+                for locked in locked_requirements
+            ),
             locked_requirements,
         )
         for requirement in [
@@ -86,7 +129,36 @@ class StaticContractsTest(unittest.TestCase):
             "cffi==2.0.0",
             "pycparser==3.0",
         ]:
-            self.assertIn(requirement, locked_requirements)
+            self.assertTrue(
+                any(locked.startswith(requirement) for locked in locked_requirements),
+                requirement,
+            )
+
+    @unittest.skipUnless(
+        os.environ.get("HARNESS_RUN_PIP_HASH_CHECK") == "1",
+        "set HARNESS_RUN_PIP_HASH_CHECK=1 to run live pip hash validation",
+    )
+    def test_claude_review_adapter_lockfile_hash_validation_passes(self):
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "pip",
+                "install",
+                "--dry-run",
+                "--require-hashes",
+                "--ignore-installed",
+                "--no-input",
+                "-r",
+                str(ADAPTER_LOCKFILE),
+            ],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
 
     def test_lifecycle_workflow_registry_matches_state_schema(self):
         schema = load_schema()

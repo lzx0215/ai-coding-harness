@@ -12,7 +12,6 @@ from typing import Any
 ADAPTER_VERSION = "0.1.0"
 DEFAULT_VERSION = "0.1.0"
 REVIEWER = "claude-code"
-UNKNOWN = "unknown"
 
 SUCCESS_STATUSES = {"passed", "findings"}
 TERMINAL_STATUSES = {
@@ -171,9 +170,9 @@ def build_envelope(
     paths: ArtifactPaths | None = None,
     resolved_paths: dict[str, Path] | None = None,
     review_data: dict[str, Any] | None = None,
-    reviewer_model: str = UNKNOWN,
-    reviewer_model_version: str = UNKNOWN,
-    reviewer_cli_version: str = UNKNOWN,
+    reviewer_model: str | None = None,
+    reviewer_model_version: str | None = None,
+    reviewer_cli_version: str | None = None,
 ) -> dict[str, Any]:
     if status not in TERMINAL_STATUSES:
         raise ValueError(f"unsupported status: {status}")
@@ -196,9 +195,9 @@ def build_envelope(
         "adapter_version": ADAPTER_VERSION,
         "prompt_version": _nonempty_string(payload.get("prompt_version"), DEFAULT_VERSION),
         "reviewer": REVIEWER,
-        "reviewer_model": _nonempty_string(reviewer_model, UNKNOWN),
-        "reviewer_model_version": _nonempty_string(reviewer_model_version, UNKNOWN),
-        "reviewer_cli_version": _nonempty_string(reviewer_cli_version, UNKNOWN),
+        "reviewer_model": _optional_string(reviewer_model),
+        "reviewer_model_version": _optional_string(reviewer_model_version),
+        "reviewer_cli_version": _optional_string(reviewer_cli_version),
         "output_file": output_path,
         "raw_log_file": raw_log_path,
         "exit_code": exit_code,
@@ -225,6 +224,7 @@ def normalize_claude_json(
     raw_log_file: Path | str | None = None,
     duration_seconds: float = 0.0,
     exit_code: int | None = 0,
+    reviewer_cli_version: str | None = None,
 ) -> dict[str, Any]:
     if not isinstance(parsed, dict):
         raise ReviewSchemaError("Claude stdout JSON must be an object")
@@ -244,18 +244,16 @@ def normalize_claude_json(
         exit_code=exit_code,
         resolved_paths=path_overrides,
         review_data=review_data,
-        reviewer_model=_metadata_value(parsed, content, "reviewer_model", "model"),
+        reviewer_model=_reviewer_model(parsed, content),
         reviewer_model_version=_metadata_value(
             parsed,
             content,
             "reviewer_model_version",
             "model_version",
         ),
-        reviewer_cli_version=_metadata_value(
-            parsed,
-            content,
-            "reviewer_cli_version",
-            "cli_version",
+        reviewer_cli_version=(
+            _optional_string(reviewer_cli_version)
+            or _metadata_value(parsed, content, "reviewer_cli_version", "cli_version")
         ),
     )
     _validate_success_envelope(envelope)
@@ -313,6 +311,7 @@ def run_claude_review(payload: dict[str, Any]) -> dict[str, Any]:
         )
         return envelope
 
+    reviewer_cli_version = detect_claude_cli_version(claude_executable)
     prompt = build_review_prompt(payload)
     command = [
         claude_executable,
@@ -351,6 +350,7 @@ def run_claude_review(payload: dict[str, Any]) -> dict[str, Any]:
             started=started,
             paths=paths,
             exit_code=None,
+            reviewer_cli_version=reviewer_cli_version,
         )
         _write_failure_artifacts(path_safety, envelope, raw_log)
         return envelope
@@ -362,6 +362,7 @@ def run_claude_review(payload: dict[str, Any]) -> dict[str, Any]:
             reason="wrapper_failed_to_start",
             paths=paths,
             exit_code=None,
+            reviewer_cli_version=reviewer_cli_version,
         )
         _write_failure_artifacts(path_safety, envelope, f"{type(exc).__name__}: {exc}\n")
         return envelope
@@ -379,6 +380,7 @@ def run_claude_review(payload: dict[str, Any]) -> dict[str, Any]:
                 reason="auth_missing",
                 paths=paths,
                 exit_code=completed.returncode,
+                reviewer_cli_version=reviewer_cli_version,
             )
         else:
             envelope = build_envelope(
@@ -387,6 +389,7 @@ def run_claude_review(payload: dict[str, Any]) -> dict[str, Any]:
                 started=started,
                 paths=paths,
                 exit_code=completed.returncode,
+                reviewer_cli_version=reviewer_cli_version,
             )
         _write_json(paths.output_file, envelope)
         return envelope
@@ -400,6 +403,7 @@ def run_claude_review(payload: dict[str, Any]) -> dict[str, Any]:
             started=started,
             paths=paths,
             exit_code=completed.returncode,
+            reviewer_cli_version=reviewer_cli_version,
         )
         _write_json(paths.output_file, envelope)
         return envelope
@@ -414,6 +418,7 @@ def run_claude_review(payload: dict[str, Any]) -> dict[str, Any]:
             raw_log_file=paths.raw_log_file,
             duration_seconds=duration_seconds,
             exit_code=completed.returncode,
+            reviewer_cli_version=reviewer_cli_version,
         )
     except ReviewSchemaError:
         envelope = build_envelope(
@@ -422,6 +427,7 @@ def run_claude_review(payload: dict[str, Any]) -> dict[str, Any]:
             duration_seconds=duration_seconds,
             paths=paths,
             exit_code=completed.returncode,
+            reviewer_cli_version=reviewer_cli_version,
         )
         _write_json(paths.output_file, envelope)
         return envelope
@@ -429,6 +435,31 @@ def run_claude_review(payload: dict[str, Any]) -> dict[str, Any]:
     _write_json(paths.review_file, build_review_evidence(envelope))
     _write_json(paths.output_file, envelope)
     return envelope
+
+
+def detect_claude_cli_version(claude_executable: str) -> str | None:
+    try:
+        completed = subprocess.run(
+            [claude_executable, "--version"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+
+    if completed.returncode != 0:
+        return None
+
+    for value in (completed.stdout, completed.stderr):
+        for line in _to_text(value).splitlines():
+            text = line.strip()
+            if text:
+                return text
+    return None
 
 
 def build_review_prompt(payload: dict[str, Any]) -> str:
@@ -818,16 +849,40 @@ def _metadata_value(
     parsed: dict[str, Any],
     content: dict[str, Any],
     *keys: str,
-) -> str:
+) -> str | None:
     for source in (content, parsed):
         for key in keys:
             value = source.get(key)
             if isinstance(value, str) and value.strip():
                 return value.strip()
-    return UNKNOWN
+    return None
+
+
+def _reviewer_model(parsed: dict[str, Any], content: dict[str, Any]) -> str | None:
+    return (
+        _metadata_value(parsed, content, "reviewer_model", "model")
+        or _model_usage_name(parsed)
+    )
+
+
+def _model_usage_name(parsed: dict[str, Any]) -> str | None:
+    model_usage = parsed.get("modelUsage")
+    if not isinstance(model_usage, dict):
+        return None
+
+    for model_name in model_usage:
+        if isinstance(model_name, str) and model_name.strip():
+            return model_name.strip()
+    return None
 
 
 def _nonempty_string(value: Any, default: str) -> str:
     if isinstance(value, str) and value.strip():
         return value.strip()
     return default
+
+
+def _optional_string(value: Any) -> str | None:
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None

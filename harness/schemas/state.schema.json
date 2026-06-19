@@ -81,9 +81,9 @@
           "adapter": { "type": "string", "minLength": 1 },
           "adapter_version": { "type": "string", "minLength": 1 },
           "tool": { "type": "string", "minLength": 1 },
-          "model": { "type": "string", "minLength": 1 },
-          "model_version": { "type": "string", "minLength": 1 },
-          "cli_version": { "type": "string", "minLength": 1 },
+          "model": { "type": ["string", "null"], "minLength": 1 },
+          "model_version": { "type": ["string", "null"], "minLength": 1 },
+          "cli_version": { "type": ["string", "null"], "minLength": 1 },
           "prompt_version": { "type": "string", "minLength": 1 },
           "state_access": { "type": "string", "enum": ["none"] },
           "status": {
