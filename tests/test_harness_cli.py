@@ -171,6 +171,19 @@ class HarnessCliTest(unittest.TestCase):
             result.errors,
         )
 
+    def test_validate_reports_non_object_state_as_schema_error(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            run_dir.mkdir(parents=True, exist_ok=True)
+            (run_dir / "state.json").write_text("[]\n", encoding="utf-8")
+
+            result = cli.validate_run(run_dir, root=ROOT)
+
+        self.assertTrue(
+            any("schema error at <root>" in error for error in result.errors),
+            result.errors,
+        )
+
     def test_validate_rejects_missing_evidence_path(self):
         with tempfile.TemporaryDirectory(dir=ROOT) as raw:
             run_dir = Path(raw)

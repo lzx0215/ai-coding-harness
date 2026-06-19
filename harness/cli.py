@@ -118,7 +118,7 @@ def validate_run(run_dir: Path | str, *, root: Path = ROOT) -> ValidationResult:
 
 
 def validate_state(
-    state: dict[str, Any],
+    state: Any,
     *,
     root: Path = ROOT,
     run_dir: Path,
@@ -129,6 +129,9 @@ def validate_state(
     for error in sorted(validator.iter_errors(state), key=lambda item: list(item.path)):
         location = ".".join(str(part) for part in error.path) or "<root>"
         errors.append(f"schema error at {location}: {error.message}")
+
+    if not isinstance(state, dict):
+        return errors
 
     errors.extend(validate_evidence_types(state))
     errors.extend(validate_evidence_paths(state, root=root, run_dir=run_dir))
