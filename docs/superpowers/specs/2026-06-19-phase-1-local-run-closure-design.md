@@ -134,7 +134,11 @@ If `advance <run> completed` lacks required completion evidence, the command fai
 
 If evidence paths are missing, `validate` reports the existing path errors. The completion gate must not duplicate path-resolution logic.
 
-If review cannot run for a Standard task, Codex must record `review-waiver` or proceed through `external_review_unavailable -> risk_accepted` with `risk-acceptance` evidence before completion.
+If review is deliberately waived for a Standard task before entering `reviewing`, Codex must record `review-waiver` evidence and use the legal `verified -> reviewed` transition before completion.
+
+`review-waiver` is evidence for a deliberate review waiver on a legal path to `reviewed`, for example `verified -> reviewed` when the workflow or user waives review. It is not a state transition and cannot bypass the existing requirement that `completed` is reachable only from `reviewed` or `risk_accepted`.
+
+If review was attempted and the adapter is unavailable, the state path is `reviewing -> external_review_unavailable -> risk_accepted`, followed by `risk-acceptance` evidence before completion.
 
 If a Strict task cannot complete required review, Phase 1 records the state faithfully and stops for user decision. Silent downgrade to residual risk is not allowed.
 
@@ -165,7 +169,7 @@ python -m harness.cli validate harness/runs/example-fast-doc-change
 python -m harness.cli validate harness/runs/2026-06-19-v0.2-reviewer-provenance-implementation
 ```
 
-The implementation plan should expand historical-run validation to all run directories when practical.
+The implementation must validate all eight existing run directories before changing the evidence type vocabulary or completion gate.
 
 ## Acceptance Criteria
 
@@ -177,6 +181,7 @@ The implementation plan should expand historical-run validation to all run direc
 - `validate` rejects unknown evidence types.
 - Historical runs continue to validate without editing their evidence records.
 - Tests prove intermediate transitions are not blocked by the completion gate.
+- A `harness/templates/risk-acceptance.md` template exists before `risk-acceptance` evidence is required in implementation.
 - Documentation states that evidence type additions require code, tests, and purpose documentation.
 
 ## Phase 4 Compatibility Notes

@@ -137,6 +137,12 @@ agent-result
 aggregation
 ```
 
+The type split is:
+
+- `agent-job` indexes `jobs/<job-id>/job.json`, the process record.
+- `agent-result` indexes `jobs/<job-id>/output.json`, the agent result payload, when that payload is not also stored as a canonical review artifact.
+- `aggregation` indexes a fan-in aggregation artifact under `jobs/`.
+
 Example indexed job evidence:
 
 ```json
@@ -147,12 +153,22 @@ Example indexed job evidence:
 }
 ```
 
+Example indexed agent result evidence:
+
+```json
+{
+  "type": "agent-result",
+  "path": "harness/runs/<run-id>/jobs/<job-id>/output.json",
+  "description": "Structured async agent result consumed by Codex."
+}
+```
+
 Example aggregation evidence:
 
 ```json
 {
   "type": "aggregation",
-  "path": "harness/runs/<run-id>/reviews/agent-aggregation.json",
+  "path": "harness/runs/<run-id>/jobs/aggregation.json",
   "description": "Codex aggregation of async agent job results."
 }
 ```
@@ -161,6 +177,8 @@ Existing `reviews/claude-review*.json` artifacts remain valid and are not migrat
 
 - a job record under `jobs/<job-id>/` for process tracking
 - a review artifact under `reviews/` for review result semantics
+
+For async Claude review, `job.provenance` is the process/runtime audit source, while `reviewer_provenance` in the review output remains the reviewer identity and model source of truth. Codex should index `job.json` as `agent-job`; if the output is promoted to `reviews/`, Codex should index the review artifact with the existing `review-*` evidence types instead of duplicating the same payload as `agent-result`.
 
 ## Fan-out / Fan-in
 
