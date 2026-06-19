@@ -1,0 +1,64 @@
+{
+  "run_id": "2026-06-19-v0.2-plan-amendment",
+  "harness_version": "0.1.0",
+  "state_schema_version": "0.1.0",
+  "status": "completed",
+  "track": "Standard",
+  "current_workflow": "standard-doc-system-change",
+  "owner": "codex",
+  "base_commit": "de9e7e5",
+  "created_at": "2026-06-19T07:54:57Z",
+  "updated_at": "2026-06-19T07:57:53Z",
+  "external_agents": [
+    {
+      "name": "claude-code",
+      "role": "reviewer",
+      "adapter": "claude-review",
+      "adapter_version": "0.1.0",
+      "tool": "claude_review",
+      "model": null,
+      "model_version": null,
+      "cli_version": null,
+      "prompt_version": "0.1.0",
+      "state_access": "none",
+      "status": "not_requested"
+    }
+  ],
+  "evidence": [
+    {
+      "type": "task",
+      "path": "harness/runs/2026-06-19-v0.2-plan-amendment/task.md",
+      "description": "Plan amendment task."
+    },
+    {
+      "type": "triage",
+      "path": "harness/runs/2026-06-19-v0.2-plan-amendment/triage.md",
+      "description": "Standard documentation-system triage."
+    },
+    {
+      "type": "plan",
+      "path": "harness/runs/2026-06-19-v0.2-plan-amendment/plan.md",
+      "description": "Plan amendment execution steps."
+    },
+    {
+      "type": "review",
+      "path": "harness/runs/2026-06-19-v0.2-plan-amendment/review.md",
+      "description": "Sanity-check feedback disposition."
+    },
+    {
+      "type": "implementation-plan",
+      "path": "docs/superpowers/plans/2026-06-19-v0.2-reviewer-provenance-implementation.md",
+      "description": "Amended v0.2 implementation plan."
+    },
+    {
+      "type": "verification",
+      "path": "harness/runs/2026-06-19-v0.2-plan-amendment/verification.md",
+      "description": "Verification commands and results."
+    },
+    {
+      "type": "handoff",
+      "path": "harness/runs/2026-06-19-v0.2-plan-amendment/handoff.md",
+      "description": "Amendment handoff."
+    }
+  ]
+}
