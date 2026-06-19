@@ -20,6 +20,7 @@ ADAPTER_LOCKFILE = ROOT / "mcp" / "claude-review" / "requirements.lock.txt"
 ADAPTER_OUTPUT_SCHEMA = (
     ROOT / "mcp" / "claude-review" / "schema" / "claude-review-output.schema.json"
 )
+RISK_ACCEPTANCE_TEMPLATE = ROOT / "harness" / "templates" / "risk-acceptance.md"
 V011_REVIEW_FIXTURE = (
     ROOT / "tests" / "fixtures" / "claude-review" / "v0.1.1-envelope.json"
 )
@@ -102,6 +103,22 @@ def logical_requirements(path: Path) -> list[str]:
 
 
 class StaticContractsTest(unittest.TestCase):
+    def test_risk_acceptance_template_exists_with_required_sections(self):
+        text = read_text(RISK_ACCEPTANCE_TEMPLATE)
+
+        for heading in [
+            "# Risk Acceptance",
+            "## Decision",
+            "## Accepted Risk",
+            "## Reason",
+            "## Scope",
+            "## Evidence",
+            "## Decided By",
+            "## Decided At",
+            "## Residual Risks",
+        ]:
+            self.assertIn(heading, text)
+
     def test_claude_review_output_schema_accepts_v0_1_1_fixture_without_provenance(self):
         fixture = json.loads(read_text(V011_REVIEW_FIXTURE))
 
