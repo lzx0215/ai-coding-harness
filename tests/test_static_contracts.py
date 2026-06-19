@@ -172,6 +172,56 @@ class StaticContractsTest(unittest.TestCase):
 
         self.assertTrue(errors)
 
+    def test_claude_review_output_schema_rejects_nonempty_models_with_null_primary_model(self):
+        payload = json.loads(read_text(V011_REVIEW_FIXTURE))
+        payload["harness_version"] = "0.2.0"
+        payload["reviewer_provenance"] = {
+            "schema_version": "0.2.0",
+            "reviewer": "claude-code",
+            "cli": {"name": "Claude Code", "raw_version": None, "version": None},
+            "models": [
+                {
+                    "name": "glm-5.2[1m]",
+                    "version": None,
+                    "source": "modelUsage",
+                    "usage": {
+                        "input_tokens": None,
+                        "output_tokens": None,
+                    },
+                }
+            ],
+            "primary_model": None,
+            "unknowns": ["model_version", "token_usage"],
+        }
+
+        errors = output_schema_errors(payload)
+
+        self.assertTrue(errors)
+
+    def test_claude_review_output_schema_accepts_nonempty_models_with_present_primary_model(self):
+        payload = json.loads(read_text(V011_REVIEW_FIXTURE))
+        payload["harness_version"] = "0.2.0"
+        payload["reviewer_provenance"] = {
+            "schema_version": "0.2.0",
+            "reviewer": "claude-code",
+            "cli": {"name": "Claude Code", "raw_version": None, "version": None},
+            "models": [
+                {
+                    "name": "glm-5.2[1m]",
+                    "version": None,
+                    "source": "modelUsage",
+                    "usage": {
+                        "input_tokens": None,
+                        "output_tokens": None,
+                    },
+                }
+            ],
+            "primary_model": "glm-5.2[1m]",
+            "unknowns": ["model_version", "token_usage"],
+        }
+
+        self.assertEqual(output_schema_errors(payload), [])
+
     def test_claude_review_output_schema_allows_nullable_identity_metadata(self):
         schema = json.loads(read_text(ADAPTER_OUTPUT_SCHEMA))
         for field in [

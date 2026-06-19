@@ -130,6 +130,19 @@
               }
             }
           }
+        },
+        {
+          "if": {
+            "properties": {
+              "models": { "minItems": 1 }
+            },
+            "required": ["models"]
+          },
+          "then": {
+            "properties": {
+              "primary_model": { "type": "string", "minLength": 1 }
+            }
+          }
         }
       ],
       "additionalProperties": false
