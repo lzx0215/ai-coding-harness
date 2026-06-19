@@ -44,6 +44,34 @@ def write_state(run_dir: Path, state: dict) -> None:
     )
 
 
+def evidence_entry(run_dir: Path, evidence_type: str) -> dict:
+    path = run_dir / f"{evidence_type}.md"
+    path.write_text(f"# {evidence_type}\n", encoding="utf-8")
+    return {
+        "type": evidence_type,
+        "path": str(path.relative_to(ROOT)),
+        "description": f"{evidence_type} evidence.",
+    }
+
+
+def state_for_workflow(
+    *,
+    status: str,
+    track: str,
+    workflow: str,
+    evidence_types: list[str],
+    run_dir: Path,
+) -> dict:
+    state = minimal_state(status=status)
+    state["track"] = track
+    state["current_workflow"] = workflow
+    state["evidence"] = [
+        evidence_entry(run_dir, evidence_type)
+        for evidence_type in evidence_types
+    ]
+    return state
+
+
 def historical_run_dirs() -> list[Path]:
     return sorted(
         path for path in (ROOT / "harness" / "runs").iterdir()
@@ -311,6 +339,149 @@ class HarnessCliTest(unittest.TestCase):
 
             with self.assertRaises(cli.HarnessCliError):
                 cli.advance_run(run_dir, "triaged", actor="claude-code", root=ROOT)
+
+    def test_advance_allows_fast_completion_without_review_evidence(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            state = state_for_workflow(
+                status="reviewed",
+                track="Fast",
+                workflow="fast-doc-change",
+                evidence_types=["verification", "handoff"],
+                run_dir=run_dir,
+            )
+            write_state(run_dir, state)
+
+            advanced = cli.advance_run(run_dir, "completed", actor="codex", root=ROOT)
+
+        self.assertEqual(advanced["status"], "completed")
+
+    def test_advance_allows_standard_completion_with_review_handling(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            state = state_for_workflow(
+                status="reviewed",
+                track="Standard",
+                workflow="standard-doc-system-change",
+                evidence_types=["verification", "handoff", "review"],
+                run_dir=run_dir,
+            )
+            write_state(run_dir, state)
+
+            advanced = cli.advance_run(run_dir, "completed", actor="codex", root=ROOT)
+
+        self.assertEqual(advanced["status"], "completed")
+
+    def test_advance_rejects_standard_completion_without_verification(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            state = state_for_workflow(
+                status="reviewed",
+                track="Standard",
+                workflow="standard-doc-system-change",
+                evidence_types=["handoff", "review"],
+                run_dir=run_dir,
+            )
+            write_state(run_dir, state)
+
+            with self.assertRaises(cli.HarnessCliError) as raised:
+                cli.advance_run(run_dir, "completed", actor="codex", root=ROOT)
+
+        self.assertIn("missing completion evidence type: verification", str(raised.exception))
+
+    def test_advance_rejects_standard_completion_without_handoff(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            state = state_for_workflow(
+                status="reviewed",
+                track="Standard",
+                workflow="standard-doc-system-change",
+                evidence_types=["verification", "review"],
+                run_dir=run_dir,
+            )
+            write_state(run_dir, state)
+
+            with self.assertRaises(cli.HarnessCliError) as raised:
+                cli.advance_run(run_dir, "completed", actor="codex", root=ROOT)
+
+        self.assertIn("missing completion evidence type: handoff", str(raised.exception))
+
+    def test_advance_rejects_standard_completion_without_review_handling(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            state = state_for_workflow(
+                status="reviewed",
+                track="Standard",
+                workflow="standard-doc-system-change",
+                evidence_types=["verification", "handoff"],
+                run_dir=run_dir,
+            )
+            write_state(run_dir, state)
+
+            with self.assertRaises(cli.HarnessCliError) as raised:
+                cli.advance_run(run_dir, "completed", actor="codex", root=ROOT)
+
+        self.assertIn(
+            "missing completion evidence type: one of review, review-evidence, review-waiver",
+            str(raised.exception),
+        )
+
+    def test_advance_allows_risk_accepted_completion_with_risk_acceptance(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            state = state_for_workflow(
+                status="external_review_unavailable",
+                track="Standard",
+                workflow="standard-doc-system-change",
+                evidence_types=["verification", "handoff", "review", "risk-acceptance"],
+                run_dir=run_dir,
+            )
+            write_state(run_dir, state)
+
+            risk_state = cli.advance_run(
+                run_dir,
+                "risk_accepted",
+                actor="codex",
+                root=ROOT,
+            )
+            completed = cli.advance_run(
+                run_dir,
+                "completed",
+                actor="codex",
+                root=ROOT,
+            )
+
+        self.assertEqual(risk_state["status"], "risk_accepted")
+        self.assertEqual(completed["status"], "completed")
+
+    def test_advance_rejects_risk_accepted_completion_without_risk_acceptance(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            state = state_for_workflow(
+                status="risk_accepted",
+                track="Standard",
+                workflow="standard-doc-system-change",
+                evidence_types=["verification", "handoff", "review"],
+                run_dir=run_dir,
+            )
+            write_state(run_dir, state)
+
+            with self.assertRaises(cli.HarnessCliError) as raised:
+                cli.advance_run(run_dir, "completed", actor="codex", root=ROOT)
+
+        self.assertIn("missing completion evidence type: risk-acceptance", str(raised.exception))
+
+    def test_advance_does_not_require_completion_evidence_for_intermediate_transition(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            state = minimal_state(status="planned")
+            state["track"] = "Standard"
+            state["current_workflow"] = "standard-doc-system-change"
+            write_state(run_dir, state)
+
+            advanced = cli.advance_run(run_dir, "in_progress", actor="codex", root=ROOT)
+
+        self.assertEqual(advanced["status"], "in_progress")
 
     def test_module_entrypoint_validates_run_from_command_line(self):
         run_dir = ROOT / "harness" / "runs" / "example-fast-doc-change"

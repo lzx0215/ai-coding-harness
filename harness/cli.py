@@ -36,6 +36,10 @@ EVIDENCE_TYPES = frozenset(
         "handoff",
     }
 )
+REVIEW_COMPLETION_EVIDENCE_TYPES = frozenset(
+    {"review", "review-evidence", "review-waiver"},
+)
+COMPLETION_REQUIRED_EVIDENCE_TYPES = frozenset({"verification", "handoff"})
 
 NORMAL_TRANSITIONS = {
     "draft": {"triaged"},
@@ -204,6 +208,36 @@ def can_transition(current_status: str, next_status: str) -> bool:
     return next_status in ALLOWED_TRANSITIONS.get(current_status, set())
 
 
+def validate_completion_evidence(
+    state: dict[str, Any],
+    next_status: str,
+) -> list[str]:
+    if next_status != "completed":
+        return []
+
+    errors: list[str] = []
+    evidence_types = {
+        evidence.get("type")
+        for evidence in state.get("evidence", [])
+        if isinstance(evidence.get("type"), str)
+    }
+
+    for required_type in sorted(COMPLETION_REQUIRED_EVIDENCE_TYPES):
+        if required_type not in evidence_types:
+            errors.append(f"missing completion evidence type: {required_type}")
+
+    if state.get("track") in {"Standard", "Strict"}:
+        if not evidence_types.intersection(REVIEW_COMPLETION_EVIDENCE_TYPES):
+            options = ", ".join(sorted(REVIEW_COMPLETION_EVIDENCE_TYPES))
+            errors.append(f"missing completion evidence type: one of {options}")
+
+    if state.get("status") == "risk_accepted":
+        if "risk-acceptance" not in evidence_types:
+            errors.append("missing completion evidence type: risk-acceptance")
+
+    return errors
+
+
 def advance_run(
     run_dir: Path | str,
     next_status: str,
@@ -230,6 +264,10 @@ def advance_run(
         raise HarnessCliError(
             f"invalid transition: {current_status} -> {next_status}",
         )
+
+    completion_errors = validate_completion_evidence(state, next_status)
+    if completion_errors:
+        raise HarnessCliError(format_errors(completion_errors))
 
     candidate = dict(state)
     candidate["status"] = next_status
