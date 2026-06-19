@@ -326,6 +326,46 @@ class ClaudeReviewAdapterTest(unittest.TestCase):
             adapter._metadata_value({}, {}, "reviewer_model", "model")
         )
 
+    def test_parse_cli_version_handles_plain_prefixed_and_prerelease_strings(self):
+        # None / empty / blank.
+        self.assertIsNone(adapter.parse_cli_version(None))
+        self.assertIsNone(adapter.parse_cli_version(""))
+        self.assertIsNone(adapter.parse_cli_version("   "))
+
+        # Plain dotted numeric (regression-safe: current real evidence).
+        self.assertEqual(adapter.parse_cli_version("2.1.168"), "2.1.168")
+
+        # Dotted numeric with parenthetical suffix (real observed form).
+        self.assertEqual(
+            adapter.parse_cli_version("2.1.168 (Claude Code)"),
+            "2.1.168",
+        )
+
+        # v prefix, with or without surrounding prose.
+        self.assertEqual(adapter.parse_cli_version("v2.1.168"), "2.1.168")
+        self.assertEqual(
+            adapter.parse_cli_version("Claude v2.1.168"),
+            "2.1.168",
+        )
+
+        # Pre-release / build tags are preserved.
+        self.assertEqual(adapter.parse_cli_version("2.1.168-rc1"), "2.1.168-rc1")
+        self.assertEqual(
+            adapter.parse_cli_version("v2.1.168-beta.2"),
+            "2.1.168-beta.2",
+        )
+        self.assertEqual(
+            adapter.parse_cli_version("v2.1.168+build.4"),
+            "2.1.168+build.4",
+        )
+
+        # Bare numeric core with a lone component is not a version.
+        self.assertIsNone(adapter.parse_cli_version("42"))
+
+        # Garbage / sentinel strings without a dotted numeric core.
+        self.assertIsNone(adapter.parse_cli_version("unknown"))
+        self.assertIsNone(adapter.parse_cli_version("Claude Code"))
+
     def test_build_reviewer_provenance_marks_all_identity_unknowns_when_no_model_signal(self):
         with tempfile.TemporaryDirectory() as raw:
             payload = self.make_payload(Path(raw))

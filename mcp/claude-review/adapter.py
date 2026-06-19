@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 import time
@@ -477,14 +478,22 @@ def detect_claude_cli_version(claude_executable: str) -> str | None:
     return None
 
 
+_CLI_VERSION_PATTERN = re.compile(
+    r"v?(?P<core>\d+(?:\.\d+)+)(?P<suffix>[-+][0-9A-Za-z.\-]+)?"
+)
+
+
 def parse_cli_version(raw_version: str | None) -> str | None:
     text = _optional_string(raw_version)
     if text is None:
         return None
-    first = text.split()[0].strip()
-    if first and all(part.isdigit() for part in first.split(".")):
-        return first
-    return None
+    match = _CLI_VERSION_PATTERN.search(text)
+    if match is None:
+        return None
+    version = match.group("core")
+    if match.group("suffix"):
+        version += match.group("suffix")
+    return version
 
 
 def complete_usage_total(raw_usage: Any) -> int | None:
