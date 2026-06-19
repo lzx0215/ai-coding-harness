@@ -283,6 +283,72 @@ class ClaudeReviewAdapterTest(unittest.TestCase):
 
         self.assertEqual(primary, "alpha")
 
+    def test_select_primary_model_returns_none_for_empty_or_non_dict_usage(self):
+        self.assertIsNone(adapter.select_primary_model({}))
+        self.assertIsNone(adapter.select_primary_model(None))
+        self.assertIsNone(adapter.select_primary_model({None: {"inputTokens": 1}}))
+
+    def test_select_primary_model_returns_single_model_with_complete_usage(self):
+        model_usage = {"only-model": {"inputTokens": 3, "outputTokens": 4}}
+
+        self.assertEqual(adapter.select_primary_model(model_usage), "only-model")
+
+    def test_select_primary_model_breaks_usage_tie_by_lexicographic_name(self):
+        model_usage = {
+            "zeta": {"inputTokens": 5, "outputTokens": 5},
+            "alpha": {"inputTokens": 5, "outputTokens": 5},
+        }
+
+        # Both have total 10; lexicographically smallest name wins.
+        self.assertEqual(adapter.select_primary_model(model_usage), "alpha")
+
+    def test_metadata_value_prefers_content_over_parsed_source(self):
+        parsed = {"reviewer_model": "from-parsed"}
+        content = {"reviewer_model": "from-content"}
+
+        # Source iteration order is (content, parsed); content shadows parsed.
+        self.assertEqual(
+            adapter._metadata_value(parsed, content, "reviewer_model"),
+            "from-content",
+        )
+
+    def test_metadata_value_skips_whitespace_only_and_falls_through(self):
+        parsed = {"reviewer_model": "   "}
+        content = {"model": "fallback"}
+
+        self.assertEqual(
+            adapter._metadata_value(parsed, content, "reviewer_model", "model"),
+            "fallback",
+        )
+
+    def test_metadata_value_returns_none_when_no_key_matches(self):
+        self.assertIsNone(
+            adapter._metadata_value({}, {}, "reviewer_model", "model")
+        )
+
+    def test_build_reviewer_provenance_marks_all_identity_unknowns_when_no_model_signal(self):
+        with tempfile.TemporaryDirectory() as raw:
+            payload = self.make_payload(Path(raw))
+            fake = {
+                # No modelUsage, no reviewer_model/model metadata.
+                "structured_output": {
+                    "summary": "No issues found.",
+                    "findings": [],
+                    "tested": ["Reviewed adapter tests."],
+                    "not_tested": ["Real Claude execution."],
+                    "residual_risks": ["None identified."],
+                },
+            }
+
+            result = adapter.normalize_claude_json(fake, payload)
+
+        provenance = result["reviewer_provenance"]
+        self.assertEqual(provenance["models"], [])
+        self.assertIsNone(provenance["primary_model"])
+        self.assertIn("model_name", provenance["unknowns"])
+        self.assertIn("primary_model", provenance["unknowns"])
+        self.assertIn("token_usage", provenance["unknowns"])
+
     def test_normalize_records_structured_provenance_for_model_usage(self):
         with tempfile.TemporaryDirectory() as raw:
             payload = self.make_payload(Path(raw))
