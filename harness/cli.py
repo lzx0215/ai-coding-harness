@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -78,8 +80,12 @@ def validate_run(run_dir: Path | str, *, root: Path = ROOT) -> ValidationResult:
 
     try:
         state = load_json(state_file)
+    except UnicodeDecodeError as exc:
+        return ValidationResult(resolved_run_dir, [f"invalid state encoding: {exc}"])
     except json.JSONDecodeError as exc:
         return ValidationResult(resolved_run_dir, [f"invalid state JSON: {exc}"])
+    except OSError as exc:
+        return ValidationResult(resolved_run_dir, [f"cannot read state file: {exc}"])
 
     errors.extend(validate_state(state, root=root, run_dir=resolved_run_dir))
 
@@ -110,20 +116,53 @@ def validate_evidence_paths(
     run_dir: Path,
 ) -> list[str]:
     errors: list[str] = []
+    resolved_root = root.resolve()
+    resolved_run_dir = run_dir.resolve()
     for index, evidence in enumerate(state.get("evidence", [])):
         raw_path = evidence.get("path")
         if not isinstance(raw_path, str) or not raw_path.strip():
             continue
 
-        evidence_path = Path(raw_path)
-        candidates = [evidence_path]
-        if not evidence_path.is_absolute():
-            candidates = [root / evidence_path, run_dir / evidence_path]
+        candidates = evidence_path_candidates(
+            raw_path,
+            root=resolved_root,
+            run_dir=resolved_run_dir,
+        )
+
+        if any(not is_within_path(candidate, resolved_root) for candidate in candidates):
+            errors.append(
+                f"evidence path is outside repository at evidence[{index}]: {raw_path}",
+            )
+            continue
 
         if not any(candidate.exists() for candidate in candidates):
             errors.append(f"evidence path does not exist at evidence[{index}]: {raw_path}")
 
     return errors
+
+
+def evidence_path_candidates(raw_path: str, *, root: Path, run_dir: Path) -> list[Path]:
+    evidence_path = Path(raw_path)
+    candidates = [evidence_path]
+    if not evidence_path.is_absolute():
+        candidates = [root / evidence_path, run_dir / evidence_path]
+
+    resolved: list[Path] = []
+    seen: set[Path] = set()
+    for candidate in candidates:
+        resolved_candidate = candidate.resolve(strict=False)
+        if resolved_candidate not in seen:
+            resolved.append(resolved_candidate)
+            seen.add(resolved_candidate)
+    return resolved
+
+
+def is_within_path(path: Path, parent: Path) -> bool:
+    try:
+        path.relative_to(parent)
+    except ValueError:
+        return False
+    return True
 
 
 def can_transition(current_status: str, next_status: str) -> bool:
@@ -146,7 +185,11 @@ def advance_run(
         raise HarnessCliError(format_errors(before.errors))
 
     path = state_path(resolved_run_dir)
-    state = load_json(path)
+    try:
+        state = load_json(path)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise HarnessCliError(f"cannot read state file: {exc}") from exc
+
     current_status = state["status"]
     if not can_transition(current_status, next_status):
         raise HarnessCliError(
@@ -160,9 +203,39 @@ def advance_run(
     if candidate_errors:
         raise HarnessCliError(format_errors(candidate_errors))
 
-    path.write_text(json.dumps(candidate, indent=2) + "\n", encoding="utf-8")
+    write_json_atomic(path, candidate)
 
     return candidate
+
+
+def write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
+    temp_path: Path | None = None
+    replaced = False
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w",
+            dir=path.parent,
+            encoding="utf-8",
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as temp_file:
+            temp_path = Path(temp_file.name)
+            temp_file.write(json.dumps(payload, indent=2) + "\n")
+            temp_file.flush()
+            os.fsync(temp_file.fileno())
+
+        temp_path.replace(path)
+        replaced = True
+    except OSError as exc:
+        raise HarnessCliError(f"failed to write state atomically: {exc}") from exc
+    finally:
+        if temp_path is not None:
+            try:
+                if not replaced:
+                    temp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 def utc_now() -> str:

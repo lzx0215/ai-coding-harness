@@ -11,6 +11,8 @@ STATE_SCHEMA = ROOT / "harness" / "schemas" / "state.schema.json"
 LIFECYCLE = ROOT / "harness" / "core" / "lifecycle.md"
 STATE_AUTHORITY = ROOT / "harness" / "core" / "state-authority.md"
 ADAPTER_PATH = ROOT / "mcp" / "claude-review" / "adapter.py"
+ADAPTER_REQUIREMENTS = ROOT / "mcp" / "claude-review" / "requirements.txt"
+ADAPTER_LOCKFILE = ROOT / "mcp" / "claude-review" / "requirements.lock.txt"
 
 spec = importlib.util.spec_from_file_location("claude_review_adapter", ADAPTER_PATH)
 adapter = importlib.util.module_from_spec(spec)
@@ -56,6 +58,36 @@ def code_spans(text: str) -> list[str]:
 
 
 class StaticContractsTest(unittest.TestCase):
+    def test_claude_review_adapter_dependencies_are_locked(self):
+        direct_requirements = [
+            line.strip()
+            for line in read_text(ADAPTER_REQUIREMENTS).splitlines()
+            if line.strip() and not line.strip().startswith("#")
+        ]
+        locked_requirements = [
+            line.strip()
+            for line in read_text(ADAPTER_LOCKFILE).splitlines()
+            if line.strip() and not line.strip().startswith("#")
+        ]
+
+        self.assertTrue(locked_requirements)
+        for requirement in locked_requirements:
+            self.assertIn("==", requirement)
+            self.assertNotIn(">=", requirement)
+            self.assertNotIn("<=", requirement)
+
+        self.assertTrue(set(direct_requirements).issubset(set(locked_requirements)))
+        self.assertIn(
+            'pywin32==312; platform_system == "Windows"',
+            locked_requirements,
+        )
+        for requirement in [
+            "cryptography==49.0.0",
+            "cffi==2.0.0",
+            "pycparser==3.0",
+        ]:
+            self.assertIn(requirement, locked_requirements)
+
     def test_lifecycle_workflow_registry_matches_state_schema(self):
         schema = load_schema()
         lifecycle_rows = parse_markdown_table(read_text(LIFECYCLE), "Workflow ID")
