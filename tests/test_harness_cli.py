@@ -44,6 +44,13 @@ def write_state(run_dir: Path, state: dict) -> None:
     )
 
 
+def historical_run_dirs() -> list[Path]:
+    return sorted(
+        path for path in (ROOT / "harness" / "runs").iterdir()
+        if path.is_dir()
+    )
+
+
 class HarnessCliTest(unittest.TestCase):
     def test_validate_accepts_example_run(self):
         result = cli.validate_run(
@@ -52,6 +59,61 @@ class HarnessCliTest(unittest.TestCase):
         )
 
         self.assertEqual(result.errors, [])
+
+    def test_validate_accepts_all_existing_run_directories(self):
+        errors_by_run = {}
+        for run_dir in historical_run_dirs():
+            result = cli.validate_run(run_dir, root=ROOT)
+            if result.errors:
+                errors_by_run[str(run_dir.relative_to(ROOT))] = result.errors
+
+        self.assertEqual(errors_by_run, {})
+
+    def test_evidence_type_vocabulary_matches_phase_1_contract(self):
+        self.assertEqual(
+            cli.EVIDENCE_TYPES,
+            frozenset(
+                {
+                    "task",
+                    "triage",
+                    "plan",
+                    "design-spec",
+                    "implementation-plan",
+                    "diff",
+                    "changed-files",
+                    "diff-meta",
+                    "verification",
+                    "review-input",
+                    "review-output",
+                    "review-evidence",
+                    "review-raw-log",
+                    "review",
+                    "review-waiver",
+                    "risk-acceptance",
+                    "handoff",
+                }
+            ),
+        )
+
+    def test_validate_rejects_unknown_evidence_type(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            state = minimal_state(status="verified")
+            state["evidence"] = [
+                {
+                    "type": "invented-evidence",
+                    "path": "README.md",
+                    "description": "Uses an unsupported evidence type.",
+                }
+            ]
+            write_state(run_dir, state)
+
+            result = cli.validate_run(run_dir, root=ROOT)
+
+        self.assertTrue(
+            any("unknown evidence type" in error for error in result.errors),
+            result.errors,
+        )
 
     def test_validate_rejects_missing_evidence_path(self):
         with tempfile.TemporaryDirectory(dir=ROOT) as raw:

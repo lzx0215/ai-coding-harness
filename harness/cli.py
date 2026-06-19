@@ -15,6 +15,27 @@ from jsonschema import Draft202012Validator
 ROOT = Path(__file__).resolve().parents[1]
 STATE_SCHEMA = ROOT / "harness" / "schemas" / "state.schema.json"
 CODEX_ACTOR = "codex"
+EVIDENCE_TYPES = frozenset(
+    {
+        "task",
+        "triage",
+        "plan",
+        "design-spec",
+        "implementation-plan",
+        "diff",
+        "changed-files",
+        "diff-meta",
+        "verification",
+        "review-input",
+        "review-output",
+        "review-evidence",
+        "review-raw-log",
+        "review",
+        "review-waiver",
+        "risk-acceptance",
+        "handoff",
+    }
+)
 
 NORMAL_TRANSITIONS = {
     "draft": {"triaged"},
@@ -105,7 +126,21 @@ def validate_state(
         location = ".".join(str(part) for part in error.path) or "<root>"
         errors.append(f"schema error at {location}: {error.message}")
 
+    errors.extend(validate_evidence_types(state))
     errors.extend(validate_evidence_paths(state, root=root, run_dir=run_dir))
+    return errors
+
+
+def validate_evidence_types(state: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
+    for index, evidence in enumerate(state.get("evidence", [])):
+        evidence_type = evidence.get("type")
+        if not isinstance(evidence_type, str):
+            continue
+        if evidence_type not in EVIDENCE_TYPES:
+            errors.append(
+                f"unknown evidence type at evidence[{index}]: {evidence_type}",
+            )
     return errors
 
 
