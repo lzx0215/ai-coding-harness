@@ -4,8 +4,6 @@
 
 - `README.md` - Chinese project overview, quick start, and current scaffold status.
 - `AGENTS.md` - Codex entrypoint and read order.
-- `docs/project-overview.md` - Formal visual overview with Mermaid structure, lifecycle, review mapping, and mindmap source.
-- `docs/xmind/ai-coding-harness.xmind` - Editable XMind artifact generated from the project overview.
 
 ## Specs
 
@@ -26,7 +24,3 @@
 - `harness/schemas/` - JSON schemas for machine-checkable artifacts.
 - `harness/memory/` - Curated long-term memory.
 - `harness/runs/` - Per-task run records and evidence.
-
-## Maintenance Scripts
-
-- `scripts/gen_xmind.py` - Regenerates `docs/xmind/ai-coding-harness.xmind` from the documented mindmap structure.

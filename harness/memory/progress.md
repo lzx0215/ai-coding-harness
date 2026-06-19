@@ -2,7 +2,7 @@
 
 ## Current Phase
 
-v0.2.1 reviewer provenance hardening is merged into `master` and pushed to `origin/master`. The v0.2.1 release state is closed; `docs/project-overview.md` is retained as a formal visual overview and indexed with its XMind artifact.
+v0.2.1 reviewer provenance hardening is merged into `master` and pushed to `origin/master`. The v0.2.1 release state is closed.
 
 ## Next Step
 
