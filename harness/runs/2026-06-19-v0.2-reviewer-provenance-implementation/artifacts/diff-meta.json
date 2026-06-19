@@ -1,0 +1,15 @@
+{
+    "diff_schema_version":  "0.1.0",
+    "source":  "git-range",
+    "base_ref":  "master",
+    "head_ref":  "codex/v0.2-state-schema-compat",
+    "base_commit":  "1dcf556",
+    "head_commit":  "753e2b7",
+    "includes_uncommitted_changes":  false,
+    "includes_untracked_intent_to_add":  false,
+    "includes_run_evidence":  false,
+    "command":  "git diff --binary --output=\u003cdiff.patch\u003e master..HEAD --; git diff --name-only master..HEAD --",
+    "changed_files_file":  "harness/runs/2026-06-19-v0.2-reviewer-provenance-implementation/artifacts/changed-files.txt",
+    "generated_at":  "2026-06-19T09:00:31Z",
+    "encoding":  "utf-8-no-bom"
+}

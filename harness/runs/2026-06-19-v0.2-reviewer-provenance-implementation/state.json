@@ -1,0 +1,94 @@
+{
+  "run_id": "2026-06-19-v0.2-reviewer-provenance-implementation",
+  "harness_version": "0.2.0",
+  "state_schema_version": "0.2.0",
+  "status": "completed",
+  "track": "Standard",
+  "current_workflow": "standard-agent-adapter-change",
+  "owner": "codex",
+  "base_commit": "1dcf556",
+  "created_at": "2026-06-19T08:33:39Z",
+  "updated_at": "2026-06-19T09:06:42Z",
+  "external_agents": [
+    {
+      "name": "claude-code",
+      "role": "reviewer",
+      "adapter": "claude-review",
+      "adapter_version": "0.1.0",
+      "tool": "claude_review",
+      "model": "glm-5.2[1m]",
+      "model_version": null,
+      "cli_version": "2.1.168 (Claude Code)",
+      "prompt_version": "0.1.0",
+      "state_access": "none",
+      "status": "findings"
+    }
+  ],
+  "evidence": [
+    {
+      "type": "task",
+      "path": "harness/runs/2026-06-19-v0.2-reviewer-provenance-implementation/task.md",
+      "description": "Implementation evidence task."
+    },
+    {
+      "type": "triage",
+      "path": "harness/runs/2026-06-19-v0.2-reviewer-provenance-implementation/triage.md",
+      "description": "Standard adapter-change triage."
+    },
+    {
+      "type": "plan",
+      "path": "harness/runs/2026-06-19-v0.2-reviewer-provenance-implementation/plan.md",
+      "description": "Implementation evidence plan."
+    },
+    {
+      "type": "diff",
+      "path": "harness/runs/2026-06-19-v0.2-reviewer-provenance-implementation/artifacts/diff.patch",
+      "description": "Implementation diff from master merge-base to branch head."
+    },
+    {
+      "type": "changed-files",
+      "path": "harness/runs/2026-06-19-v0.2-reviewer-provenance-implementation/artifacts/changed-files.txt",
+      "description": "Files changed by the implementation diff."
+    },
+    {
+      "type": "diff-meta",
+      "path": "harness/runs/2026-06-19-v0.2-reviewer-provenance-implementation/artifacts/diff-meta.json",
+      "description": "Diff generation metadata and encoding notes."
+    },
+    {
+      "type": "verification",
+      "path": "harness/runs/2026-06-19-v0.2-reviewer-provenance-implementation/verification.md",
+      "description": "Final verification commands and results."
+    },
+    {
+      "type": "review-input",
+      "path": "harness/runs/2026-06-19-v0.2-reviewer-provenance-implementation/reviews/claude-review.input.json",
+      "description": "Input payload for real Claude review."
+    },
+    {
+      "type": "review-output",
+      "path": "harness/runs/2026-06-19-v0.2-reviewer-provenance-implementation/reviews/claude-review.json",
+      "description": "Final real Claude review envelope."
+    },
+    {
+      "type": "review-evidence",
+      "path": "harness/runs/2026-06-19-v0.2-reviewer-provenance-implementation/reviews/claude-review.evidence.json",
+      "description": "Final real Claude review evidence payload."
+    },
+    {
+      "type": "review-raw-log",
+      "path": "harness/runs/2026-06-19-v0.2-reviewer-provenance-implementation/reviews/claude-review.raw.log",
+      "description": "Raw log from final real Claude review."
+    },
+    {
+      "type": "review",
+      "path": "harness/runs/2026-06-19-v0.2-reviewer-provenance-implementation/review.md",
+      "description": "Review disposition and provenance inspection."
+    },
+    {
+      "type": "handoff",
+      "path": "harness/runs/2026-06-19-v0.2-reviewer-provenance-implementation/handoff.md",
+      "description": "Completion handoff and merge gate."
+    }
+  ]
+}

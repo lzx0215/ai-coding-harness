@@ -263,6 +263,197 @@ class ClaudeReviewAdapterTest(unittest.TestCase):
         self.assertEqual(result["reviewer_model"], "glm-5.2[1m]")
         self.assertIsNone(result["reviewer_model_version"])
 
+    def test_select_primary_model_excludes_incomplete_usage_when_complete_usage_exists(self):
+        model_usage = {
+            "alpha": {"inputTokens": 1, "outputTokens": 1},
+            "beta": {"inputTokens": 999},
+        }
+
+        primary = adapter.select_primary_model(model_usage)
+
+        self.assertEqual(primary, "alpha")
+
+    def test_select_primary_model_uses_sorted_key_when_no_complete_usage_exists(self):
+        model_usage = {
+            "zeta": {"inputTokens": 10},
+            "alpha": {"outputTokens": 5},
+        }
+
+        primary = adapter.select_primary_model(model_usage)
+
+        self.assertEqual(primary, "alpha")
+
+    def test_normalize_records_structured_provenance_for_model_usage(self):
+        with tempfile.TemporaryDirectory() as raw:
+            payload = self.make_payload(Path(raw))
+            fake = {
+                "modelUsage": {
+                    "small-model": {"inputTokens": 5, "outputTokens": 5},
+                    "large-model": {"inputTokens": 100, "outputTokens": 1},
+                },
+                "structured_output": {
+                    "summary": "No issues found.",
+                    "findings": [],
+                    "tested": ["Reviewed adapter tests."],
+                    "not_tested": ["Real Claude execution."],
+                    "residual_risks": ["None identified."],
+                },
+            }
+
+            result = adapter.normalize_claude_json(
+                fake,
+                payload,
+                reviewer_cli_version="2.1.168 (Claude Code)",
+            )
+
+        self.assertEqual(result["reviewer_model"], "large-model")
+        provenance = result["reviewer_provenance"]
+        self.assertEqual(provenance["schema_version"], "0.2.0")
+        self.assertEqual(provenance["primary_model"], "large-model")
+        self.assertEqual(
+            [model["name"] for model in provenance["models"]],
+            ["large-model", "small-model"],
+        )
+        self.assertIn("model_version", provenance["unknowns"])
+        self.assertIn("token_usage", provenance["unknowns"])
+        self.assertEqual(provenance["cli"]["raw_version"], "2.1.168 (Claude Code)")
+
+    def test_normalize_prefers_explicit_model_and_preserves_model_usage_models(self):
+        with tempfile.TemporaryDirectory() as raw:
+            payload = self.make_payload(Path(raw))
+            fake = {
+                "model": "claude-explicit",
+                "modelUsage": {
+                    "glm-5.2[1m]": {
+                        "inputTokens": 10,
+                        "outputTokens": 20,
+                    }
+                },
+                "structured_output": {
+                    "summary": "No issues found.",
+                    "findings": [],
+                    "tested": ["Reviewed adapter tests."],
+                    "not_tested": ["Real Claude execution."],
+                    "residual_risks": ["None identified."],
+                },
+            }
+
+            result = adapter.normalize_claude_json(fake, payload)
+
+        self.assertEqual(result["reviewer_model"], "claude-explicit")
+        provenance = result["reviewer_provenance"]
+        self.assertEqual(provenance["primary_model"], "claude-explicit")
+        self.assertEqual(
+            [model["name"] for model in provenance["models"]],
+            ["claude-explicit", "glm-5.2[1m]"],
+        )
+        self.assertEqual(provenance["models"][0]["source"], "metadata")
+        self.assertEqual(provenance["models"][1]["source"], "modelUsage")
+        self.assertIn("token_usage", provenance["unknowns"])
+
+    def test_normalize_uses_metadata_cli_version_in_reviewer_provenance(self):
+        with tempfile.TemporaryDirectory() as raw:
+            payload = self.make_payload(Path(raw))
+            fake = {
+                "cli_version": "2.1.168 (Claude Code)",
+                "structured_output": {
+                    "summary": "No issues found.",
+                    "findings": [],
+                    "tested": ["Reviewed adapter tests."],
+                    "not_tested": ["Real Claude execution."],
+                    "residual_risks": ["None identified."],
+                },
+            }
+
+            result = adapter.normalize_claude_json(fake, payload)
+
+        self.assertEqual(result["reviewer_cli_version"], "2.1.168 (Claude Code)")
+        provenance = result["reviewer_provenance"]
+        self.assertEqual(provenance["cli"]["raw_version"], "2.1.168 (Claude Code)")
+        self.assertEqual(provenance["cli"]["version"], "2.1.168")
+        self.assertNotIn("cli_version", provenance["unknowns"])
+
+    def test_normalize_preserves_raw_usage_when_explicit_model_overlaps_model_usage(self):
+        with tempfile.TemporaryDirectory() as raw:
+            payload = self.make_payload(Path(raw))
+            raw_usage = {
+                "inputTokens": 10,
+                "outputTokens": 20,
+                "cacheReadInputTokens": 5,
+            }
+            fake = {
+                "model": "glm-5.2[1m]",
+                "modelUsage": {
+                    "glm-5.2[1m]": raw_usage,
+                },
+                "structured_output": {
+                    "summary": "No issues found.",
+                    "findings": [],
+                    "tested": ["Reviewed adapter tests."],
+                    "not_tested": ["Real Claude execution."],
+                    "residual_risks": ["None identified."],
+                },
+            }
+
+            result = adapter.normalize_claude_json(fake, payload)
+
+        provenance = result["reviewer_provenance"]
+        self.assertEqual(
+            [model["name"] for model in provenance["models"]],
+            ["glm-5.2[1m]"],
+        )
+        self.assertEqual(provenance["models"][0]["source"], "metadata")
+        self.assertEqual(provenance["models"][0]["raw_usage"], raw_usage)
+
+    def test_normalize_records_model_name_unknown_when_no_model_is_proven(self):
+        with tempfile.TemporaryDirectory() as raw:
+            payload = self.make_payload(Path(raw))
+            fake = {
+                "structured_output": {
+                    "summary": "No issues found.",
+                    "findings": [],
+                    "tested": ["Reviewed adapter tests."],
+                    "not_tested": ["Real Claude execution."],
+                    "residual_risks": ["None identified."],
+                },
+            }
+
+            result = adapter.normalize_claude_json(fake, payload)
+
+        self.assertIsNone(result["reviewer_model"])
+        provenance = result["reviewer_provenance"]
+        self.assertEqual(provenance["models"], [])
+        self.assertIsNone(provenance["primary_model"])
+        self.assertIn("model_name", provenance["unknowns"])
+        self.assertIn("primary_model", provenance["unknowns"])
+
+    def test_build_review_evidence_preserves_reviewer_provenance(self):
+        with tempfile.TemporaryDirectory() as raw:
+            payload = self.make_payload(Path(raw))
+            fake = {
+                "modelUsage": {
+                    "glm-5.2[1m]": {
+                        "inputTokens": 10,
+                        "outputTokens": 20,
+                    }
+                },
+                "structured_output": {
+                    "summary": "No issues found.",
+                    "findings": [],
+                    "tested": ["Reviewed adapter tests."],
+                    "not_tested": ["Real Claude execution."],
+                    "residual_risks": ["None identified."],
+                },
+            }
+            envelope = adapter.normalize_claude_json(fake, payload)
+
+            evidence = adapter.build_review_evidence(envelope)
+
+        self.assertEqual(
+            evidence["reviewer_provenance"],
+            envelope["reviewer_provenance"],
+        )
+
     def test_normalize_prefers_explicit_model_metadata_over_model_usage(self):
         with tempfile.TemporaryDirectory() as raw:
             payload = self.make_payload(Path(raw))

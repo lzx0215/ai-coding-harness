@@ -1,6 +1,9 @@
 import json
 import unittest
+from copy import deepcopy
 from pathlib import Path
+
+from jsonschema import Draft202012Validator
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -9,6 +12,56 @@ ROOT = Path(__file__).resolve().parents[1]
 class StateSchemaTest(unittest.TestCase):
     def load_schema(self):
         return json.loads((ROOT / "harness/schemas/state.schema.json").read_text())
+
+    def minimal_valid_state(self):
+        return {
+            "run_id": "test-run",
+            "harness_version": "0.1.0",
+            "state_schema_version": "0.1.0",
+            "status": "draft",
+            "track": "Fast",
+            "current_workflow": "fast-doc-change",
+            "owner": "codex",
+            "base_commit": "HEAD",
+            "created_at": "2026-06-19T00:00:00Z",
+            "updated_at": "2026-06-19T00:00:00Z",
+            "external_agents": [
+                {
+                    "name": "claude-code",
+                    "role": "reviewer",
+                    "state_access": "none",
+                    "status": "not_requested",
+                }
+            ],
+            "evidence": [],
+        }
+
+    def validation_errors(self, state):
+        schema = self.load_schema()
+        return list(Draft202012Validator(schema).iter_errors(state))
+
+    def test_schema_accepts_v0_1_and_v0_2_versions(self):
+        base = self.minimal_valid_state()
+        for harness_version in ["0.1.0", "0.2.0"]:
+            for state_schema_version in ["0.1.0", "0.2.0"]:
+                with self.subTest(
+                    harness_version=harness_version,
+                    state_schema_version=state_schema_version,
+                ):
+                    state = deepcopy(base)
+                    state["harness_version"] = harness_version
+                    state["state_schema_version"] = state_schema_version
+
+                    self.assertEqual(self.validation_errors(state), [])
+
+    def test_schema_rejects_unknown_future_versions(self):
+        state = self.minimal_valid_state()
+        state["harness_version"] = "0.3.0"
+        state["state_schema_version"] = "0.3.0"
+
+        errors = self.validation_errors(state)
+
+        self.assertGreaterEqual(len(errors), 2)
 
     def test_schema_has_required_statuses(self):
         schema = self.load_schema()

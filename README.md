@@ -18,6 +18,7 @@
 - Codex 项目配置和自定义 agent：`.codex/`。
 - Claude review MCP adapter：`mcp/claude-review/`。
 - Python 单元测试覆盖 state schema 和 Claude review adapter 的关键安全路径。
+- Reviewer provenance v0.2 contract: optional structured provenance, scalar compatibility fields, and additive `0.1.0|0.2.0` state schema validation.
 
 ## 目录结构
 
@@ -81,4 +82,4 @@ python mcp/claude-review/server.py
 
 ## 当前状态
 
-v0.1 scaffold 已包含规则、schema、模板、Codex 配置、Claude review adapter 和单元测试。下一步可以围绕真实项目接入、实际 Claude CLI 集成验证、更多 Agent adapter 或 run 管理 CLI 继续演进。
+v0.2 adds reviewer provenance on top of the v0.1 scaffold. State schema compatibility is additive: existing `0.1.0` run records remain valid, and new v0.2 implementation runs may claim `0.2.0` after the schema migration lands.

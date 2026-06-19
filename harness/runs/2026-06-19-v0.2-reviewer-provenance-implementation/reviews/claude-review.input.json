@@ -1,0 +1,27 @@
+﻿{
+    "run_id":  "2026-06-19-v0.2-reviewer-provenance-implementation",
+    "harness_version":  "0.2.0",
+    "prompt_version":  "0.1.0",
+    "artifact_dir":  "C:\\ai\\ai-coding-harness\\harness\\runs\\2026-06-19-v0.2-reviewer-provenance-implementation\\reviews",
+    "task_file":  "C:\\ai\\ai-coding-harness\\harness\\runs\\2026-06-19-v0.2-reviewer-provenance-implementation\\task.md",
+    "plan_file":  "C:\\ai\\ai-coding-harness\\harness\\runs\\2026-06-19-v0.2-reviewer-provenance-implementation\\plan.md",
+    "diff_file":  "C:\\ai\\ai-coding-harness\\harness\\runs\\2026-06-19-v0.2-reviewer-provenance-implementation\\artifacts\\diff.patch",
+    "diff_meta_file":  "C:\\ai\\ai-coding-harness\\harness\\runs\\2026-06-19-v0.2-reviewer-provenance-implementation\\artifacts\\diff-meta.json",
+    "changed_files_file":  "C:\\ai\\ai-coding-harness\\harness\\runs\\2026-06-19-v0.2-reviewer-provenance-implementation\\artifacts\\changed-files.txt",
+    "verification_file":  "C:\\ai\\ai-coding-harness\\harness\\runs\\2026-06-19-v0.2-reviewer-provenance-implementation\\verification.md",
+    "review_scope":  [
+                         "correctness",
+                         "security",
+                         "regression",
+                         "test_gaps",
+                         "maintainability",
+                         "auditability"
+                     ],
+    "output_file":  "C:\\ai\\ai-coding-harness\\harness\\runs\\2026-06-19-v0.2-reviewer-provenance-implementation\\reviews\\claude-review.json",
+    "review_file":  "C:\\ai\\ai-coding-harness\\harness\\runs\\2026-06-19-v0.2-reviewer-provenance-implementation\\reviews\\claude-review.evidence.json",
+    "raw_log_file":  "C:\\ai\\ai-coding-harness\\harness\\runs\\2026-06-19-v0.2-reviewer-provenance-implementation\\reviews\\claude-review.raw.log",
+    "timeout_seconds":  900,
+    "max_input_chars":  120000,
+    "max_files":  30,
+    "max_diff_lines":  2000
+}

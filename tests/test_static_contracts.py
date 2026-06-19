@@ -7,6 +7,8 @@ import sys
 import unittest
 from pathlib import Path
 
+from jsonschema import Draft202012Validator
+
 
 ROOT = Path(__file__).resolve().parents[1]
 STATE_SCHEMA = ROOT / "harness" / "schemas" / "state.schema.json"
@@ -17,6 +19,9 @@ ADAPTER_REQUIREMENTS = ROOT / "mcp" / "claude-review" / "requirements.txt"
 ADAPTER_LOCKFILE = ROOT / "mcp" / "claude-review" / "requirements.lock.txt"
 ADAPTER_OUTPUT_SCHEMA = (
     ROOT / "mcp" / "claude-review" / "schema" / "claude-review-output.schema.json"
+)
+V011_REVIEW_FIXTURE = (
+    ROOT / "tests" / "fixtures" / "claude-review" / "v0.1.1-envelope.json"
 )
 
 spec = importlib.util.spec_from_file_location("claude_review_adapter", ADAPTER_PATH)
@@ -31,6 +36,14 @@ def read_text(path: Path) -> str:
 
 def load_schema() -> dict:
     return json.loads(STATE_SCHEMA.read_text(encoding="utf-8"))
+
+
+def load_output_schema() -> dict:
+    return json.loads(read_text(ADAPTER_OUTPUT_SCHEMA))
+
+
+def output_schema_errors(payload: dict) -> list:
+    return list(Draft202012Validator(load_output_schema()).iter_errors(payload))
 
 
 def parse_markdown_table(text: str, header_first_cell: str) -> list[list[str]]:
@@ -89,6 +102,76 @@ def logical_requirements(path: Path) -> list[str]:
 
 
 class StaticContractsTest(unittest.TestCase):
+    def test_claude_review_output_schema_accepts_v0_1_1_fixture_without_provenance(self):
+        fixture = json.loads(read_text(V011_REVIEW_FIXTURE))
+
+        self.assertEqual(output_schema_errors(fixture), [])
+
+    def test_claude_review_output_schema_accepts_v0_2_reviewer_provenance(self):
+        payload = json.loads(read_text(V011_REVIEW_FIXTURE))
+        payload["harness_version"] = "0.2.0"
+        payload["reviewer_provenance"] = {
+            "schema_version": "0.2.0",
+            "reviewer": "claude-code",
+            "cli": {
+                "name": "Claude Code",
+                "raw_version": "2.1.168 (Claude Code)",
+                "version": "2.1.168",
+            },
+            "models": [
+                {
+                    "name": "glm-5.2[1m]",
+                    "version": None,
+                    "source": "modelUsage",
+                    "usage": {
+                        "input_tokens": None,
+                        "output_tokens": None,
+                    },
+                    "raw_usage": {
+                        "inputTokens": 10,
+                        "outputTokens": 20,
+                    },
+                }
+            ],
+            "primary_model": "glm-5.2[1m]",
+            "unknowns": ["model_version", "token_usage"],
+        }
+
+        self.assertEqual(output_schema_errors(payload), [])
+
+    def test_claude_review_output_schema_rejects_unknowns_outside_vocabulary(self):
+        payload = json.loads(read_text(V011_REVIEW_FIXTURE))
+        payload["harness_version"] = "0.2.0"
+        payload["reviewer_provenance"] = {
+            "schema_version": "0.2.0",
+            "reviewer": "claude-code",
+            "cli": {"name": "Claude Code", "raw_version": None, "version": None},
+            "models": [],
+            "primary_model": None,
+            "unknowns": ["invented_unknown"],
+        }
+
+        errors = output_schema_errors(payload)
+
+        self.assertTrue(errors)
+
+    def test_claude_review_output_schema_rejects_empty_models_without_model_name_unknown(self):
+        payload = json.loads(read_text(V011_REVIEW_FIXTURE))
+        payload["reviewer_model"] = None
+        payload["harness_version"] = "0.2.0"
+        payload["reviewer_provenance"] = {
+            "schema_version": "0.2.0",
+            "reviewer": "claude-code",
+            "cli": {"name": "Claude Code", "raw_version": None, "version": None},
+            "models": [],
+            "primary_model": None,
+            "unknowns": ["primary_model", "token_usage"],
+        }
+
+        errors = output_schema_errors(payload)
+
+        self.assertTrue(errors)
+
     def test_claude_review_output_schema_allows_nullable_identity_metadata(self):
         schema = json.loads(read_text(ADAPTER_OUTPUT_SCHEMA))
         for field in [

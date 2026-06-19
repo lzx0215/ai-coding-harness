@@ -1,0 +1,896 @@
+diff --git a/README.md b/README.md
+index b086705..6778bfd 100644
+--- a/README.md
++++ b/README.md
+@@ -18,6 +18,7 @@
+ - Codex 项目配置和自定义 agent：`.codex/`。
+ - Claude review MCP adapter：`mcp/claude-review/`。
+ - Python 单元测试覆盖 state schema 和 Claude review adapter 的关键安全路径。
++- Reviewer provenance v0.2 contract: optional structured provenance, scalar compatibility fields, and additive `0.1.0|0.2.0` state schema validation.
+ 
+ ## 目录结构
+ 
+@@ -81,4 +82,4 @@ python mcp/claude-review/server.py
+ 
+ ## 当前状态
+ 
+-v0.1 scaffold 已包含规则、schema、模板、Codex 配置、Claude review adapter 和单元测试。下一步可以围绕真实项目接入、实际 Claude CLI 集成验证、更多 Agent adapter 或 run 管理 CLI 继续演进。
++v0.2 adds reviewer provenance on top of the v0.1 scaffold. State schema compatibility is additive: existing `0.1.0` run records remain valid, and new v0.2 implementation runs may claim `0.2.0` after the schema migration lands.
+diff --git a/harness/memory/progress.md b/harness/memory/progress.md
+index b0b3ec3..5acc336 100644
+--- a/harness/memory/progress.md
++++ b/harness/memory/progress.md
+@@ -2,8 +2,8 @@
+ 
+ ## Current Phase
+ 
+-v0.2 reviewer provenance design is approved and implementation planning is complete.
++v0.2 reviewer provenance implementation in progress.
+ 
+ ## Next Step
+ 
+-Execute `docs/superpowers/plans/2026-06-19-v0.2-reviewer-provenance-implementation.md`, starting with the state schema compatibility task before any v0.2 provenance output emission.
++Record implementation evidence and run external review for the v0.2 reviewer provenance implementation.
+diff --git a/harness/schemas/state.schema.json b/harness/schemas/state.schema.json
+index b2cf56f..52effdf 100644
+--- a/harness/schemas/state.schema.json
++++ b/harness/schemas/state.schema.json
+@@ -18,8 +18,8 @@
+   ],
+   "properties": {
+     "run_id": { "type": "string", "minLength": 1 },
+-    "harness_version": { "type": "string", "pattern": "^0\\.1\\.0$" },
+-    "state_schema_version": { "type": "string", "pattern": "^0\\.1\\.0$" },
++    "harness_version": { "type": "string", "pattern": "^(0\\.1\\.0|0\\.2\\.0)$" },
++    "state_schema_version": { "type": "string", "pattern": "^(0\\.1\\.0|0\\.2\\.0)$" },
+     "status": {
+       "type": "string",
+       "enum": [
+diff --git a/harness/templates/external-review-template.json b/harness/templates/external-review-template.json
+index 575025a..327d68b 100644
+--- a/harness/templates/external-review-template.json
++++ b/harness/templates/external-review-template.json
+@@ -8,6 +8,22 @@
+   "reviewer_model": null,
+   "reviewer_model_version": null,
+   "reviewer_cli_version": null,
++  "reviewer_provenance": {
++    "schema_version": "0.2.0",
++    "reviewer": "replace-with-reviewer",
++    "cli": {
++      "name": "replace-with-cli-name",
++      "raw_version": null,
++      "version": null
++    },
++    "models": [],
++    "primary_model": null,
++    "unknowns": [
++      "model_name",
++      "primary_model",
++      "token_usage"
++    ]
++  },
+   "summary": "replace with review summary before using as evidence",
+   "findings": [],
+   "tested": [],
+diff --git a/mcp/claude-review/README.md b/mcp/claude-review/README.md
+index 1f1c384..c9f1d86 100644
+--- a/mcp/claude-review/README.md
++++ b/mcp/claude-review/README.md
+@@ -14,7 +14,15 @@ The adapter writes an MCP envelope JSON to `output_file`. The envelope contains:
+ - Audit metadata: `harness_version`, `adapter_version`, `prompt_version`, `reviewer`, `reviewer_model`, `reviewer_model_version`, and `reviewer_cli_version`.
+ - Artifact paths: `output_file`, `raw_log_file`, and, for successful `passed` or `findings` results, `review_file`.
+ 
+-`reviewer_cli_version` is detected from `claude --version` when the CLI can be executed. `reviewer_model` is taken from explicit Claude output metadata or, for current real raw logs, from the first `modelUsage` key. `reviewer_model_version` is nullable because current real raw logs do not expose a distinct model-version field. If a value cannot be proven from CLI output, the adapter records `null` instead of an invented sentinel.
++`reviewer_cli_version` is detected from `claude --version` when the CLI can be executed. v0.2 also records optional `reviewer_provenance` with `schema_version: "0.2.0"`, CLI metadata, all observed model names, deterministic `primary_model`, and controlled `unknowns`.
++
++`adapter_version` remains the adapter wrapper compatibility version. `reviewer_provenance.schema_version` is the provenance contract version and is the field consumers should use to detect v0.2 provenance support.
++
++The compatibility fields remain present. `reviewer_model` mirrors `reviewer_provenance.primary_model` when provenance exists. For multi-model reviews, `primary_model` is selected from complete `modelUsage` entries by largest `inputTokens + outputTokens` total, with alphabetical tie-breaks. If no model has complete usage but model names are present, the first sorted model name is selected. If provenance exists but `primary_model` is `null`, consumers must distinguish that from old artifacts that have no `reviewer_provenance` field.
++
++This v0.2 slice does not normalize token counts into `usage.input_tokens` or `usage.output_tokens`. When normalized token counts are absent, `token_usage` appears in `reviewer_provenance.unknowns` for every v0.2 review output. This is expected and not an error condition.
++
++`raw_usage` preserves the original per-model usage object from Claude output for audit purposes. Treat it as opaque pass-through metadata; consumers must not depend on a stable key set or nested shape.
+ 
+ For v0.1, structured review evidence is included directly in the same envelope instead of a nested evidence object. Successful `passed` and `findings` results must include `summary`, `findings`, `tested`, `not_tested`, and `residual_risks`. A `passed` result may have an empty `findings` array. A `findings` result must include at least one finding with `severity`, `title`, `evidence`, and `recommendation`.
+ 
+diff --git a/mcp/claude-review/adapter.py b/mcp/claude-review/adapter.py
+index 7c91841..a3892f3 100644
+--- a/mcp/claude-review/adapter.py
++++ b/mcp/claude-review/adapter.py
+@@ -12,6 +12,14 @@ from typing import Any
+ ADAPTER_VERSION = "0.1.0"
+ DEFAULT_VERSION = "0.1.0"
+ REVIEWER = "claude-code"
++PROVENANCE_SCHEMA_VERSION = "0.2.0"
++UNKNOWN_VOCABULARY = {
++    "model_name",
++    "model_version",
++    "cli_version",
++    "primary_model",
++    "token_usage",
++}
+ 
+ SUCCESS_STATUSES = {"passed", "findings"}
+ TERMINAL_STATUSES = {
+@@ -232,6 +240,15 @@ def normalize_claude_json(
+     content = _extract_review_content(parsed)
+     review_data = _normalize_review_data(content)
+     status = "findings" if review_data["findings"] else "passed"
++    effective_cli_version = (
++        _optional_string(reviewer_cli_version)
++        or _metadata_value(parsed, content, "reviewer_cli_version", "cli_version")
++    )
++    provenance = build_reviewer_provenance(
++        parsed,
++        content,
++        reviewer_cli_version=effective_cli_version,
++    )
+     path_overrides = _path_overrides(
+         output_file=output_file,
+         review_file=review_file,
+@@ -244,18 +261,16 @@ def normalize_claude_json(
+         exit_code=exit_code,
+         resolved_paths=path_overrides,
+         review_data=review_data,
+-        reviewer_model=_reviewer_model(parsed, content),
++        reviewer_model=provenance["primary_model"],
+         reviewer_model_version=_metadata_value(
+             parsed,
+             content,
+             "reviewer_model_version",
+             "model_version",
+-        ),
+-        reviewer_cli_version=(
+-            _optional_string(reviewer_cli_version)
+-            or _metadata_value(parsed, content, "reviewer_cli_version", "cli_version")
+-        ),
++        ) or None,
++        reviewer_cli_version=effective_cli_version,
+     )
++    envelope["reviewer_provenance"] = provenance
+     _validate_success_envelope(envelope)
+     return envelope
+ 
+@@ -462,6 +477,172 @@ def detect_claude_cli_version(claude_executable: str) -> str | None:
+     return None
+ 
+ 
++def parse_cli_version(raw_version: str | None) -> str | None:
++    text = _optional_string(raw_version)
++    if text is None:
++        return None
++    first = text.split()[0].strip()
++    if first and all(part.isdigit() for part in first.split(".")):
++        return first
++    return None
++
++
++def complete_usage_total(raw_usage: Any) -> int | None:
++    if not isinstance(raw_usage, dict):
++        return None
++    input_tokens = raw_usage.get("inputTokens")
++    output_tokens = raw_usage.get("outputTokens")
++    if isinstance(input_tokens, bool) or isinstance(output_tokens, bool):
++        return None
++    if isinstance(input_tokens, int) and isinstance(output_tokens, int):
++        if input_tokens >= 0 and output_tokens >= 0:
++            return input_tokens + output_tokens
++    return None
++
++
++def select_primary_model(model_usage: Any) -> str | None:
++    if not isinstance(model_usage, dict):
++        return None
++
++    names = sorted(
++        name.strip()
++        for name in model_usage
++        if isinstance(name, str) and name.strip()
++    )
++    if not names:
++        return None
++
++    complete: list[tuple[int, str]] = []
++    for name in names:
++        total = complete_usage_total(model_usage.get(name))
++        if total is not None:
++            complete.append((total, name))
++
++    if complete:
++        largest_total = max(total for total, _name in complete)
++        return sorted(name for total, name in complete if total == largest_total)[0]
++
++    return names[0]
++
++
++def model_usage_names(model_usage: Any) -> list[str]:
++    if not isinstance(model_usage, dict):
++        return []
++    return sorted(
++        name.strip()
++        for name in model_usage
++        if isinstance(name, str) and name.strip()
++    )
++
++
++def model_usage_model_entries(
++    model_usage: Any,
++    *,
++    primary: str | None,
++) -> list[dict[str, Any]]:
++    if not isinstance(model_usage, dict):
++        return []
++
++    ordered_names = model_usage_names(model_usage)
++    if primary in ordered_names:
++        ordered_names.remove(primary)
++        ordered_names.insert(0, primary)
++
++    entries: list[dict[str, Any]] = []
++    for name in ordered_names:
++        entry: dict[str, Any] = {
++            "name": name,
++            "version": None,
++            "source": "modelUsage",
++            "usage": {
++                "input_tokens": None,
++                "output_tokens": None,
++            },
++        }
++        raw_usage = model_usage.get(name)
++        if isinstance(raw_usage, dict):
++            entry["raw_usage"] = raw_usage
++        entries.append(entry)
++    return entries
++
++
++def model_usage_raw_entry(model_usage: Any, name: str) -> dict[str, Any] | None:
++    if not isinstance(model_usage, dict):
++        return None
++    for raw_name, raw_usage in model_usage.items():
++        if isinstance(raw_name, str) and raw_name.strip() == name:
++            if isinstance(raw_usage, dict):
++                return raw_usage
++            return None
++    return None
++
++
++def metadata_model_entry(name: str) -> dict[str, Any]:
++    return {
++        "name": name,
++        "version": None,
++        "source": "metadata",
++        "usage": {
++            "input_tokens": None,
++            "output_tokens": None,
++        },
++    }
++
++
++def build_reviewer_provenance(
++    parsed: dict[str, Any],
++    content: dict[str, Any],
++    *,
++    reviewer_cli_version: str | None,
++) -> dict[str, Any]:
++    model_usage = parsed.get("modelUsage")
++    explicit_model = _metadata_value(parsed, content, "reviewer_model", "model")
++    unknowns: set[str] = {"token_usage"}
++    models: list[dict[str, Any]] = []
++
++    if explicit_model is not None:
++        primary = explicit_model
++        explicit_entry = metadata_model_entry(explicit_model)
++        raw_usage = model_usage_raw_entry(model_usage, explicit_model)
++        if raw_usage is not None:
++            explicit_entry["raw_usage"] = raw_usage
++        models.append(explicit_entry)
++        for entry in model_usage_model_entries(
++            model_usage,
++            primary=select_primary_model(model_usage),
++        ):
++            if entry["name"] != explicit_model:
++                models.append(entry)
++    elif isinstance(model_usage, dict):
++        primary = select_primary_model(model_usage)
++        models.extend(model_usage_model_entries(model_usage, primary=primary))
++    else:
++        primary = None
++
++    if models:
++        unknowns.add("model_version")
++    else:
++        unknowns.update({"model_name", "primary_model"})
++
++    if reviewer_cli_version is None:
++        unknowns.add("cli_version")
++    if not unknowns <= UNKNOWN_VOCABULARY:
++        raise ReviewSchemaError("reviewer provenance contains unsupported unknowns")
++
++    return {
++        "schema_version": PROVENANCE_SCHEMA_VERSION,
++        "reviewer": REVIEWER,
++        "cli": {
++            "name": "Claude Code",
++            "raw_version": _optional_string(reviewer_cli_version),
++            "version": parse_cli_version(reviewer_cli_version),
++        },
++        "models": models,
++        "primary_model": primary,
++        "unknowns": sorted(unknowns),
++    }
++
++
+ def build_review_prompt(payload: dict[str, Any]) -> str:
+     task_text = read_text(payload.get("task_file", ""))
+     plan_text = read_text(payload.get("plan_file", ""))
+@@ -571,19 +752,23 @@ def review_content_json_schema() -> str:
+ 
+ 
+ def build_review_evidence(envelope: dict[str, Any]) -> dict[str, Any]:
+-    return {
++    evidence = {
+         "run_id": envelope["run_id"],
+         "status": envelope["status"],
+         "reviewer": envelope["reviewer"],
+         "reviewer_model": envelope["reviewer_model"],
+         "reviewer_model_version": envelope["reviewer_model_version"],
+         "reviewer_cli_version": envelope["reviewer_cli_version"],
++        "reviewer_provenance": envelope.get("reviewer_provenance"),
+         "summary": envelope["summary"],
+         "findings": envelope["findings"],
+         "tested": envelope["tested"],
+         "not_tested": envelope["not_tested"],
+         "residual_risks": envelope["residual_risks"],
+     }
++    if evidence["reviewer_provenance"] is None:
++        evidence.pop("reviewer_provenance")
++    return evidence
+ 
+ 
+ def output_indicates_auth_missing(output: str) -> bool:
+diff --git a/mcp/claude-review/schema/claude-review-output.schema.json b/mcp/claude-review/schema/claude-review-output.schema.json
+index a7ce200..5fbd9fc 100644
+--- a/mcp/claude-review/schema/claude-review-output.schema.json
++++ b/mcp/claude-review/schema/claude-review-output.schema.json
+@@ -49,6 +49,91 @@
+     "reviewer_model": { "type": ["string", "null"], "minLength": 1 },
+     "reviewer_model_version": { "type": ["string", "null"], "minLength": 1 },
+     "reviewer_cli_version": { "type": ["string", "null"], "minLength": 1 },
++    "reviewer_provenance": {
++      "type": "object",
++      "required": [
++        "schema_version",
++        "reviewer",
++        "cli",
++        "models",
++        "primary_model",
++        "unknowns"
++      ],
++      "properties": {
++        "schema_version": { "type": "string", "const": "0.2.0" },
++        "reviewer": { "type": "string", "minLength": 1 },
++        "cli": {
++          "type": "object",
++          "required": ["name", "raw_version", "version"],
++          "properties": {
++            "name": { "type": "string", "minLength": 1 },
++            "raw_version": { "type": ["string", "null"], "minLength": 1 },
++            "version": { "type": ["string", "null"], "minLength": 1 }
++          },
++          "additionalProperties": false
++        },
++        "models": {
++          "type": "array",
++          "items": {
++            "type": "object",
++            "required": ["name", "version", "source", "usage"],
++            "properties": {
++              "name": { "type": "string", "minLength": 1 },
++              "version": { "type": ["string", "null"], "minLength": 1 },
++              "source": { "type": "string", "enum": ["modelUsage", "metadata"] },
++              "usage": {
++                "type": "object",
++                "required": ["input_tokens", "output_tokens"],
++                "properties": {
++                  "input_tokens": { "type": ["integer", "null"], "minimum": 0 },
++                  "output_tokens": { "type": ["integer", "null"], "minimum": 0 }
++                },
++                "additionalProperties": false
++              },
++              "raw_usage": { "type": "object" }
++            },
++            "additionalProperties": false
++          }
++        },
++        "primary_model": { "type": ["string", "null"], "minLength": 1 },
++        "unknowns": {
++          "type": "array",
++          "uniqueItems": true,
++          "items": {
++            "type": "string",
++            "enum": [
++              "model_name",
++              "model_version",
++              "cli_version",
++              "primary_model",
++              "token_usage"
++            ]
++          }
++        }
++      },
++      "allOf": [
++        {
++          "if": {
++            "properties": {
++              "models": { "maxItems": 0 }
++            },
++            "required": ["models"]
++          },
++          "then": {
++            "properties": {
++              "primary_model": { "const": null },
++              "unknowns": {
++                "allOf": [
++                  { "contains": { "const": "model_name" } },
++                  { "contains": { "const": "primary_model" } }
++                ]
++              }
++            }
++          }
++        }
++      ],
++      "additionalProperties": false
++    },
+     "output_file": { "type": "string", "minLength": 1 },
+     "review_file": { "type": "string", "minLength": 1 },
+     "raw_log_file": { "type": "string", "minLength": 1 },
+@@ -99,6 +184,24 @@
+     }
+   },
+   "allOf": [
++    {
++      "if": {
++        "properties": {
++          "reviewer_provenance": {
++            "properties": {
++              "models": { "maxItems": 0 }
++            },
++            "required": ["models"]
++          }
++        },
++        "required": ["reviewer_provenance"]
++      },
++      "then": {
++        "properties": {
++          "reviewer_model": { "const": null }
++        }
++      }
++    },
+     {
+       "if": {
+         "properties": {
+diff --git a/tests/fixtures/claude-review/v0.1.1-envelope.json b/tests/fixtures/claude-review/v0.1.1-envelope.json
+new file mode 100644
+index 0000000..f208cc7
+--- /dev/null
++++ b/tests/fixtures/claude-review/v0.1.1-envelope.json
+@@ -0,0 +1,28 @@
++{
++  "status": "passed",
++  "run_id": "fixture-v0.1.1",
++  "completed": true,
++  "harness_version": "0.1.0",
++  "adapter_version": "0.1.0",
++  "prompt_version": "0.1.0",
++  "reviewer": "claude-code",
++  "reviewer_model": "glm-5.2[1m]",
++  "reviewer_model_version": null,
++  "reviewer_cli_version": "2.1.168 (Claude Code)",
++  "output_file": "harness/runs/fixture/reviews/claude-review.json",
++  "review_file": "harness/runs/fixture/reviews/claude-review.evidence.json",
++  "raw_log_file": "harness/runs/fixture/reviews/claude-review.raw.log",
++  "exit_code": 0,
++  "duration_seconds": 1.25,
++  "summary": "No findings.",
++  "findings": [],
++  "tested": [
++    "Reviewed fixture diff."
++  ],
++  "not_tested": [
++    "Did not run external tests."
++  ],
++  "residual_risks": [
++    "Fixture only."
++  ]
++}
+diff --git a/tests/test_claude_review_adapter.py b/tests/test_claude_review_adapter.py
+index ea56f89..258639d 100644
+--- a/tests/test_claude_review_adapter.py
++++ b/tests/test_claude_review_adapter.py
+@@ -263,6 +263,197 @@ class ClaudeReviewAdapterTest(unittest.TestCase):
+         self.assertEqual(result["reviewer_model"], "glm-5.2[1m]")
+         self.assertIsNone(result["reviewer_model_version"])
+ 
++    def test_select_primary_model_excludes_incomplete_usage_when_complete_usage_exists(self):
++        model_usage = {
++            "alpha": {"inputTokens": 1, "outputTokens": 1},
++            "beta": {"inputTokens": 999},
++        }
++
++        primary = adapter.select_primary_model(model_usage)
++
++        self.assertEqual(primary, "alpha")
++
++    def test_select_primary_model_uses_sorted_key_when_no_complete_usage_exists(self):
++        model_usage = {
++            "zeta": {"inputTokens": 10},
++            "alpha": {"outputTokens": 5},
++        }
++
++        primary = adapter.select_primary_model(model_usage)
++
++        self.assertEqual(primary, "alpha")
++
++    def test_normalize_records_structured_provenance_for_model_usage(self):
++        with tempfile.TemporaryDirectory() as raw:
++            payload = self.make_payload(Path(raw))
++            fake = {
++                "modelUsage": {
++                    "small-model": {"inputTokens": 5, "outputTokens": 5},
++                    "large-model": {"inputTokens": 100, "outputTokens": 1},
++                },
++                "structured_output": {
++                    "summary": "No issues found.",
++                    "findings": [],
++                    "tested": ["Reviewed adapter tests."],
++                    "not_tested": ["Real Claude execution."],
++                    "residual_risks": ["None identified."],
++                },
++            }
++
++            result = adapter.normalize_claude_json(
++                fake,
++                payload,
++                reviewer_cli_version="2.1.168 (Claude Code)",
++            )
++
++        self.assertEqual(result["reviewer_model"], "large-model")
++        provenance = result["reviewer_provenance"]
++        self.assertEqual(provenance["schema_version"], "0.2.0")
++        self.assertEqual(provenance["primary_model"], "large-model")
++        self.assertEqual(
++            [model["name"] for model in provenance["models"]],
++            ["large-model", "small-model"],
++        )
++        self.assertIn("model_version", provenance["unknowns"])
++        self.assertIn("token_usage", provenance["unknowns"])
++        self.assertEqual(provenance["cli"]["raw_version"], "2.1.168 (Claude Code)")
++
++    def test_normalize_prefers_explicit_model_and_preserves_model_usage_models(self):
++        with tempfile.TemporaryDirectory() as raw:
++            payload = self.make_payload(Path(raw))
++            fake = {
++                "model": "claude-explicit",
++                "modelUsage": {
++                    "glm-5.2[1m]": {
++                        "inputTokens": 10,
++                        "outputTokens": 20,
++                    }
++                },
++                "structured_output": {
++                    "summary": "No issues found.",
++                    "findings": [],
++                    "tested": ["Reviewed adapter tests."],
++                    "not_tested": ["Real Claude execution."],
++                    "residual_risks": ["None identified."],
++                },
++            }
++
++            result = adapter.normalize_claude_json(fake, payload)
++
++        self.assertEqual(result["reviewer_model"], "claude-explicit")
++        provenance = result["reviewer_provenance"]
++        self.assertEqual(provenance["primary_model"], "claude-explicit")
++        self.assertEqual(
++            [model["name"] for model in provenance["models"]],
++            ["claude-explicit", "glm-5.2[1m]"],
++        )
++        self.assertEqual(provenance["models"][0]["source"], "metadata")
++        self.assertEqual(provenance["models"][1]["source"], "modelUsage")
++        self.assertIn("token_usage", provenance["unknowns"])
++
++    def test_normalize_uses_metadata_cli_version_in_reviewer_provenance(self):
++        with tempfile.TemporaryDirectory() as raw:
++            payload = self.make_payload(Path(raw))
++            fake = {
++                "cli_version": "2.1.168 (Claude Code)",
++                "structured_output": {
++                    "summary": "No issues found.",
++                    "findings": [],
++                    "tested": ["Reviewed adapter tests."],
++                    "not_tested": ["Real Claude execution."],
++                    "residual_risks": ["None identified."],
++                },
++            }
++
++            result = adapter.normalize_claude_json(fake, payload)
++
++        self.assertEqual(result["reviewer_cli_version"], "2.1.168 (Claude Code)")
++        provenance = result["reviewer_provenance"]
++        self.assertEqual(provenance["cli"]["raw_version"], "2.1.168 (Claude Code)")
++        self.assertEqual(provenance["cli"]["version"], "2.1.168")
++        self.assertNotIn("cli_version", provenance["unknowns"])
++
++    def test_normalize_preserves_raw_usage_when_explicit_model_overlaps_model_usage(self):
++        with tempfile.TemporaryDirectory() as raw:
++            payload = self.make_payload(Path(raw))
++            raw_usage = {
++                "inputTokens": 10,
++                "outputTokens": 20,
++                "cacheReadInputTokens": 5,
++            }
++            fake = {
++                "model": "glm-5.2[1m]",
++                "modelUsage": {
++                    "glm-5.2[1m]": raw_usage,
++                },
++                "structured_output": {
++                    "summary": "No issues found.",
++                    "findings": [],
++                    "tested": ["Reviewed adapter tests."],
++                    "not_tested": ["Real Claude execution."],
++                    "residual_risks": ["None identified."],
++                },
++            }
++
++            result = adapter.normalize_claude_json(fake, payload)
++
++        provenance = result["reviewer_provenance"]
++        self.assertEqual(
++            [model["name"] for model in provenance["models"]],
++            ["glm-5.2[1m]"],
++        )
++        self.assertEqual(provenance["models"][0]["source"], "metadata")
++        self.assertEqual(provenance["models"][0]["raw_usage"], raw_usage)
++
++    def test_normalize_records_model_name_unknown_when_no_model_is_proven(self):
++        with tempfile.TemporaryDirectory() as raw:
++            payload = self.make_payload(Path(raw))
++            fake = {
++                "structured_output": {
++                    "summary": "No issues found.",
++                    "findings": [],
++                    "tested": ["Reviewed adapter tests."],
++                    "not_tested": ["Real Claude execution."],
++                    "residual_risks": ["None identified."],
++                },
++            }
++
++            result = adapter.normalize_claude_json(fake, payload)
++
++        self.assertIsNone(result["reviewer_model"])
++        provenance = result["reviewer_provenance"]
++        self.assertEqual(provenance["models"], [])
++        self.assertIsNone(provenance["primary_model"])
++        self.assertIn("model_name", provenance["unknowns"])
++        self.assertIn("primary_model", provenance["unknowns"])
++
++    def test_build_review_evidence_preserves_reviewer_provenance(self):
++        with tempfile.TemporaryDirectory() as raw:
++            payload = self.make_payload(Path(raw))
++            fake = {
++                "modelUsage": {
++                    "glm-5.2[1m]": {
++                        "inputTokens": 10,
++                        "outputTokens": 20,
++                    }
++                },
++                "structured_output": {
++                    "summary": "No issues found.",
++                    "findings": [],
++                    "tested": ["Reviewed adapter tests."],
++                    "not_tested": ["Real Claude execution."],
++                    "residual_risks": ["None identified."],
++                },
++            }
++            envelope = adapter.normalize_claude_json(fake, payload)
++
++            evidence = adapter.build_review_evidence(envelope)
++
++        self.assertEqual(
++            evidence["reviewer_provenance"],
++            envelope["reviewer_provenance"],
++        )
++
+     def test_normalize_prefers_explicit_model_metadata_over_model_usage(self):
+         with tempfile.TemporaryDirectory() as raw:
+             payload = self.make_payload(Path(raw))
+diff --git a/tests/test_state_schema.py b/tests/test_state_schema.py
+index 536ad73..2f14072 100644
+--- a/tests/test_state_schema.py
++++ b/tests/test_state_schema.py
+@@ -1,7 +1,10 @@
+ import json
+ import unittest
++from copy import deepcopy
+ from pathlib import Path
+ 
++from jsonschema import Draft202012Validator
++
+ 
+ ROOT = Path(__file__).resolve().parents[1]
+ 
+@@ -10,6 +13,56 @@ class StateSchemaTest(unittest.TestCase):
+     def load_schema(self):
+         return json.loads((ROOT / "harness/schemas/state.schema.json").read_text())
+ 
++    def minimal_valid_state(self):
++        return {
++            "run_id": "test-run",
++            "harness_version": "0.1.0",
++            "state_schema_version": "0.1.0",
++            "status": "draft",
++            "track": "Fast",
++            "current_workflow": "fast-doc-change",
++            "owner": "codex",
++            "base_commit": "HEAD",
++            "created_at": "2026-06-19T00:00:00Z",
++            "updated_at": "2026-06-19T00:00:00Z",
++            "external_agents": [
++                {
++                    "name": "claude-code",
++                    "role": "reviewer",
++                    "state_access": "none",
++                    "status": "not_requested",
++                }
++            ],
++            "evidence": [],
++        }
++
++    def validation_errors(self, state):
++        schema = self.load_schema()
++        return list(Draft202012Validator(schema).iter_errors(state))
++
++    def test_schema_accepts_v0_1_and_v0_2_versions(self):
++        base = self.minimal_valid_state()
++        for harness_version in ["0.1.0", "0.2.0"]:
++            for state_schema_version in ["0.1.0", "0.2.0"]:
++                with self.subTest(
++                    harness_version=harness_version,
++                    state_schema_version=state_schema_version,
++                ):
++                    state = deepcopy(base)
++                    state["harness_version"] = harness_version
++                    state["state_schema_version"] = state_schema_version
++
++                    self.assertEqual(self.validation_errors(state), [])
++
++    def test_schema_rejects_unknown_future_versions(self):
++        state = self.minimal_valid_state()
++        state["harness_version"] = "0.3.0"
++        state["state_schema_version"] = "0.3.0"
++
++        errors = self.validation_errors(state)
++
++        self.assertGreaterEqual(len(errors), 2)
++
+     def test_schema_has_required_statuses(self):
+         schema = self.load_schema()
+         statuses = schema["properties"]["status"]["enum"]
+diff --git a/tests/test_static_contracts.py b/tests/test_static_contracts.py
+index 9faa415..b80fbcc 100644
+--- a/tests/test_static_contracts.py
++++ b/tests/test_static_contracts.py
+@@ -7,6 +7,8 @@ import sys
+ import unittest
+ from pathlib import Path
+ 
++from jsonschema import Draft202012Validator
++
+ 
+ ROOT = Path(__file__).resolve().parents[1]
+ STATE_SCHEMA = ROOT / "harness" / "schemas" / "state.schema.json"
+@@ -18,6 +20,9 @@ ADAPTER_LOCKFILE = ROOT / "mcp" / "claude-review" / "requirements.lock.txt"
+ ADAPTER_OUTPUT_SCHEMA = (
+     ROOT / "mcp" / "claude-review" / "schema" / "claude-review-output.schema.json"
+ )
++V011_REVIEW_FIXTURE = (
++    ROOT / "tests" / "fixtures" / "claude-review" / "v0.1.1-envelope.json"
++)
+ 
+ spec = importlib.util.spec_from_file_location("claude_review_adapter", ADAPTER_PATH)
+ adapter = importlib.util.module_from_spec(spec)
+@@ -33,6 +38,14 @@ def load_schema() -> dict:
+     return json.loads(STATE_SCHEMA.read_text(encoding="utf-8"))
+ 
+ 
++def load_output_schema() -> dict:
++    return json.loads(read_text(ADAPTER_OUTPUT_SCHEMA))
++
++
++def output_schema_errors(payload: dict) -> list:
++    return list(Draft202012Validator(load_output_schema()).iter_errors(payload))
++
++
+ def parse_markdown_table(text: str, header_first_cell: str) -> list[list[str]]:
+     lines = text.splitlines()
+     rows: list[list[str]] = []
+@@ -89,6 +102,76 @@ def logical_requirements(path: Path) -> list[str]:
+ 
+ 
+ class StaticContractsTest(unittest.TestCase):
++    def test_claude_review_output_schema_accepts_v0_1_1_fixture_without_provenance(self):
++        fixture = json.loads(read_text(V011_REVIEW_FIXTURE))
++
++        self.assertEqual(output_schema_errors(fixture), [])
++
++    def test_claude_review_output_schema_accepts_v0_2_reviewer_provenance(self):
++        payload = json.loads(read_text(V011_REVIEW_FIXTURE))
++        payload["harness_version"] = "0.2.0"
++        payload["reviewer_provenance"] = {
++            "schema_version": "0.2.0",
++            "reviewer": "claude-code",
++            "cli": {
++                "name": "Claude Code",
++                "raw_version": "2.1.168 (Claude Code)",
++                "version": "2.1.168",
++            },
++            "models": [
++                {
++                    "name": "glm-5.2[1m]",
++                    "version": None,
++                    "source": "modelUsage",
++                    "usage": {
++                        "input_tokens": None,
++                        "output_tokens": None,
++                    },
++                    "raw_usage": {
++                        "inputTokens": 10,
++                        "outputTokens": 20,
++                    },
++                }
++            ],
++            "primary_model": "glm-5.2[1m]",
++            "unknowns": ["model_version", "token_usage"],
++        }
++
++        self.assertEqual(output_schema_errors(payload), [])
++
++    def test_claude_review_output_schema_rejects_unknowns_outside_vocabulary(self):
++        payload = json.loads(read_text(V011_REVIEW_FIXTURE))
++        payload["harness_version"] = "0.2.0"
++        payload["reviewer_provenance"] = {
++            "schema_version": "0.2.0",
++            "reviewer": "claude-code",
++            "cli": {"name": "Claude Code", "raw_version": None, "version": None},
++            "models": [],
++            "primary_model": None,
++            "unknowns": ["invented_unknown"],
++        }
++
++        errors = output_schema_errors(payload)
++
++        self.assertTrue(errors)
++
++    def test_claude_review_output_schema_rejects_empty_models_without_model_name_unknown(self):
++        payload = json.loads(read_text(V011_REVIEW_FIXTURE))
++        payload["reviewer_model"] = None
++        payload["harness_version"] = "0.2.0"
++        payload["reviewer_provenance"] = {
++            "schema_version": "0.2.0",
++            "reviewer": "claude-code",
++            "cli": {"name": "Claude Code", "raw_version": None, "version": None},
++            "models": [],
++            "primary_model": None,
++            "unknowns": ["primary_model", "token_usage"],
++        }
++
++        errors = output_schema_errors(payload)
++
++        self.assertTrue(errors)
++
+     def test_claude_review_output_schema_allows_nullable_identity_metadata(self):
+         schema = json.loads(read_text(ADAPTER_OUTPUT_SCHEMA))
+         for field in [

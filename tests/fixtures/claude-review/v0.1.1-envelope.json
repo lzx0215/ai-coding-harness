@@ -1,0 +1,28 @@
+{
+  "status": "passed",
+  "run_id": "fixture-v0.1.1",
+  "completed": true,
+  "harness_version": "0.1.0",
+  "adapter_version": "0.1.0",
+  "prompt_version": "0.1.0",
+  "reviewer": "claude-code",
+  "reviewer_model": "glm-5.2[1m]",
+  "reviewer_model_version": null,
+  "reviewer_cli_version": "2.1.168 (Claude Code)",
+  "output_file": "harness/runs/fixture/reviews/claude-review.json",
+  "review_file": "harness/runs/fixture/reviews/claude-review.evidence.json",
+  "raw_log_file": "harness/runs/fixture/reviews/claude-review.raw.log",
+  "exit_code": 0,
+  "duration_seconds": 1.25,
+  "summary": "No findings.",
+  "findings": [],
+  "tested": [
+    "Reviewed fixture diff."
+  ],
+  "not_tested": [
+    "Did not run external tests."
+  ],
+  "residual_risks": [
+    "Fixture only."
+  ]
+}

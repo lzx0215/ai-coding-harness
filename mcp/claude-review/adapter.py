@@ -12,6 +12,14 @@ from typing import Any
 ADAPTER_VERSION = "0.1.0"
 DEFAULT_VERSION = "0.1.0"
 REVIEWER = "claude-code"
+PROVENANCE_SCHEMA_VERSION = "0.2.0"
+UNKNOWN_VOCABULARY = {
+    "model_name",
+    "model_version",
+    "cli_version",
+    "primary_model",
+    "token_usage",
+}
 
 SUCCESS_STATUSES = {"passed", "findings"}
 TERMINAL_STATUSES = {
@@ -232,6 +240,15 @@ def normalize_claude_json(
     content = _extract_review_content(parsed)
     review_data = _normalize_review_data(content)
     status = "findings" if review_data["findings"] else "passed"
+    effective_cli_version = (
+        _optional_string(reviewer_cli_version)
+        or _metadata_value(parsed, content, "reviewer_cli_version", "cli_version")
+    )
+    provenance = build_reviewer_provenance(
+        parsed,
+        content,
+        reviewer_cli_version=effective_cli_version,
+    )
     path_overrides = _path_overrides(
         output_file=output_file,
         review_file=review_file,
@@ -244,18 +261,16 @@ def normalize_claude_json(
         exit_code=exit_code,
         resolved_paths=path_overrides,
         review_data=review_data,
-        reviewer_model=_reviewer_model(parsed, content),
+        reviewer_model=provenance["primary_model"],
         reviewer_model_version=_metadata_value(
             parsed,
             content,
             "reviewer_model_version",
             "model_version",
-        ),
-        reviewer_cli_version=(
-            _optional_string(reviewer_cli_version)
-            or _metadata_value(parsed, content, "reviewer_cli_version", "cli_version")
-        ),
+        ) or None,
+        reviewer_cli_version=effective_cli_version,
     )
+    envelope["reviewer_provenance"] = provenance
     _validate_success_envelope(envelope)
     return envelope
 
@@ -462,6 +477,172 @@ def detect_claude_cli_version(claude_executable: str) -> str | None:
     return None
 
 
+def parse_cli_version(raw_version: str | None) -> str | None:
+    text = _optional_string(raw_version)
+    if text is None:
+        return None
+    first = text.split()[0].strip()
+    if first and all(part.isdigit() for part in first.split(".")):
+        return first
+    return None
+
+
+def complete_usage_total(raw_usage: Any) -> int | None:
+    if not isinstance(raw_usage, dict):
+        return None
+    input_tokens = raw_usage.get("inputTokens")
+    output_tokens = raw_usage.get("outputTokens")
+    if isinstance(input_tokens, bool) or isinstance(output_tokens, bool):
+        return None
+    if isinstance(input_tokens, int) and isinstance(output_tokens, int):
+        if input_tokens >= 0 and output_tokens >= 0:
+            return input_tokens + output_tokens
+    return None
+
+
+def select_primary_model(model_usage: Any) -> str | None:
+    if not isinstance(model_usage, dict):
+        return None
+
+    names = sorted(
+        name.strip()
+        for name in model_usage
+        if isinstance(name, str) and name.strip()
+    )
+    if not names:
+        return None
+
+    complete: list[tuple[int, str]] = []
+    for name in names:
+        total = complete_usage_total(model_usage.get(name))
+        if total is not None:
+            complete.append((total, name))
+
+    if complete:
+        largest_total = max(total for total, _name in complete)
+        return sorted(name for total, name in complete if total == largest_total)[0]
+
+    return names[0]
+
+
+def model_usage_names(model_usage: Any) -> list[str]:
+    if not isinstance(model_usage, dict):
+        return []
+    return sorted(
+        name.strip()
+        for name in model_usage
+        if isinstance(name, str) and name.strip()
+    )
+
+
+def model_usage_model_entries(
+    model_usage: Any,
+    *,
+    primary: str | None,
+) -> list[dict[str, Any]]:
+    if not isinstance(model_usage, dict):
+        return []
+
+    ordered_names = model_usage_names(model_usage)
+    if primary in ordered_names:
+        ordered_names.remove(primary)
+        ordered_names.insert(0, primary)
+
+    entries: list[dict[str, Any]] = []
+    for name in ordered_names:
+        entry: dict[str, Any] = {
+            "name": name,
+            "version": None,
+            "source": "modelUsage",
+            "usage": {
+                "input_tokens": None,
+                "output_tokens": None,
+            },
+        }
+        raw_usage = model_usage.get(name)
+        if isinstance(raw_usage, dict):
+            entry["raw_usage"] = raw_usage
+        entries.append(entry)
+    return entries
+
+
+def model_usage_raw_entry(model_usage: Any, name: str) -> dict[str, Any] | None:
+    if not isinstance(model_usage, dict):
+        return None
+    for raw_name, raw_usage in model_usage.items():
+        if isinstance(raw_name, str) and raw_name.strip() == name:
+            if isinstance(raw_usage, dict):
+                return raw_usage
+            return None
+    return None
+
+
+def metadata_model_entry(name: str) -> dict[str, Any]:
+    return {
+        "name": name,
+        "version": None,
+        "source": "metadata",
+        "usage": {
+            "input_tokens": None,
+            "output_tokens": None,
+        },
+    }
+
+
+def build_reviewer_provenance(
+    parsed: dict[str, Any],
+    content: dict[str, Any],
+    *,
+    reviewer_cli_version: str | None,
+) -> dict[str, Any]:
+    model_usage = parsed.get("modelUsage")
+    explicit_model = _metadata_value(parsed, content, "reviewer_model", "model")
+    unknowns: set[str] = {"token_usage"}
+    models: list[dict[str, Any]] = []
+
+    if explicit_model is not None:
+        primary = explicit_model
+        explicit_entry = metadata_model_entry(explicit_model)
+        raw_usage = model_usage_raw_entry(model_usage, explicit_model)
+        if raw_usage is not None:
+            explicit_entry["raw_usage"] = raw_usage
+        models.append(explicit_entry)
+        for entry in model_usage_model_entries(
+            model_usage,
+            primary=select_primary_model(model_usage),
+        ):
+            if entry["name"] != explicit_model:
+                models.append(entry)
+    elif isinstance(model_usage, dict):
+        primary = select_primary_model(model_usage)
+        models.extend(model_usage_model_entries(model_usage, primary=primary))
+    else:
+        primary = None
+
+    if models:
+        unknowns.add("model_version")
+    else:
+        unknowns.update({"model_name", "primary_model"})
+
+    if reviewer_cli_version is None:
+        unknowns.add("cli_version")
+    if not unknowns <= UNKNOWN_VOCABULARY:
+        raise ReviewSchemaError("reviewer provenance contains unsupported unknowns")
+
+    return {
+        "schema_version": PROVENANCE_SCHEMA_VERSION,
+        "reviewer": REVIEWER,
+        "cli": {
+            "name": "Claude Code",
+            "raw_version": _optional_string(reviewer_cli_version),
+            "version": parse_cli_version(reviewer_cli_version),
+        },
+        "models": models,
+        "primary_model": primary,
+        "unknowns": sorted(unknowns),
+    }
+
+
 def build_review_prompt(payload: dict[str, Any]) -> str:
     task_text = read_text(payload.get("task_file", ""))
     plan_text = read_text(payload.get("plan_file", ""))
@@ -571,19 +752,23 @@ def review_content_json_schema() -> str:
 
 
 def build_review_evidence(envelope: dict[str, Any]) -> dict[str, Any]:
-    return {
+    evidence = {
         "run_id": envelope["run_id"],
         "status": envelope["status"],
         "reviewer": envelope["reviewer"],
         "reviewer_model": envelope["reviewer_model"],
         "reviewer_model_version": envelope["reviewer_model_version"],
         "reviewer_cli_version": envelope["reviewer_cli_version"],
+        "reviewer_provenance": envelope.get("reviewer_provenance"),
         "summary": envelope["summary"],
         "findings": envelope["findings"],
         "tested": envelope["tested"],
         "not_tested": envelope["not_tested"],
         "residual_risks": envelope["residual_risks"],
     }
+    if evidence["reviewer_provenance"] is None:
+        evidence.pop("reviewer_provenance")
+    return evidence
 
 
 def output_indicates_auth_missing(output: str) -> bool:

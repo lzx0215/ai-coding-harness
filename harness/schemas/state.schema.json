@@ -18,8 +18,8 @@
   ],
   "properties": {
     "run_id": { "type": "string", "minLength": 1 },
-    "harness_version": { "type": "string", "pattern": "^0\\.1\\.0$" },
-    "state_schema_version": { "type": "string", "pattern": "^0\\.1\\.0$" },
+    "harness_version": { "type": "string", "pattern": "^(0\\.1\\.0|0\\.2\\.0)$" },
+    "state_schema_version": { "type": "string", "pattern": "^(0\\.1\\.0|0\\.2\\.0)$" },
     "status": {
       "type": "string",
       "enum": [

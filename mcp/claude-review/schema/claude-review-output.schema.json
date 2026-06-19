@@ -49,6 +49,91 @@
     "reviewer_model": { "type": ["string", "null"], "minLength": 1 },
     "reviewer_model_version": { "type": ["string", "null"], "minLength": 1 },
     "reviewer_cli_version": { "type": ["string", "null"], "minLength": 1 },
+    "reviewer_provenance": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "reviewer",
+        "cli",
+        "models",
+        "primary_model",
+        "unknowns"
+      ],
+      "properties": {
+        "schema_version": { "type": "string", "const": "0.2.0" },
+        "reviewer": { "type": "string", "minLength": 1 },
+        "cli": {
+          "type": "object",
+          "required": ["name", "raw_version", "version"],
+          "properties": {
+            "name": { "type": "string", "minLength": 1 },
+            "raw_version": { "type": ["string", "null"], "minLength": 1 },
+            "version": { "type": ["string", "null"], "minLength": 1 }
+          },
+          "additionalProperties": false
+        },
+        "models": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "version", "source", "usage"],
+            "properties": {
+              "name": { "type": "string", "minLength": 1 },
+              "version": { "type": ["string", "null"], "minLength": 1 },
+              "source": { "type": "string", "enum": ["modelUsage", "metadata"] },
+              "usage": {
+                "type": "object",
+                "required": ["input_tokens", "output_tokens"],
+                "properties": {
+                  "input_tokens": { "type": ["integer", "null"], "minimum": 0 },
+                  "output_tokens": { "type": ["integer", "null"], "minimum": 0 }
+                },
+                "additionalProperties": false
+              },
+              "raw_usage": { "type": "object" }
+            },
+            "additionalProperties": false
+          }
+        },
+        "primary_model": { "type": ["string", "null"], "minLength": 1 },
+        "unknowns": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "enum": [
+              "model_name",
+              "model_version",
+              "cli_version",
+              "primary_model",
+              "token_usage"
+            ]
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "models": { "maxItems": 0 }
+            },
+            "required": ["models"]
+          },
+          "then": {
+            "properties": {
+              "primary_model": { "const": null },
+              "unknowns": {
+                "allOf": [
+                  { "contains": { "const": "model_name" } },
+                  { "contains": { "const": "primary_model" } }
+                ]
+              }
+            }
+          }
+        }
+      ],
+      "additionalProperties": false
+    },
     "output_file": { "type": "string", "minLength": 1 },
     "review_file": { "type": "string", "minLength": 1 },
     "raw_log_file": { "type": "string", "minLength": 1 },
@@ -99,6 +184,24 @@
     }
   },
   "allOf": [
+    {
+      "if": {
+        "properties": {
+          "reviewer_provenance": {
+            "properties": {
+              "models": { "maxItems": 0 }
+            },
+            "required": ["models"]
+          }
+        },
+        "required": ["reviewer_provenance"]
+      },
+      "then": {
+        "properties": {
+          "reviewer_model": { "const": null }
+        }
+      }
+    },
     {
       "if": {
         "properties": {
