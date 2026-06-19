@@ -1,0 +1,64 @@
+{
+  "run_id": "2026-06-19-v0.2-reviewer-provenance-design",
+  "harness_version": "0.1.0",
+  "state_schema_version": "0.1.0",
+  "status": "completed",
+  "track": "Standard",
+  "current_workflow": "standard-doc-system-change",
+  "owner": "codex",
+  "base_commit": "a1387dc",
+  "created_at": "2026-06-19T07:01:51Z",
+  "updated_at": "2026-06-19T07:12:00Z",
+  "external_agents": [
+    {
+      "name": "claude-code",
+      "role": "reviewer",
+      "adapter": "claude-review",
+      "adapter_version": "0.1.0",
+      "tool": "claude_review",
+      "model": null,
+      "model_version": null,
+      "cli_version": null,
+      "prompt_version": "0.1.0",
+      "state_access": "none",
+      "status": "not_requested"
+    }
+  ],
+  "evidence": [
+    {
+      "type": "task",
+      "path": "harness/runs/2026-06-19-v0.2-reviewer-provenance-design/task.md",
+      "description": "v0.2 startup task definition."
+    },
+    {
+      "type": "triage",
+      "path": "harness/runs/2026-06-19-v0.2-reviewer-provenance-design/triage.md",
+      "description": "Standard documentation-system workflow triage."
+    },
+    {
+      "type": "plan",
+      "path": "harness/runs/2026-06-19-v0.2-reviewer-provenance-design/plan.md",
+      "description": "Design-start plan and review gate."
+    },
+    {
+      "type": "design-spec",
+      "path": "docs/superpowers/specs/2026-06-19-v0.2-reviewer-provenance-design.md",
+      "description": "v0.2 reviewer provenance and nullable metadata consumer design."
+    },
+    {
+      "type": "review",
+      "path": "harness/runs/2026-06-19-v0.2-reviewer-provenance-design/review.md",
+      "description": "User spec review findings and disposition."
+    },
+    {
+      "type": "verification",
+      "path": "harness/runs/2026-06-19-v0.2-reviewer-provenance-design/verification.md",
+      "description": "Design checkpoint verification commands and results."
+    },
+    {
+      "type": "handoff",
+      "path": "harness/runs/2026-06-19-v0.2-reviewer-provenance-design/handoff.md",
+      "description": "Design checkpoint handoff and next step."
+    }
+  ]
+}

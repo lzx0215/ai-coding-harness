@@ -1,0 +1,64 @@
+{
+  "run_id": "2026-06-19-v0.2-spec-amendment",
+  "harness_version": "0.1.0",
+  "state_schema_version": "0.1.0",
+  "status": "completed",
+  "track": "Standard",
+  "current_workflow": "standard-doc-system-change",
+  "owner": "codex",
+  "base_commit": "a1387dc",
+  "created_at": "2026-06-19T07:16:44Z",
+  "updated_at": "2026-06-19T07:20:09Z",
+  "external_agents": [
+    {
+      "name": "claude-code",
+      "role": "reviewer",
+      "adapter": "claude-review",
+      "adapter_version": "0.1.0",
+      "tool": "claude_review",
+      "model": null,
+      "model_version": null,
+      "cli_version": null,
+      "prompt_version": "0.1.0",
+      "state_access": "none",
+      "status": "not_requested"
+    }
+  ],
+  "evidence": [
+    {
+      "type": "task",
+      "path": "harness/runs/2026-06-19-v0.2-spec-amendment/task.md",
+      "description": "Second spec-review amendment task."
+    },
+    {
+      "type": "triage",
+      "path": "harness/runs/2026-06-19-v0.2-spec-amendment/triage.md",
+      "description": "Standard documentation-system triage."
+    },
+    {
+      "type": "plan",
+      "path": "harness/runs/2026-06-19-v0.2-spec-amendment/plan.md",
+      "description": "Spec amendment and checkpoint plan."
+    },
+    {
+      "type": "review",
+      "path": "harness/runs/2026-06-19-v0.2-spec-amendment/review.md",
+      "description": "Second spec-review findings and disposition."
+    },
+    {
+      "type": "design-spec",
+      "path": "docs/superpowers/specs/2026-06-19-v0.2-reviewer-provenance-design.md",
+      "description": "Revised v0.2 reviewer provenance design."
+    },
+    {
+      "type": "verification",
+      "path": "harness/runs/2026-06-19-v0.2-spec-amendment/verification.md",
+      "description": "Amendment verification commands and results."
+    },
+    {
+      "type": "handoff",
+      "path": "harness/runs/2026-06-19-v0.2-spec-amendment/handoff.md",
+      "description": "Amendment handoff and checkpoint commit instruction."
+    }
+  ]
+}

@@ -2,8 +2,8 @@
 
 ## Current Phase
 
-Design approved. Implementation plan in progress.
+v0.1.1 audit closure is complete. v0.2 design has started with reviewer provenance and nullable metadata consumers.
 
 ## Next Step
 
-Build the v0.1 scaffold from the approved implementation plan.
+Review `docs/superpowers/specs/2026-06-19-v0.2-reviewer-provenance-design.md`, then write the v0.2 implementation plan after approval.

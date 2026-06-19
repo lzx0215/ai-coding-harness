@@ -8,6 +8,7 @@
 ## Specs
 
 - `docs/superpowers/specs/2026-06-18-codex-first-multi-agent-harness-design.md` - Codex-first Multi-Agent Harness v0.1 design.
+- `docs/superpowers/specs/2026-06-19-v0.2-reviewer-provenance-design.md` - v0.2 reviewer provenance and nullable metadata consumer design.
 
 ## Plans
 
