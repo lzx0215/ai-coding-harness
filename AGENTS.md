@@ -9,14 +9,15 @@ Harness rules define valid workflows, state transitions, risk handling, verifica
 ## Read Order
 
 1. `harness/core/state-authority.md`
-2. `harness/core/task-triage.md`
-3. `harness/core/lifecycle.md`
-4. `harness/core/delegation.md`
-5. `harness/core/verification.md`
-6. `harness/core/memory.md`
-7. `harness/core/safety.md`
-8. Relevant files under `harness/adapters/`
-9. Current run under `harness/runs/<run-id>/`, when one exists
+2. `harness/core/evidence.md`
+3. `harness/core/task-triage.md`
+4. `harness/core/lifecycle.md`
+5. `harness/core/delegation.md`
+6. `harness/core/verification.md`
+7. `harness/core/memory.md`
+8. `harness/core/safety.md`
+9. Relevant files under `harness/adapters/`
+10. Current run under `harness/runs/<run-id>/`, when one exists
 
 ## Core Invariants
 

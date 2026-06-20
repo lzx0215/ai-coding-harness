@@ -23,6 +23,7 @@
 ## Harness
 
 - `harness/core/` - Agent-neutral Harness rules.
+- `harness/core/evidence.md` - Controlled evidence vocabulary and Phase 4 async evidence contract.
 - `harness/adapters/` - Agent-specific adapter rules.
 - `harness/templates/` - Copyable task and evidence templates.
 - `harness/schemas/` - JSON schemas for machine-checkable artifacts.
