@@ -84,6 +84,33 @@ scope:
         self.assertEqual(result.data["scope"], ["frontmatter checks"])
         self.assertEqual(result.warnings, [])
 
+    def test_parse_frontmatter_accepts_inline_empty_arrays(self):
+        text = """---
+memory_files: []
+scope: []
+---
+
+# Task
+"""
+
+        result = readiness.parse_frontmatter(text)
+
+        self.assertEqual(result.data["memory_files"], [])
+        self.assertEqual(result.data["scope"], [])
+        self.assertEqual(result.warnings, [])
+
+    def test_parse_frontmatter_accepts_closing_delimiter_at_eof(self):
+        text = """---
+run_id: phase2-test
+scope: []
+---"""
+
+        result = readiness.parse_frontmatter(text)
+
+        self.assertEqual(result.data["run_id"], "phase2-test")
+        self.assertEqual(result.data["scope"], [])
+        self.assertEqual(result.warnings, [])
+
     def test_parse_frontmatter_reports_missing_block(self):
         result = readiness.parse_frontmatter("# Task\n")
 
@@ -106,6 +133,7 @@ source:
             any("unsupported frontmatter nesting" in warning for warning in result.warnings),
             result.warnings,
         )
+        self.assertNotEqual(result.data["source"], {"key": "value"})
 
     def test_parse_frontmatter_warns_on_map_like_sequence_item(self):
         text = """---

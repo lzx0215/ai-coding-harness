@@ -25,15 +25,16 @@ class ReadinessReport:
 
 def parse_frontmatter(text: str) -> FrontmatterResult:
     text = text.replace("\r\n", "\n").replace("\r", "\n")
-    if not text.startswith("---\n"):
+    lines = text.splitlines()
+    if not lines or lines[0] != "---":
         return FrontmatterResult({}, ["missing frontmatter block"])
 
-    end_marker = "\n---\n"
-    end_index = text.find(end_marker, 4)
-    if end_index == -1:
+    try:
+        end_index = lines[1:].index("---") + 1
+    except ValueError:
         return FrontmatterResult({}, ["unterminated frontmatter block"])
 
-    raw_lines = text[4:end_index].splitlines()
+    raw_lines = lines[1:end_index]
     data: dict[str, Any] = {}
     warnings: list[str] = []
     index = 0
@@ -78,6 +79,7 @@ def parse_nested_block(lines: list[str]) -> tuple[Any, int, list[str]]:
     mapping: dict[str, Any] = {}
     consumed = 0
     mode: str | None = None
+    unsupported_nested = False
 
     for line in lines:
         if not line.strip():
@@ -85,6 +87,11 @@ def parse_nested_block(lines: list[str]) -> tuple[Any, int, list[str]]:
             continue
         if not line.startswith("  "):
             break
+        if line.startswith("    "):
+            warnings.append("unsupported frontmatter nesting")
+            unsupported_nested = True
+            consumed += 1
+            continue
         stripped = line.strip()
         if stripped.startswith("- "):
             if mode == "map":
@@ -105,6 +112,7 @@ def parse_nested_block(lines: list[str]) -> tuple[Any, int, list[str]]:
             child_value = child_value.strip()
             if not child_value:
                 warnings.append("unsupported frontmatter nesting")
+                unsupported_nested = True
                 consumed += 1
                 continue
             mapping[child_key] = parse_scalar(child_value)
@@ -113,6 +121,8 @@ def parse_nested_block(lines: list[str]) -> tuple[Any, int, list[str]]:
         warnings.append(f"unsupported frontmatter line: {line}")
         consumed += 1
 
+    if unsupported_nested:
+        return [], consumed, warnings
     if mode == "map":
         return mapping, consumed, warnings
     return items, consumed, warnings
@@ -128,6 +138,8 @@ def is_unquoted_mapping_like_value(value: str) -> bool:
 
 
 def parse_scalar(value: str) -> Any:
+    if value == "[]":
+        return []
     if value in {"null", "Null", "NULL", "~"}:
         return None
     if value == "true":
