@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from harness import cli
+from harness import cli, readiness
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -759,6 +759,7 @@ workflow: standard-doc-system-change
             )
             state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
             validation = cli.validate_run(run_dir, root=ROOT)
+            readiness_report = readiness.check_run_readiness(run_dir, state)
             documents_exist = {
                 name: (run_dir / name).exists()
                 for name in ("task.md", "triage.md", "plan.md", "handoff.md")
@@ -766,6 +767,7 @@ workflow: standard-doc-system-change
 
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
         self.assertEqual(validation.errors, [])
+        self.assertEqual(readiness_report.warnings, [])
         self.assertEqual(state["status"], "draft")
         self.assertEqual(state["run_id"], "phase2-created-run")
         self.assertEqual(state["track"], "Standard")
@@ -835,6 +837,55 @@ workflow: standard-doc-system-change
         self.assertEqual(result.returncode, 1)
         self.assertFalse(exists_after)
         self.assertIn("schema error at track", result.stdout)
+
+    def test_init_run_prevalidates_static_evidence_before_writing(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw) / "invalid-evidence"
+
+            with mock.patch.object(cli, "EVIDENCE_TYPES", cli.EVIDENCE_TYPES - {"task"}):
+                with mock.patch.object(
+                    cli,
+                    "render_template",
+                    side_effect=AssertionError("template rendering should not start"),
+                ):
+                    with self.assertRaises(cli.HarnessCliError) as raised:
+                        cli.init_run(
+                            run_dir,
+                            run_id="invalid-evidence",
+                            track="Standard",
+                            workflow="standard-doc-system-change",
+                            base_commit="HEAD",
+                            root=ROOT,
+                        )
+
+            exists_after = run_dir.exists()
+
+        self.assertFalse(exists_after)
+        self.assertIn("unknown evidence type", str(raised.exception))
+
+    def test_init_run_cleans_created_directory_when_final_validation_fails(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            parent = Path(raw)
+            run_dir = parent / "final-validation-fails"
+            failed_validation = cli.ValidationResult(run_dir, ["forced final validation failure"])
+
+            with mock.patch.object(cli, "validate_run", return_value=failed_validation):
+                with self.assertRaises(cli.HarnessCliError) as raised:
+                    cli.init_run(
+                        run_dir,
+                        run_id="final-validation-fails",
+                        track="Standard",
+                        workflow="standard-doc-system-change",
+                        base_commit="HEAD",
+                        root=ROOT,
+                    )
+
+            parent_exists_after = parent.exists()
+            run_exists_after = run_dir.exists()
+
+        self.assertTrue(parent_exists_after)
+        self.assertFalse(run_exists_after)
+        self.assertIn("forced final validation failure", str(raised.exception))
 
     def test_module_entrypoint_validates_run_from_command_line(self):
         run_dir = ROOT / "harness" / "runs" / "example-fast-doc-change"

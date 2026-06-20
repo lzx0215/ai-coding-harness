@@ -162,6 +162,7 @@ def validate_state(
     *,
     root: Path = ROOT,
     run_dir: Path,
+    validate_paths: bool = True,
 ) -> list[str]:
     errors: list[str] = []
     schema = load_json(root / "harness" / "schemas" / "state.schema.json")
@@ -174,7 +175,8 @@ def validate_state(
         return errors
 
     errors.extend(validate_evidence_types(state))
-    errors.extend(validate_evidence_paths(state, root=root, run_dir=run_dir))
+    if validate_paths:
+        errors.extend(validate_evidence_paths(state, root=root, run_dir=run_dir))
     indexed_jobs, job_errors = load_indexed_job_evidence(
         state,
         root=root,
@@ -946,9 +948,12 @@ def init_run(
         ],
     }
 
-    precheck = dict(state)
-    precheck["evidence"] = []
-    precheck_errors = validate_state(precheck, root=root, run_dir=resolved_run_dir)
+    precheck_errors = validate_state(
+        state,
+        root=root,
+        run_dir=resolved_run_dir,
+        validate_paths=False,
+    )
     if precheck_errors:
         raise HarnessCliError(format_errors(precheck_errors))
 
