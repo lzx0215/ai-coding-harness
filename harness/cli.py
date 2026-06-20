@@ -45,8 +45,21 @@ REVIEW_COMPLETION_EVIDENCE_TYPES = frozenset(
 COMPLETION_REQUIRED_EVIDENCE_TYPES = frozenset({"verification", "handoff"})
 JOB_SCHEMA = ROOT / "harness" / "schemas" / "job.schema.json"
 AGGREGATION_SCHEMA = ROOT / "harness" / "schemas" / "aggregation.schema.json"
-JOB_STATUSES = frozenset({"queued", "running", "succeeded", "failed", "timeout", "cancelled"})
 TERMINAL_JOB_STATUSES = frozenset({"succeeded", "failed", "timeout", "cancelled"})
+AGGREGATION_JOB_BUCKETS = (
+    "consumed_jobs",
+    "succeeded_jobs",
+    "failed_jobs",
+    "timeout_jobs",
+    "cancelled_jobs",
+    "incomplete_jobs",
+)
+TERMINAL_AGGREGATION_JOB_BUCKETS = (
+    "succeeded_jobs",
+    "failed_jobs",
+    "timeout_jobs",
+    "cancelled_jobs",
+)
 
 NORMAL_TRANSITIONS = {
     "draft": {"triaged"},
@@ -224,12 +237,65 @@ def validate_aggregation_evidence(
         if aggregation_path is None:
             continue
 
-        _aggregation, aggregation_errors = validate_json_artifact(
+        aggregation, aggregation_errors = validate_json_artifact(
             aggregation_path,
             AGGREGATION_SCHEMA,
             "aggregation",
         )
         errors.extend(f"evidence[{index}]: {error}" for error in aggregation_errors)
+        if aggregation is None:
+            continue
+
+        semantic_errors = validate_aggregation_semantics(aggregation)
+        errors.extend(f"evidence[{index}]: {error}" for error in semantic_errors)
+
+    return errors
+
+
+def validate_aggregation_semantics(aggregation: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
+    bucket_values = {
+        bucket: list(aggregation.get(bucket, []))
+        for bucket in AGGREGATION_JOB_BUCKETS
+    }
+
+    for bucket, job_ids in bucket_values.items():
+        seen: set[str] = set()
+        for job_id in job_ids:
+            if job_id in seen:
+                errors.append(
+                    f"aggregation semantic error at {bucket}: duplicate job id {job_id}",
+                )
+            seen.add(job_id)
+
+    consumed_jobs = set(bucket_values["consumed_jobs"])
+    for bucket in TERMINAL_AGGREGATION_JOB_BUCKETS + ("incomplete_jobs",):
+        for job_id in bucket_values[bucket]:
+            if job_id not in consumed_jobs:
+                errors.append(
+                    f"aggregation semantic error at {bucket}: "
+                    f"job id {job_id} is not listed in consumed_jobs",
+                )
+
+    terminal_bucket_by_job: dict[str, str] = {}
+    for bucket in TERMINAL_AGGREGATION_JOB_BUCKETS:
+        for job_id in bucket_values[bucket]:
+            previous_bucket = terminal_bucket_by_job.get(job_id)
+            if previous_bucket is not None and previous_bucket != bucket:
+                errors.append(
+                    "aggregation semantic error: "
+                    f"job id {job_id} appears in multiple terminal aggregation "
+                    f"buckets: {previous_bucket}, {bucket}",
+                )
+            terminal_bucket_by_job[job_id] = bucket
+
+    for job_id in bucket_values["incomplete_jobs"]:
+        terminal_bucket = terminal_bucket_by_job.get(job_id)
+        if terminal_bucket is not None:
+            errors.append(
+                "aggregation semantic error: "
+                f"job id {job_id} is both incomplete and terminal ({terminal_bucket})",
+            )
 
     return errors
 

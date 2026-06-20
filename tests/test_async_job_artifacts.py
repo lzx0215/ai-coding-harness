@@ -254,6 +254,102 @@ class AsyncJobEvidenceValidationTest(unittest.TestCase):
             result.errors,
         )
 
+    def test_validate_rejects_aggregation_bucket_outside_consumed_jobs(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            aggregation_file = run_dir / "jobs" / "aggregation.json"
+            aggregation = minimal_aggregation()
+            aggregation["failed_jobs"] = ["not-consumed"]
+            write_json(aggregation_file, aggregation)
+            state = minimal_state()
+            state["evidence"] = [
+                {
+                    "type": "aggregation",
+                    "path": str(aggregation_file.relative_to(ROOT)),
+                }
+            ]
+            write_json(run_dir / "state.json", state)
+
+            result = cli.validate_run(run_dir, root=ROOT)
+
+        self.assertTrue(
+            any("aggregation semantic error" in error for error in result.errors),
+            result.errors,
+        )
+        self.assertTrue(
+            any("failed_jobs" in error and "consumed_jobs" in error for error in result.errors),
+            result.errors,
+        )
+
+    def test_validate_rejects_aggregation_terminal_bucket_conflict(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            aggregation_file = run_dir / "jobs" / "aggregation.json"
+            aggregation = minimal_aggregation()
+            aggregation["failed_jobs"] = ["claude-review-001"]
+            write_json(aggregation_file, aggregation)
+            state = minimal_state()
+            state["evidence"] = [
+                {
+                    "type": "aggregation",
+                    "path": str(aggregation_file.relative_to(ROOT)),
+                }
+            ]
+            write_json(run_dir / "state.json", state)
+
+            result = cli.validate_run(run_dir, root=ROOT)
+
+        self.assertTrue(
+            any("multiple terminal aggregation buckets" in error for error in result.errors),
+            result.errors,
+        )
+
+    def test_validate_rejects_aggregation_incomplete_terminal_conflict(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            aggregation_file = run_dir / "jobs" / "aggregation.json"
+            aggregation = minimal_aggregation()
+            aggregation["incomplete_jobs"] = ["claude-review-001"]
+            write_json(aggregation_file, aggregation)
+            state = minimal_state()
+            state["evidence"] = [
+                {
+                    "type": "aggregation",
+                    "path": str(aggregation_file.relative_to(ROOT)),
+                }
+            ]
+            write_json(run_dir / "state.json", state)
+
+            result = cli.validate_run(run_dir, root=ROOT)
+
+        self.assertTrue(
+            any("both incomplete and terminal" in error for error in result.errors),
+            result.errors,
+        )
+
+    def test_validate_rejects_duplicate_aggregation_job_ids(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            aggregation_file = run_dir / "jobs" / "aggregation.json"
+            aggregation = minimal_aggregation()
+            aggregation["consumed_jobs"] = ["claude-review-001", "claude-review-001"]
+            write_json(aggregation_file, aggregation)
+            state = minimal_state()
+            state["evidence"] = [
+                {
+                    "type": "aggregation",
+                    "path": str(aggregation_file.relative_to(ROOT)),
+                }
+            ]
+            write_json(run_dir / "state.json", state)
+
+            result = cli.validate_run(run_dir, root=ROOT)
+
+        self.assertTrue(
+            any("duplicate job id" in error for error in result.errors),
+            result.errors,
+        )
+
     def test_validate_does_not_schema_validate_non_aggregation_evidence(self):
         with tempfile.TemporaryDirectory(dir=ROOT) as raw:
             run_dir = Path(raw)
