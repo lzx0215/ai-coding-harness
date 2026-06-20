@@ -213,6 +213,47 @@ class AsyncJobEvidenceValidationTest(unittest.TestCase):
             result.errors,
         )
 
+    def test_validate_accepts_aggregation_evidence(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            aggregation_file = run_dir / "jobs" / "aggregation.json"
+            write_json(aggregation_file, minimal_aggregation())
+            state = minimal_state()
+            state["evidence"] = [
+                {
+                    "type": "aggregation",
+                    "path": str(aggregation_file.relative_to(ROOT)),
+                }
+            ]
+            write_json(run_dir / "state.json", state)
+
+            result = cli.validate_run(run_dir, root=ROOT)
+
+        self.assertEqual(result.errors, [])
+
+    def test_validate_rejects_invalid_aggregation_evidence(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            aggregation_file = run_dir / "jobs" / "aggregation.json"
+            aggregation = minimal_aggregation()
+            aggregation["recommended_transition"] = "completed"
+            write_json(aggregation_file, aggregation)
+            state = minimal_state()
+            state["evidence"] = [
+                {
+                    "type": "aggregation",
+                    "path": str(aggregation_file.relative_to(ROOT)),
+                }
+            ]
+            write_json(run_dir / "state.json", state)
+
+            result = cli.validate_run(run_dir, root=ROOT)
+
+        self.assertTrue(
+            any("aggregation schema error" in error for error in result.errors),
+            result.errors,
+        )
+
     def test_validate_does_not_read_agent_job_outside_repository(self):
         with tempfile.TemporaryDirectory(dir=ROOT) as raw:
             run_dir = Path(raw)

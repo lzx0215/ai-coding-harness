@@ -143,6 +143,7 @@ def validate_state(
     errors.extend(validate_evidence_types(state))
     errors.extend(validate_evidence_paths(state, root=root, run_dir=run_dir))
     errors.extend(validate_job_evidence(state, root=root, run_dir=run_dir))
+    errors.extend(validate_aggregation_evidence(state, root=root, run_dir=run_dir))
     return errors
 
 
@@ -199,6 +200,36 @@ def validate_job_evidence(
             errors.append(
                 f"non-terminal job cannot be consumed at evidence[{index}]: {status}",
             )
+
+    return errors
+
+
+def validate_aggregation_evidence(
+    state: dict[str, Any],
+    *,
+    root: Path,
+    run_dir: Path,
+) -> list[str]:
+    errors: list[str] = []
+    for index, evidence in evidence_items(state):
+        evidence_type = evidence.get("type")
+        if evidence_type != "aggregation":
+            continue
+
+        raw_path = evidence.get("path")
+        if not isinstance(raw_path, str) or not raw_path.strip():
+            continue
+
+        aggregation_path = first_existing_evidence_path(raw_path, root=root, run_dir=run_dir)
+        if aggregation_path is None:
+            continue
+
+        _aggregation, aggregation_errors = validate_json_artifact(
+            aggregation_path,
+            AGGREGATION_SCHEMA,
+            "aggregation",
+        )
+        errors.extend(f"evidence[{index}]: {error}" for error in aggregation_errors)
 
     return errors
 
