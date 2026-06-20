@@ -213,6 +213,54 @@ class AsyncJobEvidenceValidationTest(unittest.TestCase):
             result.errors,
         )
 
+    def test_validate_does_not_read_agent_job_outside_repository(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            with tempfile.TemporaryDirectory() as outside_raw:
+                outside_job = Path(outside_raw) / "job.json"
+                write_json(outside_job, minimal_job("running"))
+                state = minimal_state()
+                state["evidence"] = [
+                    {
+                        "type": "agent-job",
+                        "path": str(outside_job),
+                    }
+                ]
+                write_json(run_dir / "state.json", state)
+
+                result = cli.validate_run(run_dir, root=ROOT)
+
+        self.assertTrue(
+            any("outside repository" in error for error in result.errors),
+            result.errors,
+        )
+        self.assertFalse(
+            any("non-terminal job cannot be consumed" in error for error in result.errors),
+            result.errors,
+        )
+
+    def test_validate_reports_non_object_agent_job_schema_error(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            job_file = run_dir / "jobs" / "claude-review-001" / "job.json"
+            job_file.parent.mkdir(parents=True, exist_ok=True)
+            job_file.write_text("[]\n", encoding="utf-8")
+            state = minimal_state()
+            state["evidence"] = [
+                {
+                    "type": "agent-job",
+                    "path": str(job_file.relative_to(ROOT)),
+                }
+            ]
+            write_json(run_dir / "state.json", state)
+
+            result = cli.validate_run(run_dir, root=ROOT)
+
+        self.assertTrue(
+            any("job schema error at <root>" in error for error in result.errors),
+            result.errors,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

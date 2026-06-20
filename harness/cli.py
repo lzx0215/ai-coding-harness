@@ -240,8 +240,12 @@ def first_existing_evidence_path(
     *,
     root: Path,
     run_dir: Path,
+    require_within_root: bool = True,
 ) -> Path | None:
+    resolved_root = root.resolve()
     for candidate in evidence_path_candidates(raw_path, root=root, run_dir=run_dir):
+        if require_within_root and not is_within_path(candidate, resolved_root):
+            continue
         if candidate.exists():
             return candidate
     return None
