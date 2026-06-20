@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import signal
+import shutil
 import subprocess
 import tempfile
 from dataclasses import dataclass
@@ -906,7 +907,6 @@ def init_run(
     if resolved_run_dir.exists():
         raise HarnessCliError(f"run directory already exists: {resolved_run_dir}")
 
-    resolved_run_dir.mkdir(parents=True)
     created_at = utc_now()
     state = {
         "run_id": run_id,
@@ -946,22 +946,45 @@ def init_run(
         ],
     }
 
-    for template_name in ("task.md", "triage.md", "plan.md", "handoff.md"):
-        (resolved_run_dir / template_name).write_text(
-            frontmatter_text_for_run(
-                template_name,
-                run_id=run_id,
-                track=track,
-                workflow=workflow,
-            ),
-            encoding="utf-8",
-        )
+    precheck = dict(state)
+    precheck["evidence"] = []
+    precheck_errors = validate_state(precheck, root=root, run_dir=resolved_run_dir)
+    if precheck_errors:
+        raise HarnessCliError(format_errors(precheck_errors))
 
-    write_json_file(state_path(resolved_run_dir), state)
-    validation = validate_run(resolved_run_dir, root=root)
-    if not validation.ok:
-        raise HarnessCliError(format_errors(validation.errors))
+    created_run_dir = False
+    try:
+        resolved_run_dir.mkdir(parents=True)
+        created_run_dir = True
+
+        for template_name in ("task.md", "triage.md", "plan.md", "handoff.md"):
+            (resolved_run_dir / template_name).write_text(
+                frontmatter_text_for_run(
+                    template_name,
+                    run_id=run_id,
+                    track=track,
+                    workflow=workflow,
+                ),
+                encoding="utf-8",
+            )
+
+        write_json_file(state_path(resolved_run_dir), state)
+        validation = validate_run(resolved_run_dir, root=root)
+        if not validation.ok:
+            raise HarnessCliError(format_errors(validation.errors))
+    except Exception:
+        if created_run_dir:
+            remove_created_run_dir(resolved_run_dir)
+        raise
     return state
+
+
+def remove_created_run_dir(run_dir: Path) -> None:
+    target = run_dir.resolve(strict=False)
+    parent = run_dir.parent.resolve(strict=False)
+    if target == parent or not is_within_path(target, parent):
+        return
+    shutil.rmtree(target)
 
 
 def run_generic_agent(

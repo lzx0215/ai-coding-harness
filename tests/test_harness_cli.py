@@ -807,6 +807,35 @@ workflow: standard-doc-system-change
         self.assertEqual(result.returncode, 1)
         self.assertIn("run directory already exists", result.stdout)
 
+    def test_init_run_rejects_invalid_track_workflow_without_leftover_directory(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw) / "invalid-pairing"
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "harness.cli",
+                    "init-run",
+                    str(run_dir),
+                    "--run-id",
+                    "invalid-pairing",
+                    "--track",
+                    "Fast",
+                    "--workflow",
+                    "standard-doc-system-change",
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            exists_after = run_dir.exists()
+
+        self.assertEqual(result.returncode, 1)
+        self.assertFalse(exists_after)
+        self.assertIn("schema error at track", result.stdout)
+
     def test_module_entrypoint_validates_run_from_command_line(self):
         run_dir = ROOT / "harness" / "runs" / "example-fast-doc-change"
 
