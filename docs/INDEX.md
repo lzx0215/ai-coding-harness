@@ -15,6 +15,8 @@
 ## Plans
 
 - `docs/superpowers/plans/2026-06-18-codex-first-multi-agent-harness-implementation.md` - Implementation plan for the v0.1 scaffold.
+- `docs/superpowers/plans/2026-06-19-phase-1-local-run-closure-implementation.md` - Implementation plan for Phase 1 local run closure hardening.
+- `docs/superpowers/plans/2026-06-20-phase-4-async-job-substrate-implementation.md` - Implementation plan for the first Phase 4 async job substrate slice.
 - `docs/superpowers/plans/2026-06-19-v0.2-reviewer-provenance-implementation.md` - Implementation plan for v0.2 reviewer provenance and state schema compatibility.
 - `docs/superpowers/plans/2026-06-19-v0.2.1-reviewer-provenance-hardening.md` - Follow-up hardening queue for v0.2.1 reviewer provenance cleanup and schema edge cases.
 
