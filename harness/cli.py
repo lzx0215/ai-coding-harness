@@ -65,6 +65,14 @@ REVIEW_DECISION_TARGETS = frozenset(
         "risk_accepted",
     }
 )
+# Targets where Codex's triaged decision must be recorded as a
+# review-decision.json. These are the states that represent Codex's review
+# disposition (review passed/triaged), not adapter-reported outcomes, reviewer
+# unavailability, or the user-driven risk acceptance path. `reviewed` and
+# `review_blocked` require a decision record; the remaining review-related
+# states reuse their own evidence contracts (process-failure states,
+# external_review_unavailable) or the Phase 1 risk-acceptance path.
+REVIEW_DECISION_REQUIRED_TARGETS = frozenset({"reviewed", "review_blocked"})
 # Evidence types that signal a review actually happened. When any of these are
 # indexed and a run advances to a REVIEW_DECISION_TARGETS state, an indexed
 # review-decision.json is required. Absence of all of these (e.g. a Fast run, or
@@ -948,6 +956,54 @@ def validate_transition_policy(
     return []
 
 
+def validate_review_decision_transition(
+    state: dict[str, Any],
+    next_status: str,
+    *,
+    root: Path,
+    run_dir: Path,
+) -> list[str]:
+    if next_status not in REVIEW_DECISION_TARGETS:
+        return []
+
+    decision, _index, load_errors = load_indexed_review_decision(
+        state,
+        root=root,
+        run_dir=run_dir,
+    )
+    if load_errors:
+        return load_errors
+    if decision is None:
+        # No indexed decision. It is only required for the triage-disposition
+        # targets (reviewed, review_blocked), where Codex's review decision
+        # must be recorded. The other review-related targets are adapter
+        # outcomes (process-failure states, external_review_unavailable) or
+        # the user-driven risk-acceptance path, which reuse their own Phase 1
+        # evidence contracts and do not need a decision record. This keeps
+        # historical runs valid without migration.
+        if next_status not in REVIEW_DECISION_REQUIRED_TARGETS:
+            return []
+        evidence_types = {
+            evidence.get("type")
+            for _index, evidence in evidence_items(state)
+            if isinstance(evidence.get("type"), str)
+        }
+        if evidence_types & REVIEW_SIGNAL_EVIDENCE_TYPES:
+            return [
+                "review-decision is required to advance to a review outcome state "
+                "when review evidence is indexed",
+            ]
+        return []
+
+    recommended_status = decision.get("recommended_status")
+    if recommended_status != next_status:
+        return [
+            f"advance target {next_status} does not match review-decision "
+            f"recommended_status {recommended_status}",
+        ]
+    return []
+
+
 def advance_run(
     run_dir: Path | str,
     next_status: str,
@@ -978,6 +1034,15 @@ def advance_run(
     policy_errors = validate_transition_policy(state, next_status)
     if policy_errors:
         raise HarnessCliError(format_errors(policy_errors))
+
+    review_decision_errors = validate_review_decision_transition(
+        state,
+        next_status,
+        root=root,
+        run_dir=resolved_run_dir,
+    )
+    if review_decision_errors:
+        raise HarnessCliError(format_errors(review_decision_errors))
 
     completion_errors = validate_completion_evidence(state, next_status)
     if completion_errors:

@@ -1402,6 +1402,150 @@ memory_files: []
             result.errors,
         )
 
+    def test_advance_allows_review_target_matching_recommended_status(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            reviews_dir = run_dir / "reviews"
+            reviews_dir.mkdir()
+            decision_path = reviews_dir / "review-decision.json"
+            decision_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "0.1.0",
+                        "run_id": "test-run",
+                        "generated_at": "2026-06-20T00:00:00Z",
+                        "disposition": "passed",
+                        "recommended_status": "reviewed",
+                        "decision_owner": "codex",
+                        "source_evidence": [],
+                        "severity_counts": {
+                            "critical": 0,
+                            "high": 0,
+                            "medium": 0,
+                            "low": 0,
+                            "info": 0,
+                        },
+                        "resolved_findings": [],
+                        "accepted_risks": [],
+                        "not_tested": [],
+                        "residual_risks": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            state = minimal_state(status="reviewing")
+            state["evidence"] = [
+                {
+                    "type": "review-evidence",
+                    "path": "reviews/review-decision.json",
+                    "description": "Review decision artifact.",
+                }
+            ]
+            write_state(run_dir, state)
+
+            advanced = cli.advance_run(run_dir, "reviewed", actor="codex", root=ROOT)
+
+        self.assertEqual(advanced["status"], "reviewed")
+
+    def test_advance_rejects_review_target_conflicting_with_recommended_status(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            reviews_dir = run_dir / "reviews"
+            reviews_dir.mkdir()
+            decision_path = reviews_dir / "review-decision.json"
+            decision_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "0.1.0",
+                        "run_id": "test-run",
+                        "generated_at": "2026-06-20T00:00:00Z",
+                        "disposition": "blocked",
+                        "recommended_status": "review_blocked",
+                        "decision_owner": "codex",
+                        "source_evidence": [],
+                        "severity_counts": {
+                            "critical": 1,
+                            "high": 0,
+                            "medium": 0,
+                            "low": 0,
+                            "info": 0,
+                        },
+                        "resolved_findings": [],
+                        "accepted_risks": [],
+                        "not_tested": [],
+                        "residual_risks": ["Critical finding blocks review."],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            state = minimal_state(status="reviewing")
+            state["evidence"] = [
+                {
+                    "type": "review-evidence",
+                    "path": "reviews/review-decision.json",
+                    "description": "Review decision artifact.",
+                }
+            ]
+            write_state(run_dir, state)
+            before = (run_dir / "state.json").read_text(encoding="utf-8")
+
+            with self.assertRaises(cli.HarnessCliError) as raised:
+                cli.advance_run(run_dir, "reviewed", actor="codex", root=ROOT)
+            after = (run_dir / "state.json").read_text(encoding="utf-8")
+
+        self.assertIn("recommended_status", str(raised.exception))
+        self.assertEqual(before, after)
+
+    def test_advance_ignores_review_decision_gate_for_non_review_target(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            state = minimal_state(status="draft")
+            write_state(run_dir, state)
+
+            advanced = cli.advance_run(run_dir, "triaged", actor="codex", root=ROOT)
+
+        self.assertEqual(advanced["status"], "triaged")
+
+    def test_advance_requires_decision_when_advancing_review_outcome_with_review_evidence(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            (run_dir / "review-output.md").write_text("# Review Output\n", encoding="utf-8")
+            state = minimal_state(status="reviewing")
+            state["track"] = "Standard"
+            state["current_workflow"] = "standard-code-change"
+            state["evidence"] = [
+                {
+                    "type": "review-output",
+                    "path": "review-output.md",
+                    "description": "Reviewer output without a decision.",
+                }
+            ]
+            write_state(run_dir, state)
+            before = (run_dir / "state.json").read_text(encoding="utf-8")
+
+            with self.assertRaises(cli.HarnessCliError) as raised:
+                cli.advance_run(run_dir, "reviewed", actor="codex", root=ROOT)
+            after = (run_dir / "state.json").read_text(encoding="utf-8")
+
+        self.assertIn("review-decision", str(raised.exception))
+        self.assertIn("required", str(raised.exception))
+        self.assertEqual(before, after)
+
+    def test_advance_allows_review_outcome_without_review_evidence(self):
+        # A run that has not indexed any review evidence (e.g. a Fast run that
+        # bypasses review, or a pre-review run) is not required to carry a
+        # review decision. This keeps historical runs valid.
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            state = minimal_state(status="verified")
+            state["track"] = "Fast"
+            state["current_workflow"] = "fast-doc-change"
+            write_state(run_dir, state)
+
+            advanced = cli.advance_run(run_dir, "reviewed", actor="codex", root=ROOT)
+
+        self.assertEqual(advanced["status"], "reviewed")
+
 
 if __name__ == "__main__":
     unittest.main()
