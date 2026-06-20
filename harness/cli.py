@@ -865,6 +865,105 @@ def index_evidence(
     return candidate
 
 
+TEMPLATE_DIR = ROOT / "harness" / "templates"
+
+
+def render_template(template_name: str, replacements: dict[str, str]) -> str:
+    text = (TEMPLATE_DIR / template_name).read_text(encoding="utf-8")
+    for key, value in replacements.items():
+        text = text.replace(key, value)
+    return text
+
+
+def frontmatter_text_for_run(
+    template_name: str,
+    *,
+    run_id: str,
+    track: str,
+    workflow: str,
+) -> str:
+    text = render_template(
+        template_name,
+        {
+            'run_id: ""': f"run_id: {run_id}",
+            "track: Standard": f"track: {track}",
+            "workflow: standard-doc-system-change": f"workflow: {workflow}",
+        },
+    )
+    return text
+
+
+def init_run(
+    run_dir: Path | str,
+    *,
+    run_id: str,
+    track: str,
+    workflow: str,
+    base_commit: str,
+    root: Path = ROOT,
+) -> dict[str, Any]:
+    resolved_run_dir = Path(run_dir)
+    if resolved_run_dir.exists():
+        raise HarnessCliError(f"run directory already exists: {resolved_run_dir}")
+
+    resolved_run_dir.mkdir(parents=True)
+    created_at = utc_now()
+    state = {
+        "run_id": run_id,
+        "harness_version": "0.2.0",
+        "state_schema_version": "0.2.0",
+        "status": "draft",
+        "track": track,
+        "current_workflow": workflow,
+        "owner": CODEX_ACTOR,
+        "base_commit": base_commit,
+        "created_at": created_at,
+        "updated_at": created_at,
+        "external_agents": [
+            {
+                "name": "claude-code",
+                "role": "reviewer",
+                "state_access": "none",
+                "status": "not_requested",
+            }
+        ],
+        "evidence": [
+            {
+                "type": "task",
+                "path": "task.md",
+                "description": "Task definition.",
+            },
+            {
+                "type": "triage",
+                "path": "triage.md",
+                "description": "Task triage.",
+            },
+            {
+                "type": "plan",
+                "path": "plan.md",
+                "description": "Implementation plan.",
+            },
+        ],
+    }
+
+    for template_name in ("task.md", "triage.md", "plan.md", "handoff.md"):
+        (resolved_run_dir / template_name).write_text(
+            frontmatter_text_for_run(
+                template_name,
+                run_id=run_id,
+                track=track,
+                workflow=workflow,
+            ),
+            encoding="utf-8",
+        )
+
+    write_json_file(state_path(resolved_run_dir), state)
+    validation = validate_run(resolved_run_dir, root=root)
+    if not validation.ok:
+        raise HarnessCliError(format_errors(validation.errors))
+    return state
+
+
 def run_generic_agent(
     run_dir: Path | str,
     job_id: str,
@@ -1183,6 +1282,16 @@ def build_parser() -> argparse.ArgumentParser:
     index_evidence_parser.add_argument("path")
     index_evidence_parser.add_argument("--description")
 
+    init_run_parser = subparsers.add_parser(
+        "init-run",
+        help="Create a draft Harness run with Phase 2 run documents.",
+    )
+    init_run_parser.add_argument("run_dir")
+    init_run_parser.add_argument("--run-id", required=True)
+    init_run_parser.add_argument("--track", required=True, choices=["Fast", "Standard", "Strict"])
+    init_run_parser.add_argument("--workflow", required=True)
+    init_run_parser.add_argument("--base-commit", default="HEAD")
+
     advance = subparsers.add_parser("advance", help="Advance a Harness run status.")
     advance.add_argument("run_dir")
     advance.add_argument("status")
@@ -1231,6 +1340,17 @@ def main(argv: list[str] | None = None) -> int:
                 description=args.description,
             )
             print(f"indexed evidence: {state['run_id']} {args.evidence_type} {args.path}")
+            return 0
+
+        if args.command == "init-run":
+            state = init_run(
+                args.run_dir,
+                run_id=args.run_id,
+                track=args.track,
+                workflow=args.workflow,
+                base_commit=args.base_commit,
+            )
+            print(f"initialized run: {state['run_id']} -> {state['status']}")
             return 0
 
         if args.command == "advance":

@@ -731,6 +731,82 @@ workflow: standard-doc-system-change
         self.assertEqual(before, after)
         self.assertIn("evidence path does not exist", result.stdout)
 
+    def test_init_run_creates_draft_run_with_phase2_documents(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            parent = Path(raw)
+            run_dir = parent / "phase2-created-run"
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "harness.cli",
+                    "init-run",
+                    str(run_dir),
+                    "--run-id",
+                    "phase2-created-run",
+                    "--track",
+                    "Standard",
+                    "--workflow",
+                    "standard-doc-system-change",
+                    "--base-commit",
+                    "HEAD",
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
+            validation = cli.validate_run(run_dir, root=ROOT)
+            documents_exist = {
+                name: (run_dir / name).exists()
+                for name in ("task.md", "triage.md", "plan.md", "handoff.md")
+            }
+
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertEqual(validation.errors, [])
+        self.assertEqual(state["status"], "draft")
+        self.assertEqual(state["run_id"], "phase2-created-run")
+        self.assertEqual(state["track"], "Standard")
+        self.assertEqual(state["current_workflow"], "standard-doc-system-change")
+        self.assertEqual(
+            [entry["type"] for entry in state["evidence"]],
+            ["task", "triage", "plan"],
+        )
+        self.assertTrue(documents_exist["task.md"])
+        self.assertTrue(documents_exist["triage.md"])
+        self.assertTrue(documents_exist["plan.md"])
+        self.assertTrue(documents_exist["handoff.md"])
+
+    def test_init_run_refuses_existing_directory(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw) / "existing"
+            run_dir.mkdir()
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "harness.cli",
+                    "init-run",
+                    str(run_dir),
+                    "--run-id",
+                    "existing",
+                    "--track",
+                    "Fast",
+                    "--workflow",
+                    "fast-doc-change",
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("run directory already exists", result.stdout)
+
     def test_module_entrypoint_validates_run_from_command_line(self):
         run_dir = ROOT / "harness" / "runs" / "example-fast-doc-change"
 
