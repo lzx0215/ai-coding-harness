@@ -215,5 +215,56 @@ scope:
         )
 
 
+class Phase2TemplateTest(unittest.TestCase):
+    def test_phase2_templates_have_frontmatter(self):
+        for template_name in ("task.md", "triage.md", "plan.md", "handoff.md"):
+            with self.subTest(template_name=template_name):
+                text = (ROOT / "harness" / "templates" / template_name).read_text(
+                    encoding="utf-8",
+                )
+                result = readiness.parse_frontmatter(text)
+
+                self.assertEqual(result.warnings, [])
+                self.assertIn("run_id", result.data)
+                self.assertIn("schema_version", result.data)
+
+    def test_phase2_templates_parse_inline_empty_arrays(self):
+        expected_arrays = {
+            "task.md": ("scope", "non_goals", "constraints"),
+            "triage.md": (
+                "strict_triggers",
+                "risk_reasons",
+                "verification_required",
+            ),
+            "plan.md": ("acceptance", "verification", "review_plan", "constraints"),
+            "handoff.md": (
+                "changed",
+                "verified",
+                "not_verified",
+                "residual_risks",
+                "memory_files",
+            ),
+        }
+
+        for template_name, field_names in expected_arrays.items():
+            with self.subTest(template_name=template_name):
+                text = (ROOT / "harness" / "templates" / template_name).read_text(
+                    encoding="utf-8",
+                )
+                result = readiness.parse_frontmatter(text)
+
+                for field_name in field_names:
+                    self.assertEqual(result.data[field_name], [])
+
+    def test_handoff_template_declares_phase3_memory_fields(self):
+        text = (ROOT / "harness" / "templates" / "handoff.md").read_text(
+            encoding="utf-8",
+        )
+        result = readiness.parse_frontmatter(text)
+
+        self.assertEqual(result.data["memory_update"], "none")
+        self.assertEqual(result.data["memory_files"], [])
+
+
 if __name__ == "__main__":
     unittest.main()
