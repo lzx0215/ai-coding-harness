@@ -190,8 +190,6 @@ class ReadinessCheckTest(unittest.TestCase):
                 "verification",
                 "review_plan",
                 "constraints",
-                "recovery_strategy",
-                "residual_risk_owner",
             ),
             "handoff.md": (
                 "schema_version",
@@ -231,6 +229,72 @@ workflow: standard-doc-system-change
                         f"{document_name} frontmatter missing field: {field_name}",
                         report.warnings,
                     )
+
+    def test_check_run_readiness_does_not_require_strict_plan_fields_for_standard_track(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            state = minimal_state()
+            write_state(run_dir, state)
+            (run_dir / "plan.md").write_text(
+                """---
+run_id: phase2-test
+schema_version: 0.1.0
+workflow: standard-doc-system-change
+acceptance: []
+verification: []
+review_plan: []
+constraints: []
+---
+
+# Plan
+""",
+                encoding="utf-8",
+            )
+
+            report = readiness.check_run_readiness(run_dir, state)
+
+        self.assertNotIn(
+            "plan.md frontmatter missing field: recovery_strategy",
+            report.warnings,
+        )
+        self.assertNotIn(
+            "plan.md frontmatter missing field: residual_risk_owner",
+            report.warnings,
+        )
+
+    def test_check_run_readiness_requires_strict_plan_fields_for_strict_track(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            state = minimal_state()
+            state["track"] = "Strict"
+            state["current_workflow"] = "strict-risk-change"
+            write_state(run_dir, state)
+            (run_dir / "plan.md").write_text(
+                """---
+run_id: phase2-test
+schema_version: 0.1.0
+workflow: strict-risk-change
+acceptance: []
+verification: []
+review_plan: []
+constraints: []
+---
+
+# Plan
+""",
+                encoding="utf-8",
+            )
+
+            report = readiness.check_run_readiness(run_dir, state)
+
+        self.assertIn(
+            "plan.md frontmatter missing field: recovery_strategy",
+            report.warnings,
+        )
+        self.assertIn(
+            "plan.md frontmatter missing field: residual_risk_owner",
+            report.warnings,
+        )
 
     def test_check_run_readiness_reports_missing_documents_without_mutation(self):
         with tempfile.TemporaryDirectory(dir=ROOT) as raw:

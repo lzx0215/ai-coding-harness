@@ -5,6 +5,10 @@
 - `README.md` - Chinese project overview, quick start, and current scaffold status.
 - `AGENTS.md` - Codex entrypoint and read order.
 
+## Current Status
+
+- Phase 2 run definition/evidence implementation is merged into local `master`: Markdown frontmatter readiness checks, `check-ready`, `index-evidence`, `init-run`, and Phase 2 run templates are available. `check-ready` remains advisory; `validate` remains authoritative for state and evidence validity.
+
 ## Specs
 
 - `docs/superpowers/specs/2026-06-18-codex-first-multi-agent-harness-design.md` - Codex-first Multi-Agent Harness v0.1 design.

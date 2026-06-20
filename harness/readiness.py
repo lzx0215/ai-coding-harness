@@ -36,8 +36,6 @@ REQUIRED_FRONTMATTER_FIELDS = {
         "verification",
         "review_plan",
         "constraints",
-        "recovery_strategy",
-        "residual_risk_owner",
     ),
     "handoff.md": (
         "run_id",
@@ -52,6 +50,7 @@ REQUIRED_FRONTMATTER_FIELDS = {
     ),
 }
 RECOMMENDED_FRONTMATTER_FIELDS: dict[str, tuple[str, ...]] = {}
+STRICT_PLAN_FRONTMATTER_FIELDS = ("recovery_strategy", "residual_risk_owner")
 
 
 @dataclass(frozen=True)
@@ -236,6 +235,11 @@ def validate_document_frontmatter(
     for field_name in RECOMMENDED_FRONTMATTER_FIELDS.get(document_name, ()):
         if field_name not in data:
             warnings.append(f"{document_name} frontmatter missing field: {field_name}")
+
+    if document_name == "plan.md" and state.get("track") == "Strict":
+        for field_name in STRICT_PLAN_FRONTMATTER_FIELDS:
+            if field_name not in data:
+                warnings.append(f"{document_name} frontmatter missing field: {field_name}")
 
     state_run_id = state.get("run_id")
     if data.get("run_id") != state_run_id:
