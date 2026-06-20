@@ -52,6 +52,33 @@ COMPLETION_REQUIRED_EVIDENCE_TYPES = frozenset({"verification", "handoff"})
 JOB_SCHEMA = ROOT / "harness" / "schemas" / "job.schema.json"
 AGGREGATION_SCHEMA = ROOT / "harness" / "schemas" / "aggregation.schema.json"
 AGENT_RESULT_SCHEMA = ROOT / "harness" / "schemas" / "agent-result.schema.json"
+REVIEW_DECISION_SCHEMA = ROOT / "harness" / "schemas" / "review-decision.schema.json"
+REVIEW_DECISION_FILENAME = "review-decision.json"
+REVIEW_DECISION_TARGETS = frozenset(
+    {
+        "reviewed",
+        "review_blocked",
+        "review_failed",
+        "review_timeout",
+        "review_schema_invalid",
+        "external_review_unavailable",
+        "risk_accepted",
+    }
+)
+# Evidence types that signal a review actually happened. When any of these are
+# indexed and a run advances to a REVIEW_DECISION_TARGETS state, an indexed
+# review-decision.json is required. Absence of all of these (e.g. a Fast run, or
+# a pre-review run) means no decision is required, which keeps historical runs
+# valid without migration.
+REVIEW_SIGNAL_EVIDENCE_TYPES = frozenset(
+    {
+        "review-input",
+        "review-output",
+        "review-evidence",
+        "review-raw-log",
+        "review",
+    }
+)
 TERMINAL_JOB_STATUSES = frozenset({"succeeded", "failed", "timeout", "cancelled"})
 AGGREGATION_JOB_BUCKETS = (
     "consumed_jobs",
@@ -198,6 +225,13 @@ def validate_state(
             root=root,
             run_dir=run_dir,
             indexed_jobs=indexed_jobs,
+        )
+    )
+    errors.extend(
+        validate_review_decision_evidence(
+            state,
+            root=root,
+            run_dir=run_dir,
         )
     )
     return errors
@@ -577,6 +611,148 @@ def validate_aggregation_against_jobs(
                 f"aggregation incomplete job {job_id} has terminal agent-job status "
                 f"{actual_status}",
             )
+
+    return errors
+
+
+def load_indexed_review_decision(
+    state: dict[str, Any],
+    *,
+    root: Path,
+    run_dir: Path,
+) -> tuple[dict[str, Any] | None, int, list[str]]:
+    """Return (decision_payload_or_None, evidence_index, errors) for the indexed
+    review-decision.json. Detection is by basename == review-decision.json among
+    review-evidence entries, matching the canonical path in the Phase 3 spec."""
+    errors: list[str] = []
+    state_run_id = state.get("run_id")
+    for index, evidence in evidence_items(state):
+        if evidence.get("type") != "review-evidence":
+            continue
+        raw_path = evidence.get("path")
+        if not isinstance(raw_path, str) or not raw_path.strip():
+            continue
+
+        candidate_path = first_existing_evidence_path(raw_path, root=root, run_dir=run_dir)
+        if candidate_path is None:
+            continue
+        if candidate_path.name != REVIEW_DECISION_FILENAME:
+            continue
+
+        decision, decision_errors = validate_json_artifact(
+            candidate_path,
+            REVIEW_DECISION_SCHEMA,
+            "review-decision",
+        )
+        errors.extend(f"evidence[{index}]: {error}" for error in decision_errors)
+        if decision is None:
+            return None, index, errors
+
+        if isinstance(state_run_id, str) and decision.get("run_id") != state_run_id:
+            errors.append(
+                f"evidence[{index}]: review-decision run_id {decision.get('run_id')} "
+                f"does not match state run_id {state_run_id}",
+            )
+
+        return decision, index, errors
+
+    return None, -1, errors
+
+
+def validate_review_decision_evidence(
+    state: dict[str, Any],
+    *,
+    root: Path,
+    run_dir: Path,
+) -> list[str]:
+    errors: list[str] = []
+    decision, index, load_errors = load_indexed_review_decision(
+        state,
+        root=root,
+        run_dir=run_dir,
+    )
+    errors.extend(load_errors)
+    if decision is None:
+        return errors
+
+    errors.extend(
+        validate_review_decision_semantics(
+            decision,
+            state,
+            index=index,
+            root=root,
+            run_dir=run_dir,
+        )
+    )
+    return errors
+
+
+def validate_review_decision_semantics(
+    decision: dict[str, Any],
+    state: dict[str, Any],
+    *,
+    index: int,
+    root: Path,
+    run_dir: Path,
+) -> list[str]:
+    errors: list[str] = []
+    severity = decision.get("severity_counts", {}) if isinstance(
+        decision.get("severity_counts"), dict
+    ) else {}
+    high_or_critical = (severity.get("high", 0) or 0) > 0 or (
+        severity.get("critical", 0) or 0
+    ) > 0
+
+    indexed_paths = {
+        evidence.get("path")
+        for _index, evidence in evidence_items(state)
+        if isinstance(evidence.get("path"), str) and evidence.get("path").strip()
+    }
+    evidence_types = {
+        evidence.get("type")
+        for _index, evidence in evidence_items(state)
+        if isinstance(evidence.get("type"), str)
+    }
+
+    recommended_status = decision.get("recommended_status")
+    disposition = decision.get("disposition")
+
+    if high_or_critical and recommended_status == "reviewed":
+        if not decision.get("resolved_findings") and not decision.get("accepted_risks"):
+            errors.append(
+                f"evidence[{index}]: review-decision cannot override a high or critical "
+                "finding without resolved_findings or accepted_risks",
+            )
+
+    if disposition == "waived" and "review-waiver" not in evidence_types:
+        errors.append(
+            f"evidence[{index}]: waived review-decision requires indexed review-waiver evidence",
+        )
+
+    if disposition == "risk-accepted" and "risk-acceptance" not in evidence_types:
+        errors.append(
+            f"evidence[{index}]: risk-accepted review-decision requires indexed "
+            "risk-acceptance evidence",
+        )
+
+    source_evidence = decision.get("source_evidence")
+    if isinstance(source_evidence, list):
+        for position, entry in enumerate(source_evidence):
+            if not isinstance(entry, dict):
+                continue
+            raw_path = entry.get("path")
+            if not isinstance(raw_path, str) or not raw_path.strip():
+                continue
+            if raw_path in indexed_paths:
+                continue
+            # Not indexed, so it must at least be indexable: the artifact must
+            # exist within the repository or the run directory.
+            candidate = first_existing_evidence_path(raw_path, root=root, run_dir=run_dir)
+            if candidate is None:
+                errors.append(
+                    f"evidence[{index}]: review-decision source_evidence[{position}] "
+                    f"path {raw_path} is not indexed and does not exist",
+                )
 
     return errors
 

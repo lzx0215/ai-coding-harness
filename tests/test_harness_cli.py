@@ -1002,6 +1002,406 @@ memory_files: []
         self.assertEqual(saved["status"], "triaged")
         self.assertIn("advanced: test-run -> triaged", result.stdout)
 
+    def test_validate_accepts_indexed_review_decision_as_review_evidence(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            reviews_dir = run_dir / "reviews"
+            reviews_dir.mkdir()
+            # Make the referenced source_evidence path indexable (it exists).
+            (reviews_dir / "claude-review.json").write_text(
+                json.dumps({"status": "passed"}),
+                encoding="utf-8",
+            )
+            decision_path = reviews_dir / "review-decision.json"
+            decision_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "0.1.0",
+                        "run_id": "test-run",
+                        "generated_at": "2026-06-20T00:00:00Z",
+                        "disposition": "passed",
+                        "recommended_status": "reviewed",
+                        "decision_owner": "codex",
+                        "source_evidence": [
+                            {"type": "review-output", "path": "reviews/claude-review.json"}
+                        ],
+                        "severity_counts": {
+                            "critical": 0,
+                            "high": 0,
+                            "medium": 0,
+                            "low": 0,
+                            "info": 0,
+                        },
+                        "resolved_findings": [],
+                        "accepted_risks": [],
+                        "not_tested": [],
+                        "residual_risks": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            state = minimal_state(status="reviewing")
+            state["evidence"] = [
+                {
+                    "type": "review-evidence",
+                    "path": "reviews/review-decision.json",
+                    "description": "Review decision artifact.",
+                }
+            ]
+            write_state(run_dir, state)
+
+            result = cli.validate_run(run_dir, root=ROOT)
+
+        self.assertEqual(result.errors, [], result.errors)
+
+    def test_validate_rejects_indexed_review_decision_with_unknown_disposition(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            reviews_dir = run_dir / "reviews"
+            reviews_dir.mkdir()
+            decision_path = reviews_dir / "review-decision.json"
+            decision_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "0.1.0",
+                        "run_id": "test-run",
+                        "generated_at": "2026-06-20T00:00:00Z",
+                        "disposition": "approved",
+                        "recommended_status": "reviewed",
+                        "decision_owner": "codex",
+                        "source_evidence": [],
+                        "severity_counts": {
+                            "critical": 0,
+                            "high": 0,
+                            "medium": 0,
+                            "low": 0,
+                            "info": 0,
+                        },
+                        "resolved_findings": [],
+                        "accepted_risks": [],
+                        "not_tested": [],
+                        "residual_risks": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            state = minimal_state(status="reviewing")
+            state["evidence"] = [
+                {
+                    "type": "review-evidence",
+                    "path": "reviews/review-decision.json",
+                    "description": "Review decision artifact.",
+                }
+            ]
+            write_state(run_dir, state)
+
+            result = cli.validate_run(run_dir, root=ROOT)
+
+        self.assertTrue(
+            any("review-decision" in error and "schema error" in error for error in result.errors),
+            result.errors,
+        )
+
+    def test_validate_rejects_review_decision_run_id_mismatch(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            reviews_dir = run_dir / "reviews"
+            reviews_dir.mkdir()
+            decision_path = reviews_dir / "review-decision.json"
+            decision_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "0.1.0",
+                        "run_id": "another-run",
+                        "generated_at": "2026-06-20T00:00:00Z",
+                        "disposition": "passed",
+                        "recommended_status": "reviewed",
+                        "decision_owner": "codex",
+                        "source_evidence": [],
+                        "severity_counts": {
+                            "critical": 0,
+                            "high": 0,
+                            "medium": 0,
+                            "low": 0,
+                            "info": 0,
+                        },
+                        "resolved_findings": [],
+                        "accepted_risks": [],
+                        "not_tested": [],
+                        "residual_risks": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            state = minimal_state(status="reviewing")
+            state["evidence"] = [
+                {
+                    "type": "review-evidence",
+                    "path": "reviews/review-decision.json",
+                    "description": "Review decision artifact.",
+                }
+            ]
+            write_state(run_dir, state)
+
+            result = cli.validate_run(run_dir, root=ROOT)
+
+        self.assertTrue(
+            any("does not match state run_id" in error for error in result.errors),
+            result.errors,
+        )
+
+    def test_validate_rejects_high_finding_reviewed_without_resolution(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            reviews_dir = run_dir / "reviews"
+            reviews_dir.mkdir()
+            decision_path = reviews_dir / "review-decision.json"
+            decision_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "0.1.0",
+                        "run_id": "test-run",
+                        "generated_at": "2026-06-20T00:00:00Z",
+                        "disposition": "findings-triaged",
+                        "recommended_status": "reviewed",
+                        "decision_owner": "codex",
+                        "source_evidence": [],
+                        "severity_counts": {
+                            "critical": 0,
+                            "high": 1,
+                            "medium": 0,
+                            "low": 0,
+                            "info": 0,
+                        },
+                        "resolved_findings": [],
+                        "accepted_risks": [],
+                        "not_tested": [],
+                        "residual_risks": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            state = minimal_state(status="reviewing")
+            state["evidence"] = [
+                {
+                    "type": "review-evidence",
+                    "path": "reviews/review-decision.json",
+                    "description": "Review decision artifact.",
+                }
+            ]
+            write_state(run_dir, state)
+
+            result = cli.validate_run(run_dir, root=ROOT)
+
+        self.assertTrue(
+            any("high or critical finding" in error for error in result.errors),
+            result.errors,
+        )
+
+    def test_validate_allows_high_finding_blocked_decision(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            reviews_dir = run_dir / "reviews"
+            reviews_dir.mkdir()
+            decision_path = reviews_dir / "review-decision.json"
+            decision_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "0.1.0",
+                        "run_id": "test-run",
+                        "generated_at": "2026-06-20T00:00:00Z",
+                        "disposition": "blocked",
+                        "recommended_status": "review_blocked",
+                        "decision_owner": "codex",
+                        "source_evidence": [],
+                        "severity_counts": {
+                            "critical": 1,
+                            "high": 0,
+                            "medium": 0,
+                            "low": 0,
+                            "info": 0,
+                        },
+                        "resolved_findings": [],
+                        "accepted_risks": [],
+                        "not_tested": [],
+                        "residual_risks": ["Critical finding blocks review."],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            state = minimal_state(status="reviewing")
+            state["evidence"] = [
+                {
+                    "type": "review-evidence",
+                    "path": "reviews/review-decision.json",
+                    "description": "Review decision artifact.",
+                }
+            ]
+            write_state(run_dir, state)
+
+            result = cli.validate_run(run_dir, root=ROOT)
+
+        self.assertEqual(result.errors, [], result.errors)
+
+    def test_validate_allows_high_finding_reviewed_with_risk_acceptance(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            reviews_dir = run_dir / "reviews"
+            reviews_dir.mkdir()
+            decision_path = reviews_dir / "review-decision.json"
+            decision_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "0.1.0",
+                        "run_id": "test-run",
+                        "generated_at": "2026-06-20T00:00:00Z",
+                        "disposition": "risk-accepted",
+                        "recommended_status": "risk_accepted",
+                        "decision_owner": "codex",
+                        "source_evidence": [],
+                        "severity_counts": {
+                            "critical": 0,
+                            "high": 1,
+                            "medium": 0,
+                            "low": 0,
+                            "info": 0,
+                        },
+                        "resolved_findings": [],
+                        "accepted_risks": [
+                            {"risk": "High finding accepted.", "evidence": "risk-acceptance.md"}
+                        ],
+                        "not_tested": [],
+                        "residual_risks": ["High finding accepted as risk."],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (run_dir / "risk-acceptance.md").write_text("# Risk Acceptance\n", encoding="utf-8")
+            state = minimal_state(status="external_review_unavailable")
+            state["track"] = "Standard"
+            state["current_workflow"] = "standard-code-change"
+            state["evidence"] = [
+                {
+                    "type": "review-evidence",
+                    "path": "reviews/review-decision.json",
+                    "description": "Review decision artifact.",
+                },
+                {
+                    "type": "risk-acceptance",
+                    "path": "risk-acceptance.md",
+                    "description": "Risk acceptance evidence.",
+                },
+            ]
+            write_state(run_dir, state)
+
+            result = cli.validate_run(run_dir, root=ROOT)
+
+        self.assertEqual(result.errors, [], result.errors)
+
+    def test_validate_rejects_waived_decision_without_review_waiver_evidence(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            reviews_dir = run_dir / "reviews"
+            reviews_dir.mkdir()
+            decision_path = reviews_dir / "review-decision.json"
+            decision_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "0.1.0",
+                        "run_id": "test-run",
+                        "generated_at": "2026-06-20T00:00:00Z",
+                        "disposition": "waived",
+                        "recommended_status": "reviewed",
+                        "decision_owner": "codex",
+                        "source_evidence": [],
+                        "severity_counts": {
+                            "critical": 0,
+                            "high": 0,
+                            "medium": 0,
+                            "low": 0,
+                            "info": 0,
+                        },
+                        "resolved_findings": [],
+                        "accepted_risks": [],
+                        "not_tested": [],
+                        "residual_risks": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            state = minimal_state(status="reviewing")
+            state["evidence"] = [
+                {
+                    "type": "review-evidence",
+                    "path": "reviews/review-decision.json",
+                    "description": "Review decision artifact.",
+                }
+            ]
+            write_state(run_dir, state)
+
+            result = cli.validate_run(run_dir, root=ROOT)
+
+        self.assertTrue(
+            any("review-waiver" in error for error in result.errors),
+            result.errors,
+        )
+
+    def test_validate_rejects_review_decision_with_non_indexable_source_evidence(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            reviews_dir = run_dir / "reviews"
+            reviews_dir.mkdir()
+            decision_path = reviews_dir / "review-decision.json"
+            decision_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "0.1.0",
+                        "run_id": "test-run",
+                        "generated_at": "2026-06-20T00:00:00Z",
+                        "disposition": "passed",
+                        "recommended_status": "reviewed",
+                        "decision_owner": "codex",
+                        "source_evidence": [
+                            {
+                                "type": "review-output",
+                                "path": "reviews/never-created.json",
+                            }
+                        ],
+                        "severity_counts": {
+                            "critical": 0,
+                            "high": 0,
+                            "medium": 0,
+                            "low": 0,
+                            "info": 0,
+                        },
+                        "resolved_findings": [],
+                        "accepted_risks": [],
+                        "not_tested": [],
+                        "residual_risks": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            state = minimal_state(status="reviewing")
+            state["evidence"] = [
+                {
+                    "type": "review-evidence",
+                    "path": "reviews/review-decision.json",
+                    "description": "Review decision artifact.",
+                }
+            ]
+            write_state(run_dir, state)
+
+            result = cli.validate_run(run_dir, root=ROOT)
+
+        self.assertTrue(
+            any(
+                "source_evidence" in error and "does not exist" in error
+                for error in result.errors
+            ),
+            result.errors,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
