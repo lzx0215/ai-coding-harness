@@ -66,8 +66,8 @@ The current gap is that Codex's review triage decision is not a first-class arti
 | Add new Harness states for review decision outcomes | Direct but duplicates existing exceptional states and makes the state machine harder to maintain. | Rejected. |
 | Store review decision only in free-form handoff text | Readable, but hard to validate and hard to resume from. | Rejected. |
 | Add `review-decision.json` with a disposition field that maps to existing states | Structured, auditable, and preserves the state authority boundary. | Chosen. |
-| Add a new `review-decision` evidence type immediately | More explicit, but expands the evidence vocabulary before implementation proves it is necessary. | Deferred. |
-| Index `review-decision.json` as `review-evidence` | Reuses existing vocabulary and keeps Phase 3 focused. | Chosen for the first slice. |
+| Add a new `review-decision` evidence type in Phase 3 | More explicit, but expands the evidence vocabulary without adding a new authority boundary. | Rejected for Phase 3. |
+| Index `review-decision.json` as `review-evidence` | Reuses the existing vocabulary while the artifact path and schema define the specific contract. | Chosen. |
 
 ## Review Disposition Boundary
 
@@ -80,6 +80,7 @@ passed
 findings-triaged
 waived
 unavailable
+process-failed
 risk-accepted
 blocked
 ```
@@ -92,16 +93,27 @@ Disposition-to-Harness mapping:
 | `findings-triaged` | Review findings were triaged; target state is `reviewed` when no unresolved high or critical findings remain, otherwise `review_blocked`. |
 | `waived` | `verified -> reviewed` plus indexed `review-waiver` evidence. |
 | `unavailable` | Adapter `not_available` mapped to `external_review_unavailable`. |
+| `process-failed` | Adapter `failed`, `timeout`, or `schema_invalid` mapped to `review_failed`, `review_timeout`, or `review_schema_invalid`. |
 | `risk-accepted` | `risk_accepted` plus indexed `risk-acceptance` evidence. |
 | `blocked` | `review_blocked`. |
 
-The disposition record may recommend a target Harness state, but it must not mutate state. Codex still advances the run through `advance` if a transition is warranted.
+The disposition record includes `recommended_status`, but it must not mutate state. Codex still advances the run through `advance` if a transition is warranted.
 
 `unavailable` must not collapse all review process failures into one category. Existing adapter statuses still map to their existing Harness states: `failed -> review_failed`, `timeout -> review_timeout`, and `schema_invalid -> review_schema_invalid`. Codex may later make a decision from those states, but it must not relabel them as reviewer unavailability unless the adapter status is actually `not_available`.
 
 ## Review Decision Contract
 
-`review-decision.json` is a new structured artifact. It should be indexed as `review-evidence` unless a later phase deliberately adds a dedicated evidence type to the controlled vocabulary.
+`review-decision.json` is a new structured artifact. It is indexed as `review-evidence`; Phase 3 does not add a dedicated `review-decision` evidence type.
+
+Phase 3 implementation must add `harness/schemas/review-decision.schema.json` before any command or closure check claims support for review decisions. The schema is part of the Phase 3 core contract, not optional follow-up work.
+
+The canonical artifact path is:
+
+```text
+harness/runs/<run-id>/reviews/review-decision.json
+```
+
+When that path is indexed as `review-evidence`, validation must load and validate it against `harness/schemas/review-decision.schema.json`. Historical runs without `review-decision.json` remain valid.
 
 Minimal shape:
 
@@ -156,8 +168,10 @@ Rules:
 - `source_evidence[]` paths must point to indexed or indexable review artifacts.
 - `risk-accepted` disposition requires corresponding user risk acceptance evidence before completion.
 - `waived` disposition requires `review-waiver` evidence.
+- `process-failed` disposition must recommend one of `review_failed`, `review_timeout`, or `review_schema_invalid`.
 - `blocked` disposition must recommend `review_blocked`.
 - A decision record cannot override a high or critical finding without either resolved finding evidence or explicit risk acceptance.
+- When Codex advances a run based on an indexed `review-decision.json`, the requested `advance` target must equal `recommended_status`. A mismatch is an error, not a warning.
 
 ## Review Handling Flow
 
@@ -212,6 +226,16 @@ reviewing -> external_review_unavailable
 ```
 
 Standard tasks may continue only through risk acceptance when allowed by Phase 1 policy. Strict tasks stop for user decision unless the user explicitly approves a risk acceptance path.
+
+Review process failed:
+
+```text
+reviewing -> review_failed
+reviewing -> review_timeout
+reviewing -> review_schema_invalid
+```
+
+These states use `review-decision.json` with `disposition = "process-failed"` when Codex records how it handled the failed review process. They do not count as reviewed completion evidence. Follow-up handling must use the existing transition policy, retry rules, or user decision path.
 
 ## Handoff Closure Semantics
 
@@ -286,19 +310,23 @@ memory_update: deferred
 memory_files: []
 ```
 
-Phase 3 does not add a new memory evidence type in the first slice. Memory file changes are audited through the normal diff and handoff evidence.
+Phase 3 does not add a new memory evidence type. Memory file changes are audited through the normal diff and handoff evidence.
 
 ## Error Handling
 
 If `review-decision.json` is missing when review handling is required, Codex must not claim review closure.
 
-If `review-decision.json` has an unknown disposition, validation must reject the artifact once the schema is implemented.
+If `review-decision.json` has an unknown disposition, validation must reject the artifact.
 
-If the decision recommends a Harness state that is inconsistent with the disposition, validation must reject the artifact once semantic validation is implemented.
+If the decision recommends a Harness state that is inconsistent with the disposition, validation must reject the artifact.
+
+If Codex calls `advance` to a review-related target state that differs from the indexed `review-decision.json.recommended_status`, `advance` must fail before writing `state.json`.
 
 If review output and review decision disagree, Codex must treat the run as needing user decision or review triage. It must not silently choose the more favorable outcome.
 
-If memory update is marked `updated` but `memory_files` is empty, closure checks should warn or fail according to the implemented warning/error policy.
+If `memory_update` is `updated` but `memory_files` is empty, closure checks must fail before completion. It is a claim without backing evidence.
+
+If `memory_update` is `none` or `deferred` while `memory_files` is non-empty, closure checks should warn because the declaration and listed files disagree. If any listed memory file does not exist, closure checks must fail.
 
 ## Verification Strategy
 
@@ -308,12 +336,15 @@ Unit tests should cover:
 - The schema rejects unknown dispositions.
 - The schema rejects unknown `recommended_status` values.
 - `blocked` disposition requires `recommended_status = "review_blocked"`.
+- `process-failed` disposition requires `recommended_status` to be one of `review_failed`, `review_timeout`, or `review_schema_invalid`.
 - `risk-accepted` disposition requires non-empty accepted risk or risk acceptance reference.
 - `waived` disposition requires a waiver reference.
+- `advance` rejects review-related target states that conflict with indexed `review-decision.json.recommended_status`.
 - Review disposition values are not added to the Harness state schema.
 - Historical runs continue to validate without `review-decision.json`.
 - Handoff frontmatter missing in historical runs is warning-level, not error-level.
 - Handoff closure checks require changed, verified, not verified, residual risks, and next step for new runs.
+- Handoff closure checks fail when `memory_update = "updated"` and `memory_files` is empty.
 
 Repository-level verification should run:
 
@@ -328,9 +359,13 @@ python -m harness.cli validate harness/runs/example-fast-doc-change
 - Review disposition is documented as a decision field, not state.
 - Disposition values map to existing Harness states and evidence.
 - `review-decision.json` has a JSON schema contract.
-- `review-decision.json` is indexed as `review-evidence` in the first slice.
+- Phase 3 implementation creates `harness/schemas/review-decision.schema.json`.
+- `review-decision.json` is indexed as `review-evidence`.
 - Review waiver and risk acceptance reuse existing Phase 1 evidence contracts.
+- Review process failures use `process-failed` disposition and existing process failure states.
 - High or critical unresolved findings cannot be silently treated as reviewed.
+- Review-related `advance` targets must match indexed `review-decision.json.recommended_status`.
 - Handoff closure fields are defined.
+- `memory_update = "updated"` requires at least one `memory_files` entry before completion.
 - Memory closure rules distinguish durable memory from run-local detail.
 - Historical runs remain valid without migration.

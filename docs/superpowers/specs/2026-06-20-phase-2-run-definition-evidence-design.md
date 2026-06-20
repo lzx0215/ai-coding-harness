@@ -91,6 +91,8 @@ Phase 2 helper commands are convenience commands only. They do not replace `vali
 
 If Phase 2 or a later phase adds a hard gate for transitions such as `draft -> triaged` or `triaged -> planned`, the gate must be implemented inside `advance` as a `validate_stage_gate`-style check beside `validate_completion_evidence`. A helper command cannot be the gate.
 
+Frontmatter checks are readiness checks, not evidence validity checks. Phase 2 `validate` does not parse Markdown frontmatter for fatal pass/fail decisions. The first implementation must put frontmatter parsing and document-structure checks behind `check-ready` and any future `advance` stage gate. If `validate` later prints frontmatter warnings, those warnings must be sourced from the same readiness checker and must not change `validate`'s error authority over state schema, evidence types, evidence paths, and artifact schemas.
+
 ## Markdown Frontmatter Contract
 
 Human-authored run documents use this shape:
@@ -108,7 +110,14 @@ Human-authored body.
 
 The frontmatter is for stable machine-readable fields. The Markdown body remains the audit-friendly human record.
 
-Missing frontmatter in historical run records is a validation warning, not an error. Missing frontmatter in newly generated templates should be avoided, but Phase 2 does not rewrite historical runs.
+Missing frontmatter in historical run records is a readiness warning, not an error. Missing frontmatter in newly generated templates should be avoided, but Phase 2 does not rewrite historical runs.
+
+Phase 2 implementation must use a Harness-owned frontmatter parser for a constrained YAML subset:
+
+- The frontmatter block must start at the first byte of the Markdown file.
+- The block is delimited by `---` lines.
+- Supported values are strings, booleans, `null`, arrays of strings, and simple string-keyed maps used by the templates.
+- Unsupported YAML features are reported as readiness warnings unless a future `advance` stage gate makes the field mandatory for a specific transition.
 
 ### `task.md`
 
@@ -214,6 +223,7 @@ Rules:
 - `verified` summarizes verification evidence; it does not replace the `verification` evidence type.
 - `memory_update` may be `none`, `updated`, or `deferred`.
 - Phase 3 decides how handoff content is checked before completion.
+- These fields are recommended by Phase 2 for document shape and required before completion by Phase 3 closure rules.
 
 ## Helper Command Designs
 
@@ -271,9 +281,11 @@ Forbidden behavior:
 - Advance state.
 - Act as a hard transition gate.
 
-## Warning Model
+## Readiness Warning Model
 
-Phase 2 introduces the concept of validation warnings for advisory document structure checks.
+Phase 2 introduces readiness warnings for advisory document structure checks.
+
+`check-ready` is the required reporter for readiness warnings. `validate` remains focused on state and evidence validity. If a future implementation adds a non-fatal warning channel to `validate`, it must not make Markdown frontmatter part of the `validate` error contract.
 
 Warnings may include:
 
@@ -289,7 +301,7 @@ Errors remain reserved for invalid state schema, invalid evidence types, unsafe 
 Unit tests should cover:
 
 - Existing historical runs continue to validate.
-- Missing frontmatter in historical Markdown artifacts produces warnings, not errors.
+- `check-ready` reports missing frontmatter in historical Markdown artifacts as warnings, not errors.
 - Generated templates include recommended frontmatter.
 - `index-evidence` delegates to validation and rejects unknown evidence types.
 - `index-evidence` delegates to validation and rejects unsafe or missing paths.
@@ -318,6 +330,7 @@ python -m harness.cli validate harness/runs/example-fast-doc-change
 - Historical runs remain valid without migration.
 - Missing historical frontmatter is warning-level, not error-level.
 - `validate` remains the authority for evidence validity.
+- Frontmatter readiness warnings do not redefine `validate`'s fatal error authority.
 - `advance` remains the authority for state transitions.
 - `index-evidence` does not define evidence validity.
 - `check-ready` is explicitly predictive and non-mutating.
