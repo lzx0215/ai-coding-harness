@@ -260,4 +260,16 @@ def validate_document_frontmatter(
             f"does not match state workflow {state.get('current_workflow')}"
         )
 
+    if document_name == "handoff.md":
+        memory_update = data.get("memory_update")
+        memory_files = data.get("memory_files")
+        if (
+            memory_update in {None, "none", "deferred"}
+            and isinstance(memory_files, list)
+            and memory_files
+        ):
+            warnings.append(
+                "handoff.md frontmatter memory_files declared without memory_update",
+            )
+
     return warnings
