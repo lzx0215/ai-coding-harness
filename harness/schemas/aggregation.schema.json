@@ -71,6 +71,7 @@
       "items": { "type": "string", "minLength": 1 }
     },
     "recommended_transition": {
+      "type": ["string", "null"],
       "enum": [
         null,
         "reviewed",

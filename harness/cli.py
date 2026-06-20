@@ -297,6 +297,15 @@ def validate_aggregation_semantics(aggregation: dict[str, Any]) -> list[str]:
                 f"job id {job_id} is both incomplete and terminal ({terminal_bucket})",
             )
 
+    classified_jobs: set[str] = set()
+    for bucket in TERMINAL_AGGREGATION_JOB_BUCKETS + ("incomplete_jobs",):
+        classified_jobs.update(bucket_values[bucket])
+    for job_id in sorted(consumed_jobs - classified_jobs):
+        errors.append(
+            "aggregation semantic error at consumed_jobs: "
+            f"job id {job_id} has no terminal or incomplete classification",
+        )
+
     return errors
 
 

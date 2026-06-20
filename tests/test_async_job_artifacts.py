@@ -231,6 +231,26 @@ class AsyncJobEvidenceValidationTest(unittest.TestCase):
 
         self.assertEqual(result.errors, [])
 
+    def test_validate_aggregation_evidence_does_not_mutate_state_status(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            aggregation_file = run_dir / "jobs" / "aggregation.json"
+            write_json(aggregation_file, minimal_aggregation())
+            state = minimal_state(status="verified")
+            state["evidence"] = [
+                {
+                    "type": "aggregation",
+                    "path": str(aggregation_file.relative_to(ROOT)),
+                }
+            ]
+            write_json(run_dir / "state.json", state)
+
+            result = cli.validate_run(run_dir, root=ROOT)
+            saved = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(result.errors, [])
+        self.assertEqual(saved["status"], "verified")
+
     def test_validate_rejects_invalid_aggregation_evidence(self):
         with tempfile.TemporaryDirectory(dir=ROOT) as raw:
             run_dir = Path(raw)
@@ -327,12 +347,12 @@ class AsyncJobEvidenceValidationTest(unittest.TestCase):
             result.errors,
         )
 
-    def test_validate_rejects_duplicate_aggregation_job_ids(self):
+    def test_validate_rejects_consumed_aggregation_job_without_classification(self):
         with tempfile.TemporaryDirectory(dir=ROOT) as raw:
             run_dir = Path(raw)
             aggregation_file = run_dir / "jobs" / "aggregation.json"
             aggregation = minimal_aggregation()
-            aggregation["consumed_jobs"] = ["claude-review-001", "claude-review-001"]
+            aggregation["consumed_jobs"] = ["claude-review-001", "claude-review-002"]
             write_json(aggregation_file, aggregation)
             state = minimal_state()
             state["evidence"] = [
@@ -346,9 +366,35 @@ class AsyncJobEvidenceValidationTest(unittest.TestCase):
             result = cli.validate_run(run_dir, root=ROOT)
 
         self.assertTrue(
-            any("duplicate job id" in error for error in result.errors),
+            any("has no terminal or incomplete classification" in error for error in result.errors),
             result.errors,
         )
+
+    def test_validate_rejects_duplicate_aggregation_job_ids(self):
+        for bucket in cli.AGGREGATION_JOB_BUCKETS:
+            with self.subTest(bucket=bucket):
+                with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+                    run_dir = Path(raw)
+                    aggregation_file = run_dir / "jobs" / "aggregation.json"
+                    aggregation = minimal_aggregation()
+                    aggregation["consumed_jobs"] = ["claude-review-001"]
+                    aggregation[bucket] = ["claude-review-001", "claude-review-001"]
+                    write_json(aggregation_file, aggregation)
+                    state = minimal_state()
+                    state["evidence"] = [
+                        {
+                            "type": "aggregation",
+                            "path": str(aggregation_file.relative_to(ROOT)),
+                        }
+                    ]
+                    write_json(run_dir / "state.json", state)
+
+                    result = cli.validate_run(run_dir, root=ROOT)
+
+                self.assertTrue(
+                    any("duplicate job id" in error for error in result.errors),
+                    result.errors,
+                )
 
     def test_validate_does_not_schema_validate_non_aggregation_evidence(self):
         with tempfile.TemporaryDirectory(dir=ROOT) as raw:
