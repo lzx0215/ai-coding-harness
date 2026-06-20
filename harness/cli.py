@@ -3,6 +3,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import signal
+import subprocess
 import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -15,6 +17,7 @@ from jsonschema import Draft202012Validator
 ROOT = Path(__file__).resolve().parents[1]
 STATE_SCHEMA = ROOT / "harness" / "schemas" / "state.schema.json"
 CODEX_ACTOR = "codex"
+GENERIC_ADAPTER_VERSION = "0.1.0"
 EVIDENCE_TYPES = frozenset(
     {
         "task",
@@ -45,6 +48,7 @@ REVIEW_COMPLETION_EVIDENCE_TYPES = frozenset(
 COMPLETION_REQUIRED_EVIDENCE_TYPES = frozenset({"verification", "handoff"})
 JOB_SCHEMA = ROOT / "harness" / "schemas" / "job.schema.json"
 AGGREGATION_SCHEMA = ROOT / "harness" / "schemas" / "aggregation.schema.json"
+AGENT_RESULT_SCHEMA = ROOT / "harness" / "schemas" / "agent-result.schema.json"
 TERMINAL_JOB_STATUSES = frozenset({"succeeded", "failed", "timeout", "cancelled"})
 AGGREGATION_JOB_BUCKETS = (
     "consumed_jobs",
@@ -60,6 +64,12 @@ TERMINAL_AGGREGATION_JOB_BUCKETS = (
     "timeout_jobs",
     "cancelled_jobs",
 )
+AGGREGATION_BUCKET_STATUSES = {
+    "succeeded_jobs": "succeeded",
+    "failed_jobs": "failed",
+    "timeout_jobs": "timeout",
+    "cancelled_jobs": "cancelled",
+}
 
 NORMAL_TRANSITIONS = {
     "draft": {"triaged"},
@@ -105,6 +115,13 @@ class ValidationResult:
     @property
     def ok(self) -> bool:
         return not self.errors
+
+
+@dataclass(frozen=True)
+class IndexedJob:
+    evidence_index: int
+    path: Path
+    payload: dict[str, Any]
 
 
 def load_json(path: Path) -> dict[str, Any]:
@@ -155,8 +172,29 @@ def validate_state(
 
     errors.extend(validate_evidence_types(state))
     errors.extend(validate_evidence_paths(state, root=root, run_dir=run_dir))
-    errors.extend(validate_job_evidence(state, root=root, run_dir=run_dir))
-    errors.extend(validate_aggregation_evidence(state, root=root, run_dir=run_dir))
+    indexed_jobs, job_errors = load_indexed_job_evidence(
+        state,
+        root=root,
+        run_dir=run_dir,
+    )
+    errors.extend(job_errors)
+    errors.extend(validate_indexed_job_evidence(state, indexed_jobs))
+    errors.extend(
+        validate_agent_result_evidence(
+            state,
+            root=root,
+            run_dir=run_dir,
+            indexed_jobs=indexed_jobs,
+        )
+    )
+    errors.extend(
+        validate_aggregation_evidence(
+            state,
+            root=root,
+            run_dir=run_dir,
+            indexed_jobs=indexed_jobs,
+        )
+    )
     return errors
 
 
@@ -189,7 +227,19 @@ def validate_job_evidence(
     root: Path,
     run_dir: Path,
 ) -> list[str]:
+    indexed_jobs, errors = load_indexed_job_evidence(state, root=root, run_dir=run_dir)
+    errors.extend(validate_indexed_job_evidence(state, indexed_jobs))
+    return errors
+
+
+def load_indexed_job_evidence(
+    state: dict[str, Any],
+    *,
+    root: Path,
+    run_dir: Path,
+) -> tuple[dict[str, IndexedJob], list[str]]:
     errors: list[str] = []
+    indexed_jobs: dict[str, IndexedJob] = {}
     for index, evidence in evidence_items(state):
         evidence_type = evidence.get("type")
         if evidence_type != "agent-job":
@@ -208,11 +258,171 @@ def validate_job_evidence(
         if job is None:
             continue
 
+        job_id = job.get("job_id")
+        if not isinstance(job_id, str):
+            continue
+        if job_id in indexed_jobs:
+            errors.append(
+                f"duplicate agent-job evidence for job_id {job_id} at evidence[{index}]",
+            )
+            continue
+        indexed_jobs[job_id] = IndexedJob(index, job_path, job)
+
+    return indexed_jobs, errors
+
+
+def validate_indexed_job_evidence(
+    state: dict[str, Any],
+    indexed_jobs: dict[str, IndexedJob],
+) -> list[str]:
+    errors: list[str] = []
+    state_run_id = state.get("run_id")
+    for indexed_job in indexed_jobs.values():
+        job = indexed_job.payload
+        index = indexed_job.evidence_index
+        job_run_id = job.get("run_id")
+        if isinstance(state_run_id, str) and job_run_id != state_run_id:
+            errors.append(
+                f"evidence[{index}]: job run_id {job_run_id} "
+                f"does not match state run_id {state_run_id}",
+            )
+
         status = job.get("status")
         if status not in TERMINAL_JOB_STATUSES:
             errors.append(
                 f"non-terminal job cannot be consumed at evidence[{index}]: {status}",
             )
+
+        timestamp_errors = validate_job_timestamp_semantics(job)
+        errors.extend(f"evidence[{index}]: {error}" for error in timestamp_errors)
+
+    return errors
+
+
+def validate_job_timestamp_semantics(job: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
+    status = job.get("status")
+    created_at = job.get("created_at")
+    started_at = job.get("started_at")
+    completed_at = job.get("completed_at")
+
+    if created_at is None:
+        errors.append("job requires created_at")
+    elif parse_datetime(created_at) is None:
+        errors.append("created_at must be a valid ISO 8601 timestamp")
+    if started_at is not None and parse_datetime(started_at) is None:
+        errors.append("started_at must be a valid ISO 8601 timestamp")
+    if completed_at is not None and parse_datetime(completed_at) is None:
+        errors.append("completed_at must be a valid ISO 8601 timestamp")
+
+    if status == "queued":
+        if started_at is not None:
+            errors.append("queued job must not have started_at")
+        if completed_at is not None:
+            errors.append("queued job must not have completed_at")
+    elif status == "running":
+        if not started_at:
+            errors.append("running job requires started_at")
+        if completed_at is not None:
+            errors.append("running job must not have completed_at")
+    elif status in TERMINAL_JOB_STATUSES:
+        if not started_at:
+            errors.append("terminal job requires started_at")
+        if not completed_at:
+            errors.append("terminal job requires completed_at")
+
+    created_dt = parse_datetime(created_at)
+    started_dt = parse_datetime(started_at)
+    completed_dt = parse_datetime(completed_at)
+    if created_dt is not None and started_dt is not None and started_dt < created_dt:
+        errors.append("started_at must be on or after created_at")
+    if started_dt is not None and completed_dt is not None and completed_dt < started_dt:
+        errors.append("completed_at must be on or after started_at")
+    if created_dt is not None and completed_dt is not None and completed_dt < created_dt:
+        errors.append("completed_at must be on or after created_at")
+
+    return errors
+
+
+def parse_datetime(value: Any) -> datetime | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        return None
+    return parsed.astimezone(timezone.utc)
+
+
+def validate_agent_result_evidence(
+    state: dict[str, Any],
+    *,
+    root: Path,
+    run_dir: Path,
+    indexed_jobs: dict[str, IndexedJob],
+) -> list[str]:
+    errors: list[str] = []
+    state_run_id = state.get("run_id")
+    for index, evidence in evidence_items(state):
+        evidence_type = evidence.get("type")
+        if evidence_type != "agent-result":
+            continue
+
+        raw_path = evidence.get("path")
+        if not isinstance(raw_path, str) or not raw_path.strip():
+            continue
+
+        result_path = first_existing_evidence_path(raw_path, root=root, run_dir=run_dir)
+        if result_path is None:
+            continue
+
+        agent_result, result_errors = validate_json_artifact(
+            result_path,
+            AGENT_RESULT_SCHEMA,
+            "agent-result",
+        )
+        errors.extend(f"evidence[{index}]: {error}" for error in result_errors)
+        if agent_result is None:
+            continue
+
+        result_run_id = agent_result.get("run_id")
+        if isinstance(state_run_id, str) and result_run_id != state_run_id:
+            errors.append(
+                f"evidence[{index}]: agent-result run_id {result_run_id} "
+                f"does not match state run_id {state_run_id}",
+            )
+
+        job_id = agent_result.get("job_id")
+        indexed_job = indexed_jobs.get(job_id)
+        if indexed_job is None:
+            errors.append(
+                f"evidence[{index}]: agent-result job_id {job_id} "
+                "has no matching agent-job evidence",
+            )
+            continue
+
+        job = indexed_job.payload
+        for field in ("agent", "adapter"):
+            if agent_result.get(field) != job.get(field):
+                errors.append(
+                    f"evidence[{index}]: agent-result {field} "
+                    f"{agent_result.get(field)} does not match job {field} {job.get(field)}",
+                )
+
+        output_file = job.get("output_file")
+        if isinstance(output_file, str) and output_file.strip():
+            expected_paths = job_artifact_path_candidates(
+                output_file,
+                job_path=indexed_job.path,
+                root=root,
+                run_dir=run_dir,
+            )
+            if not any(same_path(result_path, expected_path) for expected_path in expected_paths):
+                errors.append(
+                    f"evidence[{index}]: agent-result path does not match job output_file",
+                )
 
     return errors
 
@@ -222,8 +432,10 @@ def validate_aggregation_evidence(
     *,
     root: Path,
     run_dir: Path,
+    indexed_jobs: dict[str, IndexedJob],
 ) -> list[str]:
     errors: list[str] = []
+    state_run_id = state.get("run_id")
     for index, evidence in evidence_items(state):
         evidence_type = evidence.get("type")
         if evidence_type != "aggregation":
@@ -248,6 +460,16 @@ def validate_aggregation_evidence(
 
         semantic_errors = validate_aggregation_semantics(aggregation)
         errors.extend(f"evidence[{index}]: {error}" for error in semantic_errors)
+        if isinstance(state_run_id, str) and aggregation.get("run_id") != state_run_id:
+            errors.append(
+                f"evidence[{index}]: aggregation run_id {aggregation.get('run_id')} "
+                f"does not match state run_id {state_run_id}",
+            )
+        cross_check_errors = validate_aggregation_against_jobs(
+            aggregation,
+            indexed_jobs,
+        )
+        errors.extend(f"evidence[{index}]: {error}" for error in cross_check_errors)
 
     return errors
 
@@ -269,13 +491,20 @@ def validate_aggregation_semantics(aggregation: dict[str, Any]) -> list[str]:
             seen.add(job_id)
 
     consumed_jobs = set(bucket_values["consumed_jobs"])
-    for bucket in TERMINAL_AGGREGATION_JOB_BUCKETS + ("incomplete_jobs",):
+    for bucket in TERMINAL_AGGREGATION_JOB_BUCKETS:
         for job_id in bucket_values[bucket]:
             if job_id not in consumed_jobs:
                 errors.append(
                     f"aggregation semantic error at {bucket}: "
                     f"job id {job_id} is not listed in consumed_jobs",
                 )
+
+    for job_id in bucket_values["incomplete_jobs"]:
+        if job_id in consumed_jobs:
+            errors.append(
+                "aggregation semantic error at incomplete_jobs: "
+                f"job id {job_id} must not be listed in consumed_jobs",
+            )
 
     terminal_bucket_by_job: dict[str, str] = {}
     for bucket in TERMINAL_AGGREGATION_JOB_BUCKETS:
@@ -298,13 +527,51 @@ def validate_aggregation_semantics(aggregation: dict[str, Any]) -> list[str]:
             )
 
     classified_jobs: set[str] = set()
-    for bucket in TERMINAL_AGGREGATION_JOB_BUCKETS + ("incomplete_jobs",):
+    for bucket in TERMINAL_AGGREGATION_JOB_BUCKETS:
         classified_jobs.update(bucket_values[bucket])
     for job_id in sorted(consumed_jobs - classified_jobs):
         errors.append(
             "aggregation semantic error at consumed_jobs: "
             f"job id {job_id} has no terminal or incomplete classification",
         )
+
+    return errors
+
+
+def validate_aggregation_against_jobs(
+    aggregation: dict[str, Any],
+    indexed_jobs: dict[str, IndexedJob],
+) -> list[str]:
+    errors: list[str] = []
+    consumed_jobs = aggregation.get("consumed_jobs", [])
+    for job_id in consumed_jobs:
+        if job_id not in indexed_jobs:
+            errors.append(
+                f"aggregation consumed job {job_id} has no matching agent-job evidence",
+            )
+
+    for bucket, expected_status in AGGREGATION_BUCKET_STATUSES.items():
+        for job_id in aggregation.get(bucket, []):
+            indexed_job = indexed_jobs.get(job_id)
+            if indexed_job is None:
+                continue
+            actual_status = indexed_job.payload.get("status")
+            if actual_status != expected_status:
+                errors.append(
+                    f"aggregation bucket {bucket} expects job status {expected_status} "
+                    f"for job {job_id}, got {actual_status}",
+                )
+
+    for job_id in aggregation.get("incomplete_jobs", []):
+        indexed_job = indexed_jobs.get(job_id)
+        if indexed_job is None:
+            continue
+        actual_status = indexed_job.payload.get("status")
+        if actual_status in TERMINAL_JOB_STATUSES:
+            errors.append(
+                f"aggregation incomplete job {job_id} has terminal agent-job status "
+                f"{actual_status}",
+            )
 
     return errors
 
@@ -406,12 +673,49 @@ def evidence_path_candidates(raw_path: str, *, root: Path, run_dir: Path) -> lis
     return resolved
 
 
+def job_artifact_path_candidates(
+    raw_path: str,
+    *,
+    job_path: Path,
+    root: Path,
+    run_dir: Path,
+) -> list[Path]:
+    artifact_path = Path(raw_path)
+    candidates = [artifact_path]
+    if not artifact_path.is_absolute():
+        candidates = [
+            job_path.parent / artifact_path,
+            root / artifact_path,
+            run_dir / artifact_path,
+        ]
+
+    resolved: list[Path] = []
+    seen: set[Path] = set()
+    for candidate in candidates:
+        resolved_candidate = candidate.resolve(strict=False)
+        if resolved_candidate not in seen:
+            resolved.append(resolved_candidate)
+            seen.add(resolved_candidate)
+    return resolved
+
+
 def is_within_path(path: Path, parent: Path) -> bool:
     try:
         path.relative_to(parent)
     except ValueError:
         return False
     return True
+
+
+def same_path(left: Path, right: Path) -> bool:
+    try:
+        if left.exists() and right.exists():
+            return left.samefile(right)
+    except OSError:
+        pass
+    left_text = os.path.normcase(os.path.normpath(str(left.resolve(strict=False))))
+    right_text = os.path.normcase(os.path.normpath(str(right.resolve(strict=False))))
+    return left_text == right_text
 
 
 def can_transition(current_status: str, next_status: str) -> bool:
@@ -510,6 +814,261 @@ def advance_run(
     return candidate
 
 
+def run_generic_agent(
+    run_dir: Path | str,
+    job_id: str,
+    *,
+    agent: str,
+    command: list[str],
+    adapter: str = "generic-cli-agent",
+    timeout_seconds: int = 1800,
+    root: Path = ROOT,
+) -> dict[str, Any]:
+    if not job_id.strip():
+        raise HarnessCliError("job_id must be non-empty")
+    if not agent.strip():
+        raise HarnessCliError("agent must be non-empty")
+    if not command:
+        raise HarnessCliError("generic agent command must be non-empty")
+    if timeout_seconds < 1:
+        raise HarnessCliError("timeout_seconds must be at least 1")
+
+    resolved_run_dir = Path(run_dir)
+    before = validate_run(resolved_run_dir, root=root)
+    if not before.ok:
+        raise HarnessCliError(format_errors(before.errors))
+
+    state = load_json(state_path(resolved_run_dir))
+    run_id = state["run_id"]
+    jobs_dir = (resolved_run_dir / "jobs").resolve(strict=False)
+    job_dir = (jobs_dir / job_id).resolve(strict=False)
+    if not is_within_path(job_dir, jobs_dir):
+        raise HarnessCliError(f"job_id escapes jobs directory: {job_id}")
+    try:
+        job_dir.mkdir(parents=True, exist_ok=False)
+    except FileExistsError as exc:
+        raise HarnessCliError(f"job directory already exists: {job_dir}")
+    except OSError as exc:
+        raise HarnessCliError(f"failed to create job directory: {exc}") from exc
+
+    input_path = job_dir / "input.json"
+    output_path = job_dir / "output.json"
+    raw_log_path = job_dir / "raw.log"
+    job_path = job_dir / "job.json"
+
+    created_at = utc_now()
+    job = {
+        "job_id": job_id,
+        "run_id": run_id,
+        "agent": agent,
+        "adapter": adapter,
+        "status": "queued",
+        "input_file": input_path.name,
+        "output_file": output_path.name,
+        "raw_log_file": raw_log_path.name,
+        "created_at": created_at,
+        "started_at": None,
+        "completed_at": None,
+        "timeout_seconds": timeout_seconds,
+        "error_reason": None,
+        "provenance": {
+            "agent": agent,
+            "adapter_version": GENERIC_ADAPTER_VERSION,
+            "runtime": "local-cli",
+        },
+    }
+    write_json_file(job_path, job)
+    write_json_file(
+        input_path,
+        {
+            "run_id": run_id,
+            "job_id": job_id,
+            "agent": agent,
+            "adapter": adapter,
+            "command": command,
+            "created_at": created_at,
+            "timeout_seconds": timeout_seconds,
+            "input_file": str(input_path),
+            "output_file": str(output_path),
+            "raw_log_file": str(raw_log_path),
+        },
+    )
+
+    job["status"] = "running"
+    job["started_at"] = utc_now()
+    write_json_file(job_path, job)
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "HARNESS_RUN_ID": run_id,
+            "HARNESS_JOB_ID": job_id,
+            "HARNESS_AGENT": agent,
+            "HARNESS_AGENT_ADAPTER": adapter,
+            "HARNESS_AGENT_INPUT_FILE": str(input_path),
+            "HARNESS_AGENT_OUTPUT_FILE": str(output_path),
+            "HARNESS_AGENT_RAW_LOG_FILE": str(raw_log_path),
+        }
+    )
+
+    status = "succeeded"
+    error_reason: str | None = None
+    raw_stdout: str | None = None
+    raw_stderr: str | None = None
+    returncode: int | None = None
+    try:
+        returncode, raw_stdout, raw_stderr = run_agent_subprocess(
+            command,
+            cwd=job_dir,
+            env=env,
+            timeout_seconds=timeout_seconds,
+        )
+        if returncode != 0:
+            status = "failed"
+            error_reason = f"agent command exited with code {returncode}"
+    except subprocess.TimeoutExpired as exc:
+        status = "timeout"
+        error_reason = f"agent command timed out after {timeout_seconds} seconds"
+        raw_stdout = output_to_text(exc.stdout)
+        raw_stderr = output_to_text(exc.stderr)
+    except OSError as exc:
+        status = "failed"
+        error_reason = f"agent command could not be executed: {exc}"
+
+    write_raw_log(raw_log_path, command, returncode, raw_stdout, raw_stderr)
+
+    if status == "succeeded":
+        if not output_path.exists():
+            status = "failed"
+            error_reason = "agent did not write output_file"
+        else:
+            agent_result, result_errors = validate_json_artifact(
+                output_path,
+                AGENT_RESULT_SCHEMA,
+                "agent-result",
+            )
+            if result_errors:
+                status = "failed"
+                error_reason = "; ".join(result_errors)
+            elif agent_result is not None:
+                result_contract_errors = validate_agent_result_matches_job(
+                    agent_result,
+                    job,
+                )
+                if result_contract_errors:
+                    status = "failed"
+                    error_reason = "; ".join(result_contract_errors)
+
+    job["status"] = status
+    job["completed_at"] = utc_now()
+    job["error_reason"] = error_reason
+    write_json_file(job_path, job)
+    return job
+
+
+def run_agent_subprocess(
+    command: list[str],
+    *,
+    cwd: Path,
+    env: dict[str, str],
+    timeout_seconds: int,
+) -> tuple[int, str | None, str | None]:
+    creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
+    process = subprocess.Popen(
+        command,
+        cwd=cwd,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=env,
+        creationflags=creationflags,
+        start_new_session=os.name != "nt",
+    )
+    try:
+        stdout, stderr = process.communicate(timeout=timeout_seconds)
+    except subprocess.TimeoutExpired as exc:
+        terminate_process_tree(process)
+        stdout, stderr = process.communicate()
+        raise subprocess.TimeoutExpired(
+            exc.cmd,
+            exc.timeout,
+            output=stdout,
+            stderr=stderr,
+        ) from exc
+    return process.returncode, stdout, stderr
+
+
+def terminate_process_tree(process: subprocess.Popen[str]) -> None:
+    if os.name == "nt":
+        subprocess.run(
+            ["taskkill", "/F", "/T", "/PID", str(process.pid)],
+            text=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        return
+
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        return
+
+
+def validate_agent_result_matches_job(
+    agent_result: dict[str, Any],
+    job: dict[str, Any],
+) -> list[str]:
+    errors: list[str] = []
+    for field in ("run_id", "job_id", "agent", "adapter"):
+        if agent_result.get(field) != job.get(field):
+            errors.append(
+                f"agent-result {field} {agent_result.get(field)} "
+                f"does not match job {field} {job.get(field)}",
+            )
+    return errors
+
+
+def write_json_file(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    write_json_atomic(path, payload)
+
+
+def output_to_text(value: str | bytes | None) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return value
+
+
+def write_raw_log(
+    path: Path,
+    command: list[str],
+    returncode: int | None,
+    stdout: str | None,
+    stderr: str | None,
+) -> None:
+    path.write_text(
+        "\n".join(
+            [
+                f"command: {json.dumps(command)}",
+                f"returncode: {returncode}",
+                "",
+                "stdout:",
+                stdout or "",
+                "",
+                "stderr:",
+                stderr or "",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+
 def write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
     temp_path: Path | None = None
     replaced = False
@@ -563,6 +1122,17 @@ def build_parser() -> argparse.ArgumentParser:
     advance.add_argument("status")
     advance.add_argument("--actor", default=CODEX_ACTOR)
 
+    generic = subparsers.add_parser(
+        "run-generic-agent",
+        help="Run a generic CLI agent as a run-local async job.",
+    )
+    generic.add_argument("run_dir")
+    generic.add_argument("job_id")
+    generic.add_argument("--agent", required=True)
+    generic.add_argument("--adapter", default="generic-cli-agent")
+    generic.add_argument("--timeout-seconds", type=int, default=1800)
+    generic.add_argument("agent_command", nargs=argparse.REMAINDER)
+
     return parser
 
 
@@ -582,6 +1152,21 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "advance":
             state = advance_run(args.run_dir, args.status, actor=args.actor)
             print(f"advanced: {state['run_id']} -> {state['status']}")
+            return 0
+
+        if args.command == "run-generic-agent":
+            command = args.agent_command
+            if command and command[0] == "--":
+                command = command[1:]
+            job = run_generic_agent(
+                args.run_dir,
+                args.job_id,
+                agent=args.agent,
+                adapter=args.adapter,
+                command=command,
+                timeout_seconds=args.timeout_seconds,
+            )
+            print(f"generic-agent: {job['run_id']}/{job['job_id']} -> {job['status']}")
             return 0
     except HarnessCliError as exc:
         print(str(exc))

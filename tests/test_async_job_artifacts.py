@@ -11,6 +11,7 @@ from harness import cli
 ROOT = Path(__file__).resolve().parents[1]
 JOB_SCHEMA = ROOT / "harness" / "schemas" / "job.schema.json"
 AGGREGATION_SCHEMA = ROOT / "harness" / "schemas" / "aggregation.schema.json"
+AGENT_RESULT_SCHEMA = ROOT / "harness" / "schemas" / "agent-result.schema.json"
 
 
 def load_schema(path: Path) -> dict:
@@ -63,6 +64,22 @@ def minimal_aggregation() -> dict:
         "conflicts": [],
         "recommended_transition": None,
         "residual_risks": [],
+    }
+
+
+def minimal_agent_result(status: str = "passed") -> dict:
+    return {
+        "run_id": "test-run",
+        "job_id": "claude-review-001",
+        "agent": "claude-code",
+        "adapter": "claude-review",
+        "status": status,
+        "summary": "No issues found.",
+        "findings": [],
+        "evidence": [],
+        "not_tested": [],
+        "residual_risks": [],
+        "generated_at": "2026-06-20T00:02:00Z",
     }
 
 
@@ -137,6 +154,16 @@ class AsyncJobArtifactSchemaTest(unittest.TestCase):
 
         self.assertEqual(validation_errors(AGGREGATION_SCHEMA, aggregation), [])
 
+    def test_agent_result_schema_accepts_minimal_payload(self):
+        self.assertEqual(validation_errors(AGENT_RESULT_SCHEMA, minimal_agent_result()), [])
+
+    def test_agent_result_schema_rejects_unknown_status(self):
+        result = minimal_agent_result("silently_completed")
+
+        errors = validation_errors(AGENT_RESULT_SCHEMA, result)
+
+        self.assertTrue(errors)
+
 
 class AsyncJobEvidenceValidationTest(unittest.TestCase):
     def test_validate_accepts_terminal_agent_job_evidence(self):
@@ -156,6 +183,102 @@ class AsyncJobEvidenceValidationTest(unittest.TestCase):
             result = cli.validate_run(run_dir, root=ROOT)
 
         self.assertEqual(result.errors, [])
+
+    def test_validate_rejects_terminal_agent_job_without_completed_at(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            job_file = run_dir / "jobs" / "claude-review-001" / "job.json"
+            job = minimal_job("succeeded")
+            job["completed_at"] = None
+            write_json(job_file, job)
+            state = minimal_state()
+            state["evidence"] = [
+                {
+                    "type": "agent-job",
+                    "path": str(job_file.relative_to(ROOT)),
+                }
+            ]
+            write_json(run_dir / "state.json", state)
+
+            result = cli.validate_run(run_dir, root=ROOT)
+
+        self.assertTrue(
+            any("terminal job requires completed_at" in error for error in result.errors),
+            result.errors,
+        )
+
+    def test_validate_rejects_agent_job_timestamp_order_violation(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            job_file = run_dir / "jobs" / "claude-review-001" / "job.json"
+            job = minimal_job("succeeded")
+            job["completed_at"] = "2026-06-19T23:59:59Z"
+            write_json(job_file, job)
+            state = minimal_state()
+            state["evidence"] = [
+                {
+                    "type": "agent-job",
+                    "path": str(job_file.relative_to(ROOT)),
+                }
+            ]
+            write_json(run_dir / "state.json", state)
+
+            result = cli.validate_run(run_dir, root=ROOT)
+
+        self.assertTrue(
+            any("completed_at must be on or after started_at" in error for error in result.errors),
+            result.errors,
+        )
+
+    def test_job_timestamp_semantics_requires_created_at(self):
+        job = minimal_job("succeeded")
+        del job["created_at"]
+
+        errors = cli.validate_job_timestamp_semantics(job)
+
+        self.assertIn("job requires created_at", errors)
+
+    def test_job_timestamp_semantics_rejects_malformed_timestamp(self):
+        job = minimal_job("succeeded")
+        job["created_at"] = "not-a-date"
+
+        errors = cli.validate_job_timestamp_semantics(job)
+
+        self.assertIn("created_at must be a valid ISO 8601 timestamp", errors)
+
+    def test_job_timestamp_semantics_rejects_naive_timestamp_without_crashing(self):
+        job = minimal_job("succeeded")
+        job["started_at"] = "2026-06-20T00:00:01"
+
+        errors = cli.validate_job_timestamp_semantics(job)
+
+        self.assertIn("started_at must be a valid ISO 8601 timestamp", errors)
+
+    def test_validate_rejects_agent_job_run_id_mismatch(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            job_file = run_dir / "jobs" / "claude-review-001" / "job.json"
+            job = minimal_job("succeeded")
+            job["run_id"] = "different-run"
+            write_json(job_file, job)
+            state = minimal_state()
+            state["evidence"] = [
+                {
+                    "type": "agent-job",
+                    "path": str(job_file.relative_to(ROOT)),
+                }
+            ]
+            write_json(run_dir / "state.json", state)
+
+            result = cli.validate_run(run_dir, root=ROOT)
+
+        self.assertTrue(
+            any(
+                "job run_id different-run does not match state run_id test-run" in error
+                for error in result.errors
+            ),
+            result.errors,
+        )
 
     def test_validate_rejects_non_terminal_agent_job_evidence(self):
         with tempfile.TemporaryDirectory(dir=ROOT) as raw:
@@ -213,7 +336,310 @@ class AsyncJobEvidenceValidationTest(unittest.TestCase):
             result.errors,
         )
 
+    def test_validate_accepts_agent_result_evidence_with_matching_job(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            job_file = run_dir / "jobs" / "claude-review-001" / "job.json"
+            result_file = run_dir / "jobs" / "claude-review-001" / "output.json"
+            write_json(job_file, minimal_job("succeeded"))
+            write_json(result_file, minimal_agent_result())
+            state = minimal_state()
+            state["evidence"] = [
+                {
+                    "type": "agent-job",
+                    "path": str(job_file.relative_to(ROOT)),
+                },
+                {
+                    "type": "agent-result",
+                    "path": str(result_file.relative_to(ROOT)),
+                },
+            ]
+            write_json(run_dir / "state.json", state)
+
+            result = cli.validate_run(run_dir, root=ROOT)
+
+        self.assertEqual(result.errors, [])
+
+    def test_validate_rejects_invalid_agent_result_schema(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            job_file = run_dir / "jobs" / "claude-review-001" / "job.json"
+            result_file = run_dir / "jobs" / "claude-review-001" / "output.json"
+            write_json(job_file, minimal_job("succeeded"))
+            agent_result = minimal_agent_result()
+            agent_result["status"] = "done"
+            write_json(result_file, agent_result)
+            state = minimal_state()
+            state["evidence"] = [
+                {
+                    "type": "agent-job",
+                    "path": str(job_file.relative_to(ROOT)),
+                },
+                {
+                    "type": "agent-result",
+                    "path": str(result_file.relative_to(ROOT)),
+                },
+            ]
+            write_json(run_dir / "state.json", state)
+
+            result = cli.validate_run(run_dir, root=ROOT)
+
+        self.assertTrue(
+            any("agent-result schema error" in error for error in result.errors),
+            result.errors,
+        )
+
+    def test_validate_rejects_agent_result_run_id_mismatch(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            job_file = run_dir / "jobs" / "claude-review-001" / "job.json"
+            result_file = run_dir / "jobs" / "claude-review-001" / "output.json"
+            write_json(job_file, minimal_job("succeeded"))
+            agent_result = minimal_agent_result()
+            agent_result["run_id"] = "different-run"
+            write_json(result_file, agent_result)
+            state = minimal_state()
+            state["evidence"] = [
+                {
+                    "type": "agent-job",
+                    "path": str(job_file.relative_to(ROOT)),
+                },
+                {
+                    "type": "agent-result",
+                    "path": str(result_file.relative_to(ROOT)),
+                },
+            ]
+            write_json(run_dir / "state.json", state)
+
+            result = cli.validate_run(run_dir, root=ROOT)
+
+        self.assertTrue(
+            any(
+                "agent-result run_id different-run does not match state run_id test-run"
+                in error
+                for error in result.errors
+            ),
+            result.errors,
+        )
+
+    def test_validate_rejects_agent_result_without_matching_agent_job(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            result_file = run_dir / "jobs" / "claude-review-001" / "output.json"
+            write_json(result_file, minimal_agent_result())
+            state = minimal_state()
+            state["evidence"] = [
+                {
+                    "type": "agent-result",
+                    "path": str(result_file.relative_to(ROOT)),
+                },
+            ]
+            write_json(run_dir / "state.json", state)
+
+            result = cli.validate_run(run_dir, root=ROOT)
+
+        self.assertTrue(
+            any(
+                "agent-result job_id claude-review-001 has no matching agent-job evidence"
+                in error
+                for error in result.errors
+            ),
+            result.errors,
+        )
+
+    def test_validate_rejects_agent_result_path_that_does_not_match_job_output_file(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            job_file = run_dir / "jobs" / "claude-review-001" / "job.json"
+            result_file = run_dir / "jobs" / "claude-review-001" / "elsewhere.json"
+            write_json(job_file, minimal_job("succeeded"))
+            write_json(result_file, minimal_agent_result())
+            state = minimal_state()
+            state["evidence"] = [
+                {
+                    "type": "agent-job",
+                    "path": str(job_file.relative_to(ROOT)),
+                },
+                {
+                    "type": "agent-result",
+                    "path": str(result_file.relative_to(ROOT)),
+                },
+            ]
+            write_json(run_dir / "state.json", state)
+
+            result = cli.validate_run(run_dir, root=ROOT)
+
+        self.assertTrue(
+            any("agent-result path does not match job output_file" in error for error in result.errors),
+            result.errors,
+        )
+
+    def test_validate_rejects_agent_result_adapter_mismatch(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            job_file = run_dir / "jobs" / "claude-review-001" / "job.json"
+            result_file = run_dir / "jobs" / "claude-review-001" / "output.json"
+            write_json(job_file, minimal_job("succeeded"))
+            agent_result = minimal_agent_result()
+            agent_result["adapter"] = "different-adapter"
+            write_json(result_file, agent_result)
+            state = minimal_state()
+            state["evidence"] = [
+                {
+                    "type": "agent-job",
+                    "path": str(job_file.relative_to(ROOT)),
+                },
+                {
+                    "type": "agent-result",
+                    "path": str(result_file.relative_to(ROOT)),
+                },
+            ]
+            write_json(run_dir / "state.json", state)
+
+            result = cli.validate_run(run_dir, root=ROOT)
+
+        self.assertTrue(
+            any("agent-result adapter different-adapter does not match job adapter" in error for error in result.errors),
+            result.errors,
+        )
+
+    def test_validate_rejects_duplicate_agent_job_evidence(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            job_file = run_dir / "jobs" / "claude-review-001" / "job.json"
+            duplicate_file = run_dir / "jobs" / "duplicate" / "job.json"
+            write_json(job_file, minimal_job("succeeded"))
+            write_json(duplicate_file, minimal_job("succeeded"))
+            state = minimal_state()
+            state["evidence"] = [
+                {
+                    "type": "agent-job",
+                    "path": str(job_file.relative_to(ROOT)),
+                },
+                {
+                    "type": "agent-job",
+                    "path": str(duplicate_file.relative_to(ROOT)),
+                },
+            ]
+            write_json(run_dir / "state.json", state)
+
+            result = cli.validate_run(run_dir, root=ROOT)
+
+        self.assertTrue(
+            any("duplicate agent-job evidence for job_id claude-review-001" in error for error in result.errors),
+            result.errors,
+        )
+
     def test_validate_accepts_aggregation_evidence(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            job_file = run_dir / "jobs" / "claude-review-001" / "job.json"
+            aggregation_file = run_dir / "jobs" / "aggregation.json"
+            write_json(job_file, minimal_job("succeeded"))
+            write_json(aggregation_file, minimal_aggregation())
+            state = minimal_state()
+            state["evidence"] = [
+                {
+                    "type": "agent-job",
+                    "path": str(job_file.relative_to(ROOT)),
+                },
+                {
+                    "type": "aggregation",
+                    "path": str(aggregation_file.relative_to(ROOT)),
+                }
+            ]
+            write_json(run_dir / "state.json", state)
+
+            result = cli.validate_run(run_dir, root=ROOT)
+
+        self.assertEqual(result.errors, [])
+
+    def test_validate_aggregation_evidence_does_not_mutate_state_status(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            job_file = run_dir / "jobs" / "claude-review-001" / "job.json"
+            aggregation_file = run_dir / "jobs" / "aggregation.json"
+            write_json(job_file, minimal_job("succeeded"))
+            write_json(aggregation_file, minimal_aggregation())
+            state = minimal_state(status="verified")
+            state["evidence"] = [
+                {
+                    "type": "agent-job",
+                    "path": str(job_file.relative_to(ROOT)),
+                },
+                {
+                    "type": "aggregation",
+                    "path": str(aggregation_file.relative_to(ROOT)),
+                }
+            ]
+            write_json(run_dir / "state.json", state)
+
+            result = cli.validate_run(run_dir, root=ROOT)
+            saved = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(result.errors, [])
+        self.assertEqual(saved["status"], "verified")
+
+    def test_validate_accepts_incomplete_aggregation_job_outside_consumed_jobs(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            job_file = run_dir / "jobs" / "claude-review-001" / "job.json"
+            aggregation_file = run_dir / "jobs" / "aggregation.json"
+            aggregation = minimal_aggregation()
+            aggregation["incomplete_jobs"] = ["pending-job"]
+            write_json(job_file, minimal_job("succeeded"))
+            write_json(aggregation_file, aggregation)
+            state = minimal_state()
+            state["evidence"] = [
+                {
+                    "type": "agent-job",
+                    "path": str(job_file.relative_to(ROOT)),
+                },
+                {
+                    "type": "aggregation",
+                    "path": str(aggregation_file.relative_to(ROOT)),
+                },
+            ]
+            write_json(run_dir / "state.json", state)
+
+            result = cli.validate_run(run_dir, root=ROOT)
+
+        self.assertEqual(result.errors, [])
+
+    def test_validate_rejects_aggregation_run_id_mismatch(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            job_file = run_dir / "jobs" / "claude-review-001" / "job.json"
+            aggregation_file = run_dir / "jobs" / "aggregation.json"
+            aggregation = minimal_aggregation()
+            aggregation["run_id"] = "different-run"
+            write_json(job_file, minimal_job("succeeded"))
+            write_json(aggregation_file, aggregation)
+            state = minimal_state()
+            state["evidence"] = [
+                {
+                    "type": "agent-job",
+                    "path": str(job_file.relative_to(ROOT)),
+                },
+                {
+                    "type": "aggregation",
+                    "path": str(aggregation_file.relative_to(ROOT)),
+                },
+            ]
+            write_json(run_dir / "state.json", state)
+
+            result = cli.validate_run(run_dir, root=ROOT)
+
+        self.assertTrue(
+            any(
+                "aggregation run_id different-run does not match state run_id test-run"
+                in error
+                for error in result.errors
+            ),
+            result.errors,
+        )
+
+    def test_validate_rejects_aggregation_consumed_job_without_agent_job_evidence(self):
         with tempfile.TemporaryDirectory(dir=ROOT) as raw:
             run_dir = Path(raw)
             aggregation_file = run_dir / "jobs" / "aggregation.json"
@@ -229,27 +655,84 @@ class AsyncJobEvidenceValidationTest(unittest.TestCase):
 
             result = cli.validate_run(run_dir, root=ROOT)
 
-        self.assertEqual(result.errors, [])
+        self.assertTrue(
+            any(
+                "aggregation consumed job claude-review-001 has no matching agent-job evidence"
+                in error
+                for error in result.errors
+            ),
+            result.errors,
+        )
 
-    def test_validate_aggregation_evidence_does_not_mutate_state_status(self):
+    def test_validate_rejects_aggregation_bucket_status_mismatch(self):
         with tempfile.TemporaryDirectory(dir=ROOT) as raw:
             run_dir = Path(raw)
+            job_file = run_dir / "jobs" / "claude-review-001" / "job.json"
             aggregation_file = run_dir / "jobs" / "aggregation.json"
-            write_json(aggregation_file, minimal_aggregation())
-            state = minimal_state(status="verified")
+            aggregation = minimal_aggregation()
+            aggregation["succeeded_jobs"] = []
+            aggregation["failed_jobs"] = ["claude-review-001"]
+            write_json(job_file, minimal_job("succeeded"))
+            write_json(aggregation_file, aggregation)
+            state = minimal_state()
             state["evidence"] = [
+                {
+                    "type": "agent-job",
+                    "path": str(job_file.relative_to(ROOT)),
+                },
                 {
                     "type": "aggregation",
                     "path": str(aggregation_file.relative_to(ROOT)),
-                }
+                },
             ]
             write_json(run_dir / "state.json", state)
 
             result = cli.validate_run(run_dir, root=ROOT)
-            saved = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
 
-        self.assertEqual(result.errors, [])
-        self.assertEqual(saved["status"], "verified")
+        self.assertTrue(
+            any(
+                "aggregation bucket failed_jobs expects job status failed" in error
+                for error in result.errors
+            ),
+            result.errors,
+        )
+
+    def test_validate_rejects_incomplete_aggregation_job_with_terminal_agent_job(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            job_file = run_dir / "jobs" / "terminal-job" / "job.json"
+            aggregation_file = run_dir / "jobs" / "aggregation.json"
+            job = minimal_job("succeeded")
+            job["job_id"] = "terminal-job"
+            aggregation = minimal_aggregation()
+            aggregation["consumed_jobs"] = []
+            aggregation["succeeded_jobs"] = []
+            aggregation["incomplete_jobs"] = ["terminal-job"]
+            write_json(job_file, job)
+            write_json(aggregation_file, aggregation)
+            state = minimal_state()
+            state["evidence"] = [
+                {
+                    "type": "agent-job",
+                    "path": str(job_file.relative_to(ROOT)),
+                },
+                {
+                    "type": "aggregation",
+                    "path": str(aggregation_file.relative_to(ROOT)),
+                },
+            ]
+            write_json(run_dir / "state.json", state)
+
+            result = cli.validate_run(run_dir, root=ROOT)
+
+        self.assertTrue(
+            any(
+                "aggregation incomplete job terminal-job has terminal agent-job status succeeded"
+                in error
+                for error in result.errors
+            ),
+            result.errors,
+        )
 
     def test_validate_rejects_invalid_aggregation_evidence(self):
         with tempfile.TemporaryDirectory(dir=ROOT) as raw:

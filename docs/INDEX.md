@@ -25,6 +25,6 @@
 - `harness/core/` - Agent-neutral Harness rules.
 - `harness/adapters/` - Agent-specific adapter rules.
 - `harness/templates/` - Copyable task and evidence templates.
-- `harness/schemas/` - JSON schemas for machine-checkable artifacts.
+- `harness/schemas/` - JSON schemas for machine-checkable artifacts, including run state, async jobs, agent results, and aggregation.
 - `harness/memory/` - Curated long-term memory.
 - `harness/runs/` - Per-task run records and evidence.

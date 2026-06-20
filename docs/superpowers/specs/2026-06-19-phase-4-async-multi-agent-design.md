@@ -98,6 +98,14 @@ cancelled
 
 `queued` and `running` jobs may be present on disk, but they cannot be marked consumed, included in aggregation, or used to satisfy review, handoff, or completion gates. A terminal job status alone also does not satisfy completion; completion still requires the Phase 1 evidence gates.
 
+Timestamp semantics:
+
+- `created_at` is required for every job.
+- `queued` jobs must not have `started_at` or `completed_at`.
+- `running` jobs must have `started_at` and must not have `completed_at`.
+- terminal jobs must have both `started_at` and `completed_at`.
+- timestamps must be monotonic: `created_at <= started_at <= completed_at` when the fields are present.
+
 Codex must explicitly index consumed job artifacts into `state.json.evidence[]`. The presence of a job directory is never enough.
 
 ## Data Model
@@ -142,6 +150,8 @@ The type split is:
 - `agent-job` indexes `jobs/<job-id>/job.json`, the process record.
 - `agent-result` indexes `jobs/<job-id>/output.json`, the agent result payload, when that payload is not also stored as a canonical review artifact.
 - `aggregation` indexes a fan-in aggregation artifact under `jobs/`.
+
+`agent-result` payloads must validate against `harness/schemas/agent-result.schema.json` and include `run_id`, `job_id`, `agent`, `adapter`, `status`, `summary`, `findings`, `evidence`, `not_tested`, `residual_risks`, and `generated_at`. Codex must cross-check `run_id` against `state.json` and `job_id` against a matching terminal `agent-job` evidence entry before treating the result as consumed evidence.
 
 Example indexed job evidence:
 
@@ -205,6 +215,8 @@ Fan-in produces an aggregation artifact. The aggregation must list:
 - residual risks
 
 Aggregation can recommend `review_blocked` when high or critical findings exist, but it must not mutate `state.json`. Codex consumes the aggregation and then calls `advance` if a state transition is warranted.
+
+Aggregation cross-checking treats `consumed_jobs` as the set of terminal jobs consumed by Codex. Terminal buckets must be subsets of `consumed_jobs` and must match the corresponding `job.json.status`. `incomplete_jobs` records non-terminal or missing jobs observed during fan-in and must not be listed in `consumed_jobs`.
 
 ## Error Handling
 
