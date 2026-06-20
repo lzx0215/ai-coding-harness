@@ -664,6 +664,7 @@ workflow: standard-doc-system-change
 
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
         self.assertEqual(saved["status"], "draft")
+        self.assertNotEqual(saved["updated_at"], "2026-06-19T00:00:00Z")
         self.assertEqual(
             saved["evidence"],
             [
