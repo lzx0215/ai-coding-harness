@@ -535,6 +535,88 @@ memory_files:
             report.warnings,
         )
 
+    def test_check_ready_does_not_warn_when_memory_update_backs_memory_files(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            state = minimal_state()
+            write_state(run_dir, state)
+            (run_dir / "task.md").write_text(
+                """---
+run_id: phase2-test
+schema_version: 0.1.0
+track: Standard
+workflow: standard-doc-system-change
+owner: codex
+requested_outcome: "Document behavior."
+scope: []
+non_goals: []
+constraints: []
+---
+
+# Task
+""",
+                encoding="utf-8",
+            )
+            (run_dir / "triage.md").write_text(
+                """---
+run_id: phase2-test
+schema_version: 0.1.0
+track: Standard
+workflow: standard-doc-system-change
+review_required: true
+strict_triggers: []
+risk_reasons: []
+verification_required: []
+---
+
+# Triage
+""",
+                encoding="utf-8",
+            )
+            (run_dir / "plan.md").write_text(
+                """---
+run_id: phase2-test
+schema_version: 0.1.0
+workflow: standard-doc-system-change
+acceptance: []
+verification: []
+review_plan: []
+constraints: []
+---
+
+# Plan
+""",
+                encoding="utf-8",
+            )
+            # A consistent declaration: memory_update backs the listed files, so
+            # the soft memory-declaration warning must not fire.
+            (run_dir / "handoff.md").write_text(
+                """---
+run_id: phase2-test
+schema_version: 0.1.0
+changed: []
+verified: []
+not_verified: []
+residual_risks: []
+next_step: "Update memory."
+memory_update: updated
+memory_files:
+  - "harness/memory/progress.md"
+---
+
+# Handoff
+""",
+                encoding="utf-8",
+            )
+
+            report = readiness.check_run_readiness(run_dir, state)
+
+        self.assertNotIn(
+            "handoff.md frontmatter memory_files declared without memory_update",
+            report.warnings,
+            report.warnings,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
