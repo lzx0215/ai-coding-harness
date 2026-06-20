@@ -83,6 +83,14 @@ class AsyncJobArtifactSchemaTest(unittest.TestCase):
 
         self.assertTrue(errors)
 
+    def test_aggregation_schema_rejects_empty_conflict(self):
+        aggregation = minimal_aggregation()
+        aggregation["conflicts"] = [""]
+
+        errors = validation_errors(AGGREGATION_SCHEMA, aggregation)
+
+        self.assertTrue(errors)
+
     def test_aggregation_schema_accepts_high_finding_recommending_review_blocked(self):
         aggregation = minimal_aggregation()
         aggregation["recommended_transition"] = "review_blocked"
