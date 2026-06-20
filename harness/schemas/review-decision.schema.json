@@ -1,0 +1,176 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Harness Review Decision Artifact",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "run_id",
+    "generated_at",
+    "disposition",
+    "recommended_status",
+    "decision_owner",
+    "source_evidence",
+    "severity_counts",
+    "resolved_findings",
+    "accepted_risks",
+    "not_tested",
+    "residual_risks"
+  ],
+  "properties": {
+    "schema_version": { "type": "string", "enum": ["0.1.0"] },
+    "run_id": { "type": "string", "minLength": 1 },
+    "generated_at": {
+      "type": "string",
+      "minLength": 1,
+      "format": "date-time",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?(?:Z|[+-]\\d{2}:\\d{2})$"
+    },
+    "disposition": {
+      "type": "string",
+      "enum": [
+        "passed",
+        "findings-triaged",
+        "waived",
+        "unavailable",
+        "process-failed",
+        "risk-accepted",
+        "blocked"
+      ]
+    },
+    "recommended_status": {
+      "type": "string",
+      "enum": [
+        "reviewed",
+        "review_blocked",
+        "review_failed",
+        "review_timeout",
+        "review_schema_invalid",
+        "external_review_unavailable",
+        "risk_accepted"
+      ]
+    },
+    "decision_owner": { "type": "string", "minLength": 1 },
+    "source_evidence": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["type", "path"],
+        "properties": {
+          "type": { "type": "string", "minLength": 1 },
+          "path": { "type": "string", "minLength": 1 }
+        },
+        "additionalProperties": false
+      }
+    },
+    "severity_counts": {
+      "type": "object",
+      "required": ["critical", "high", "medium", "low", "info"],
+      "properties": {
+        "critical": { "type": "integer", "minimum": 0 },
+        "high": { "type": "integer", "minimum": 0 },
+        "medium": { "type": "integer", "minimum": 0 },
+        "low": { "type": "integer", "minimum": 0 },
+        "info": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "resolved_findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["title", "evidence"],
+        "properties": {
+          "title": { "type": "string", "minLength": 1 },
+          "evidence": { "type": "string", "minLength": 1 },
+          "severity": {
+            "type": "string",
+            "enum": ["info", "low", "medium", "high", "critical"]
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "accepted_risks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["risk", "evidence"],
+        "properties": {
+          "risk": { "type": "string", "minLength": 1 },
+          "evidence": { "type": "string", "minLength": 1 }
+        },
+        "additionalProperties": false
+      }
+    },
+    "not_tested": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "residual_risks": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "notes": { "type": "string", "minLength": 1 }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "disposition": { "enum": ["passed", "findings-triaged", "waived"] }
+        },
+        "required": ["disposition"]
+      },
+      "then": {
+        "properties": { "recommended_status": { "const": "reviewed" } },
+        "required": ["recommended_status"]
+      }
+    },
+    {
+      "if": {
+        "properties": { "disposition": { "const": "unavailable" } },
+        "required": ["disposition"]
+      },
+      "then": {
+        "properties": {
+          "recommended_status": { "const": "external_review_unavailable" }
+        },
+        "required": ["recommended_status"]
+      }
+    },
+    {
+      "if": {
+        "properties": { "disposition": { "const": "risk-accepted" } },
+        "required": ["disposition"]
+      },
+      "then": {
+        "properties": { "recommended_status": { "const": "risk_accepted" } },
+        "required": ["recommended_status"]
+      }
+    },
+    {
+      "if": {
+        "properties": { "disposition": { "const": "blocked" } },
+        "required": ["disposition"]
+      },
+      "then": {
+        "properties": { "recommended_status": { "const": "review_blocked" } },
+        "required": ["recommended_status"]
+      }
+    },
+    {
+      "if": {
+        "properties": { "disposition": { "const": "process-failed" } },
+        "required": ["disposition"]
+      },
+      "then": {
+        "properties": {
+          "recommended_status": {
+            "enum": ["review_failed", "review_timeout", "review_schema_invalid"]
+          }
+        },
+        "required": ["recommended_status"]
+      }
+    }
+  ],
+  "additionalProperties": false
+}
