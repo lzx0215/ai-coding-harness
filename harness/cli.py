@@ -243,9 +243,13 @@ def first_existing_evidence_path(
     require_within_root: bool = True,
 ) -> Path | None:
     resolved_root = root.resolve()
-    for candidate in evidence_path_candidates(raw_path, root=root, run_dir=run_dir):
-        if require_within_root and not is_within_path(candidate, resolved_root):
-            continue
+    candidates = evidence_path_candidates(raw_path, root=root, run_dir=run_dir)
+    if require_within_root and any(
+        not is_within_path(candidate, resolved_root) for candidate in candidates
+    ):
+        return None
+
+    for candidate in candidates:
         if candidate.exists():
             return candidate
     return None

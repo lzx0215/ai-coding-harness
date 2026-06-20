@@ -239,6 +239,34 @@ class AsyncJobEvidenceValidationTest(unittest.TestCase):
             result.errors,
         )
 
+    def test_validate_does_not_read_agent_job_when_any_candidate_escapes_repository(self):
+        proof_job = ROOT / "proof-job.json"
+        try:
+            write_json(proof_job, minimal_job("running"))
+            with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+                run_dir = Path(raw)
+                state = minimal_state()
+                state["evidence"] = [
+                    {
+                        "type": "agent-job",
+                        "path": "../proof-job.json",
+                    }
+                ]
+                write_json(run_dir / "state.json", state)
+
+                result = cli.validate_run(run_dir, root=ROOT)
+        finally:
+            proof_job.unlink(missing_ok=True)
+
+        self.assertTrue(
+            any("outside repository" in error for error in result.errors),
+            result.errors,
+        )
+        self.assertFalse(
+            any("non-terminal job cannot be consumed" in error for error in result.errors),
+            result.errors,
+        )
+
     def test_validate_reports_non_object_agent_job_schema_error(self):
         with tempfile.TemporaryDirectory(dir=ROOT) as raw:
             run_dir = Path(raw)
