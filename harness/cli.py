@@ -732,6 +732,15 @@ def validate_review_decision_semantics(
                 "finding without resolved_findings or accepted_risks",
             )
 
+    if high_or_critical and (
+        disposition == "risk-accepted" or recommended_status == "risk_accepted"
+    ):
+        if not decision.get("accepted_risks"):
+            errors.append(
+                f"evidence[{index}]: risk-accepted review-decision cannot accept "
+                "a high or critical finding without accepted_risks",
+            )
+
     if disposition == "waived" and "review-waiver" not in evidence_types:
         errors.append(
             f"evidence[{index}]: waived review-decision requires indexed review-waiver evidence",
@@ -977,14 +986,13 @@ def validate_handoff_closure(
         if field_name not in result.data:
             errors.append(f"handoff frontmatter missing field: {field_name}")
 
-    if result.data and errors:
-        return errors
-    if not result.data and errors:
+    if errors:
         return errors
 
     memory_update = result.data.get("memory_update")
     memory_files = result.data.get("memory_files")
     if not isinstance(memory_files, list):
+        errors.append("handoff memory_files must be a list")
         memory_files = []
 
     if memory_update == "updated" and not memory_files:

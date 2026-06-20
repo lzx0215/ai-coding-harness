@@ -1322,6 +1322,62 @@ memory_files: []
 
         self.assertEqual(result.errors, [], result.errors)
 
+    def test_validate_rejects_risk_accepted_high_finding_without_accepted_risks(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            reviews_dir = run_dir / "reviews"
+            reviews_dir.mkdir()
+            decision_path = reviews_dir / "review-decision.json"
+            decision_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "0.1.0",
+                        "run_id": "test-run",
+                        "generated_at": "2026-06-20T00:00:00Z",
+                        "disposition": "risk-accepted",
+                        "recommended_status": "risk_accepted",
+                        "decision_owner": "codex",
+                        "source_evidence": [],
+                        "severity_counts": {
+                            "critical": 0,
+                            "high": 1,
+                            "medium": 0,
+                            "low": 0,
+                            "info": 0,
+                        },
+                        "resolved_findings": [],
+                        "accepted_risks": [],
+                        "not_tested": [],
+                        "residual_risks": ["High finding accepted as risk."],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (run_dir / "risk-acceptance.md").write_text("# Risk Acceptance\n", encoding="utf-8")
+            state = minimal_state(status="external_review_unavailable")
+            state["track"] = "Standard"
+            state["current_workflow"] = "standard-code-change"
+            state["evidence"] = [
+                {
+                    "type": "review-evidence",
+                    "path": "reviews/review-decision.json",
+                    "description": "Review decision artifact.",
+                },
+                {
+                    "type": "risk-acceptance",
+                    "path": "risk-acceptance.md",
+                    "description": "Risk acceptance evidence.",
+                },
+            ]
+            write_state(run_dir, state)
+
+            result = cli.validate_run(run_dir, root=ROOT)
+
+        self.assertTrue(
+            any("risk-accepted review-decision cannot accept" in error for error in result.errors),
+            result.errors,
+        )
+
     def test_validate_rejects_waived_decision_without_review_waiver_evidence(self):
         with tempfile.TemporaryDirectory(dir=ROOT) as raw:
             run_dir = Path(raw)

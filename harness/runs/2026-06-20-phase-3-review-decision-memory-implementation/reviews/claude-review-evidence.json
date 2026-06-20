@@ -1,19 +1,45 @@
 {
-  "status": "findings",
   "run_id": "2026-06-20-phase-3-review-decision-memory-implementation",
-  "completed": true,
-  "harness_version": "0.2.0",
-  "adapter_version": "0.1.0",
-  "prompt_version": "0.1.0",
+  "status": "findings",
   "reviewer": "claude-code",
   "reviewer_model": "glm-5.2[1m]",
   "reviewer_model_version": null,
   "reviewer_cli_version": "2.1.160 (Claude Code)",
-  "output_file": "E:\\ai-coding-harness\\harness\\runs\\2026-06-20-phase-3-review-decision-memory-implementation\\reviews\\claude-review.json",
-  "raw_log_file": "E:\\ai-coding-harness\\harness\\runs\\2026-06-20-phase-3-review-decision-memory-implementation\\reviews\\claude-review.raw.log",
-  "exit_code": 0,
-  "duration_seconds": 305.547,
-  "review_file": "E:\\ai-coding-harness\\harness\\runs\\2026-06-20-phase-3-review-decision-memory-implementation\\reviews\\claude-review-evidence.json",
+  "reviewer_provenance": {
+    "schema_version": "0.2.0",
+    "reviewer": "claude-code",
+    "cli": {
+      "name": "Claude Code",
+      "raw_version": "2.1.160 (Claude Code)",
+      "version": "2.1.160"
+    },
+    "models": [
+      {
+        "name": "glm-5.2[1m]",
+        "version": null,
+        "source": "modelUsage",
+        "usage": {
+          "input_tokens": null,
+          "output_tokens": null
+        },
+        "raw_usage": {
+          "inputTokens": 53458,
+          "outputTokens": 12219,
+          "cacheReadInputTokens": 384,
+          "cacheCreationInputTokens": 0,
+          "webSearchRequests": 0,
+          "costUSD": 0.572957,
+          "contextWindow": 1000000,
+          "maxOutputTokens": 32000
+        }
+      }
+    ],
+    "primary_model": "glm-5.2[1m]",
+    "unknowns": [
+      "model_version",
+      "token_usage"
+    ]
+  },
   "summary": "Phase 3 (review-decision + memory closure) implementation is well-aligned with the task and plan. The schema constrains all 7 dispositions to their valid recommended_status values via JSON Schema if/then rules; `validate_state` loads and semantically checks indexed review-decision.json without introducing a new evidence type or state; `advance_run` enforces both the review-decision transition gate (only `reviewed`/`review_blocked` require a decision when review-signal evidence is indexed) and the new completion closure gate over handoff frontmatter; `readiness.check_run_readiness` emits a soft warning for memory_files declared without memory_update. The prior medium finding is addressed: risk-accepted (or risk_accepted recommended_status) decisions with high/critical severity now require non-empty accepted_risks, with both a positive (`test_validate_allows_high_finding_reviewed_with_risk_acceptance`) and negative (`test_validate_rejects_risk_accepted_high_finding_without_accepted_risks`) regression test. Authority boundaries hold (validate = artifact authority, advance = transition authority), and historical-run compatibility is preserved because validate only errors when a decision is indexed and advance only requires a decision in narrowly-scoped cases. Verification notes claim 207 tests passing, all 8 historical runs + this run valid, and the state/evidence vocabulary invariant unchanged. No blocking issues found; remaining items are low/info-level hygiene and coverage gaps.",
   "findings": [
     {
@@ -100,40 +126,5 @@
     "This run's review-decision.json is codex-authored rather than produced by an external Claude Code reviewer, so the artifact schema and semantics have not been exercised against a genuinely independent reviewer payload.",
     "load_indexed_review_decision picks the first matching basename; a second malformed review-decision.json among indexed review-evidence entries would be silently ignored.",
     "The regex on generated_at permits both Z and explicit offsets but does not validate the offset range (e.g., +99:99 would pass); jsonschema FormatChecker is not enabled, so format-level date-time validation is not active."
-  ],
-  "reviewer_provenance": {
-    "schema_version": "0.2.0",
-    "reviewer": "claude-code",
-    "cli": {
-      "name": "Claude Code",
-      "raw_version": "2.1.160 (Claude Code)",
-      "version": "2.1.160"
-    },
-    "models": [
-      {
-        "name": "glm-5.2[1m]",
-        "version": null,
-        "source": "modelUsage",
-        "usage": {
-          "input_tokens": null,
-          "output_tokens": null
-        },
-        "raw_usage": {
-          "inputTokens": 53458,
-          "outputTokens": 12219,
-          "cacheReadInputTokens": 384,
-          "cacheCreationInputTokens": 0,
-          "webSearchRequests": 0,
-          "costUSD": 0.572957,
-          "contextWindow": 1000000,
-          "maxOutputTokens": 32000
-        }
-      }
-    ],
-    "primary_model": "glm-5.2[1m]",
-    "unknowns": [
-      "model_version",
-      "token_usage"
-    ]
-  }
+  ]
 }

@@ -130,6 +130,23 @@ class HandoffClosureTest(unittest.TestCase):
 
         self.assertIn("memory_update is updated but memory_files is empty", str(raised.exception))
 
+    def test_advance_to_completed_fails_when_memory_files_is_not_a_list(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            state = minimal_state(status="reviewed")
+            state["evidence"] = complete_evidence(run_dir)
+            write_state(run_dir, state)
+            handoff = complete_handoff(memory_update="none").replace(
+                "memory_files: []",
+                'memory_files: "harness/memory/progress.md"',
+            )
+            write_artifacts(run_dir, handoff_text=handoff)
+
+            with self.assertRaises(cli.HarnessCliError) as raised:
+                cli.advance_run(run_dir, "completed", actor="codex", root=ROOT)
+
+        self.assertIn("handoff memory_files must be a list", str(raised.exception))
+
     def test_advance_to_completed_fails_when_listed_memory_file_missing(self):
         with tempfile.TemporaryDirectory(dir=ROOT) as raw:
             run_dir = Path(raw)
