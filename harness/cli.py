@@ -13,6 +13,8 @@ from typing import Any, Iterable
 
 from jsonschema import Draft202012Validator
 
+from harness import readiness
+
 
 ROOT = Path(__file__).resolve().parents[1]
 STATE_SCHEMA = ROOT / "harness" / "schemas" / "state.schema.json"
@@ -814,6 +816,20 @@ def advance_run(
     return candidate
 
 
+def check_ready(run_dir: Path | str, *, root: Path = ROOT) -> readiness.ReadinessReport:
+    resolved_run_dir = Path(run_dir)
+    validation = validate_run(resolved_run_dir, root=root)
+    if not validation.ok:
+        raise HarnessCliError(format_errors(validation.errors))
+
+    try:
+        state = load_json(state_path(resolved_run_dir))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise HarnessCliError(f"cannot read state file: {exc}") from exc
+
+    return readiness.check_run_readiness(resolved_run_dir, state)
+
+
 def run_generic_agent(
     run_dir: Path | str,
     job_id: str,
@@ -1117,6 +1133,12 @@ def build_parser() -> argparse.ArgumentParser:
     validate = subparsers.add_parser("validate", help="Validate a Harness run directory.")
     validate.add_argument("run_dir")
 
+    check_ready_parser = subparsers.add_parser(
+        "check-ready",
+        help="Report non-mutating Phase 2 readiness warnings for a Harness run.",
+    )
+    check_ready_parser.add_argument("run_dir")
+
     advance = subparsers.add_parser("advance", help="Advance a Harness run status.")
     advance.add_argument("run_dir")
     advance.add_argument("status")
@@ -1147,6 +1169,14 @@ def main(argv: list[str] | None = None) -> int:
                 print(format_errors(result.errors))
                 return 1
             print(f"valid: {result.run_dir}")
+            return 0
+
+        if args.command == "check-ready":
+            report = check_ready(args.run_dir)
+            if report.warnings:
+                print(format_errors(report.warnings))
+                return 1
+            print("ready: no readiness warnings")
             return 0
 
         if args.command == "advance":

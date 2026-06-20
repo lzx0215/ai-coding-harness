@@ -582,6 +582,57 @@ class HarnessCliTest(unittest.TestCase):
 
         self.assertEqual(advanced["status"], "in_progress")
 
+    def test_check_ready_reports_warnings_without_mutating_state(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            write_state(run_dir, minimal_state(status="draft"))
+            before = (run_dir / "state.json").read_text(encoding="utf-8")
+
+            result = subprocess.run(
+                [sys.executable, "-m", "harness.cli", "check-ready", str(run_dir)],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            after = (run_dir / "state.json").read_text(encoding="utf-8")
+
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(before, after)
+        self.assertIn("missing run document: task.md", result.stdout)
+
+    def test_check_ready_returns_zero_when_no_warnings(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            state = minimal_state(status="draft")
+            state["track"] = "Standard"
+            state["current_workflow"] = "standard-doc-system-change"
+            write_state(run_dir, state)
+            for name in ("task.md", "triage.md", "plan.md", "handoff.md"):
+                (run_dir / name).write_text(
+                    f"""---
+run_id: test-run
+schema_version: 0.1.0
+track: Standard
+workflow: standard-doc-system-change
+---
+
+# {name}
+""",
+                    encoding="utf-8",
+                )
+
+            result = subprocess.run(
+                [sys.executable, "-m", "harness.cli", "check-ready", str(run_dir)],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertIn("ready: no readiness warnings", result.stdout)
+
     def test_module_entrypoint_validates_run_from_command_line(self):
         run_dir = ROOT / "harness" / "runs" / "example-fast-doc-change"
 
