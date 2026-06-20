@@ -167,6 +167,71 @@ scope:
 
 
 class ReadinessCheckTest(unittest.TestCase):
+    def test_check_run_readiness_warns_on_missing_phase2_frontmatter_fields(self):
+        required_fields_by_document = {
+            "task.md": (
+                "schema_version",
+                "owner",
+                "requested_outcome",
+                "scope",
+                "non_goals",
+                "constraints",
+            ),
+            "triage.md": (
+                "schema_version",
+                "review_required",
+                "strict_triggers",
+                "risk_reasons",
+                "verification_required",
+            ),
+            "plan.md": (
+                "schema_version",
+                "acceptance",
+                "verification",
+                "review_plan",
+                "constraints",
+                "recovery_strategy",
+                "residual_risk_owner",
+            ),
+            "handoff.md": (
+                "schema_version",
+                "changed",
+                "verified",
+                "not_verified",
+                "residual_risks",
+                "next_step",
+                "memory_update",
+                "memory_files",
+            ),
+        }
+
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            state = minimal_state()
+            write_state(run_dir, state)
+            for document_name in readiness.RUN_DOCUMENTS:
+                (run_dir / document_name).write_text(
+                    """---
+run_id: phase2-test
+track: Standard
+workflow: standard-doc-system-change
+---
+
+# Run Document
+""",
+                    encoding="utf-8",
+                )
+
+            report = readiness.check_run_readiness(run_dir, state)
+
+        for document_name, field_names in required_fields_by_document.items():
+            with self.subTest(document_name=document_name):
+                for field_name in field_names:
+                    self.assertIn(
+                        f"{document_name} frontmatter missing field: {field_name}",
+                        report.warnings,
+                    )
+
     def test_check_run_readiness_reports_missing_documents_without_mutation(self):
         with tempfile.TemporaryDirectory(dir=ROOT) as raw:
             run_dir = Path(raw)

@@ -609,17 +609,66 @@ class HarnessCliTest(unittest.TestCase):
             state["current_workflow"] = "standard-doc-system-change"
             write_state(run_dir, state)
             before = (run_dir / "state.json").read_text(encoding="utf-8")
-            for name in ("task.md", "triage.md", "plan.md", "handoff.md"):
-                (run_dir / name).write_text(
-                    f"""---
+            documents = {
+                "task.md": """---
 run_id: test-run
 schema_version: 0.1.0
 track: Standard
 workflow: standard-doc-system-change
+owner: codex
+requested_outcome: "Document behavior."
+scope: []
+non_goals: []
+constraints: []
 ---
 
-# {name}
+# task.md
 """,
+                "triage.md": """---
+run_id: test-run
+schema_version: 0.1.0
+track: Standard
+workflow: standard-doc-system-change
+review_required: true
+strict_triggers: []
+risk_reasons: []
+verification_required: []
+---
+
+# triage.md
+""",
+                "plan.md": """---
+run_id: test-run
+schema_version: 0.1.0
+workflow: standard-doc-system-change
+acceptance: []
+verification: []
+review_plan: []
+constraints: []
+recovery_strategy: null
+residual_risk_owner: null
+---
+
+# plan.md
+""",
+                "handoff.md": """---
+run_id: test-run
+schema_version: 0.1.0
+changed: []
+verified: []
+not_verified: []
+residual_risks: []
+next_step: ""
+memory_update: none
+memory_files: []
+---
+
+# handoff.md
+""",
+            }
+            for name, text in documents.items():
+                (run_dir / name).write_text(
+                    text,
                     encoding="utf-8",
                 )
 
@@ -730,6 +779,33 @@ workflow: standard-doc-system-change
         self.assertEqual(result.returncode, 1)
         self.assertEqual(before, after)
         self.assertIn("evidence path does not exist", result.stdout)
+
+    def test_index_evidence_rejects_unsafe_path_without_writing(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw) / "run"
+            write_state(run_dir, minimal_state(status="draft"))
+            before = (run_dir / "state.json").read_bytes()
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "harness.cli",
+                    "index-evidence",
+                    str(run_dir),
+                    "task",
+                    "../outside.md",
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            after = (run_dir / "state.json").read_bytes()
+
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(before, after)
+        self.assertIn("outside repository", result.stdout)
 
     def test_init_run_creates_draft_run_with_phase2_documents(self):
         with tempfile.TemporaryDirectory(dir=ROOT) as raw:

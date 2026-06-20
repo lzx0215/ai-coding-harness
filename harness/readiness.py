@@ -6,6 +6,52 @@ from typing import Any
 
 
 RUN_DOCUMENTS = ("task.md", "triage.md", "plan.md", "handoff.md")
+REQUIRED_FRONTMATTER_FIELDS = {
+    "task.md": (
+        "run_id",
+        "schema_version",
+        "track",
+        "workflow",
+        "owner",
+        "requested_outcome",
+        "scope",
+        "non_goals",
+        "constraints",
+    ),
+    "triage.md": (
+        "run_id",
+        "schema_version",
+        "track",
+        "workflow",
+        "review_required",
+        "strict_triggers",
+        "risk_reasons",
+        "verification_required",
+    ),
+    "plan.md": (
+        "run_id",
+        "schema_version",
+        "workflow",
+        "acceptance",
+        "verification",
+        "review_plan",
+        "constraints",
+        "recovery_strategy",
+        "residual_risk_owner",
+    ),
+    "handoff.md": (
+        "run_id",
+        "schema_version",
+        "changed",
+        "verified",
+        "not_verified",
+        "residual_risks",
+        "next_step",
+        "memory_update",
+        "memory_files",
+    ),
+}
+RECOMMENDED_FRONTMATTER_FIELDS: dict[str, tuple[str, ...]] = {}
 
 
 @dataclass(frozen=True)
@@ -183,6 +229,14 @@ def validate_document_frontmatter(
         return []
 
     warnings: list[str] = []
+    for field_name in REQUIRED_FRONTMATTER_FIELDS.get(document_name, ()):
+        if field_name not in data:
+            warnings.append(f"{document_name} frontmatter missing field: {field_name}")
+
+    for field_name in RECOMMENDED_FRONTMATTER_FIELDS.get(document_name, ()):
+        if field_name not in data:
+            warnings.append(f"{document_name} frontmatter missing field: {field_name}")
+
     state_run_id = state.get("run_id")
     if data.get("run_id") != state_run_id:
         warnings.append(
