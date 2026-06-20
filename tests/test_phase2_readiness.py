@@ -66,6 +66,24 @@ scope:
         self.assertEqual(result.data["scope"], ["CLI helpers", "frontmatter checks"])
         self.assertEqual(result.warnings, [])
 
+    def test_parse_frontmatter_accepts_crlf_delimiters(self):
+        text = (
+            "---\r\n"
+            "run_id: phase2-test\r\n"
+            "track: Standard\r\n"
+            "scope:\r\n"
+            "  - \"frontmatter checks\"\r\n"
+            "---\r\n"
+            "\r\n"
+            "# Task\r\n"
+        )
+
+        result = readiness.parse_frontmatter(text)
+
+        self.assertEqual(result.data["run_id"], "phase2-test")
+        self.assertEqual(result.data["scope"], ["frontmatter checks"])
+        self.assertEqual(result.warnings, [])
+
     def test_parse_frontmatter_reports_missing_block(self):
         result = readiness.parse_frontmatter("# Task\n")
 
@@ -88,6 +106,36 @@ source:
             any("unsupported frontmatter nesting" in warning for warning in result.warnings),
             result.warnings,
         )
+
+    def test_parse_frontmatter_warns_on_map_like_sequence_item(self):
+        text = """---
+scope:
+  - name: codex
+---
+
+# Task
+"""
+
+        result = readiness.parse_frontmatter(text)
+
+        self.assertTrue(
+            any("unsupported frontmatter sequence item" in warning for warning in result.warnings),
+            result.warnings,
+        )
+
+    def test_parse_frontmatter_accepts_quoted_sequence_item_with_colon(self):
+        text = """---
+scope:
+  - "owner: codex"
+---
+
+# Task
+"""
+
+        result = readiness.parse_frontmatter(text)
+
+        self.assertEqual(result.data["scope"], ["owner: codex"])
+        self.assertEqual(result.warnings, [])
 
 
 class ReadinessCheckTest(unittest.TestCase):

@@ -24,6 +24,7 @@ class ReadinessReport:
 
 
 def parse_frontmatter(text: str) -> FrontmatterResult:
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
     if not text.startswith("---\n"):
         return FrontmatterResult({}, ["missing frontmatter block"])
 
@@ -89,7 +90,10 @@ def parse_nested_block(lines: list[str]) -> tuple[Any, int, list[str]]:
             if mode == "map":
                 warnings.append("mixed frontmatter sequence and map values are unsupported")
             mode = "list"
-            items.append(parse_scalar(stripped[2:]))
+            raw_item = stripped[2:]
+            if is_unquoted_mapping_like_value(raw_item):
+                warnings.append(f"unsupported frontmatter sequence item: {raw_item}")
+            items.append(parse_scalar(raw_item))
             consumed += 1
             continue
         if ":" in stripped:
@@ -112,6 +116,15 @@ def parse_nested_block(lines: list[str]) -> tuple[Any, int, list[str]]:
     if mode == "map":
         return mapping, consumed, warnings
     return items, consumed, warnings
+
+
+def is_unquoted_mapping_like_value(value: str) -> bool:
+    if (
+        (value.startswith('"') and value.endswith('"'))
+        or (value.startswith("'") and value.endswith("'"))
+    ):
+        return False
+    return ":" in value
 
 
 def parse_scalar(value: str) -> Any:
