@@ -27,6 +27,13 @@ Harness defines valid states and transitions. Codex executes transitions for the
 - Blocking findings use `review_blocked`.
 - `timeout` and `not_available` are adapter statuses, not completion evidence.
 - Historical run records are append-only unless the user explicitly requests correction.
+- The base transition table still contains `external_review_unavailable -> risk_accepted`.
+  For Strict tracks, `advance` applies an additional policy gate: a direct
+  `external_review_unavailable -> risk_accepted` transition is rejected and the
+  run must enter `needs_user_decision` first.
+- `needs_user_decision` is a state checkpoint for explicit user decision. It is
+  not, by itself, proof that risk was accepted; downstream completion still
+  requires indexed risk-acceptance evidence when the run reaches `risk_accepted`.
 
 ## Review Status Mapping
 

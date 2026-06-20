@@ -2,6 +2,8 @@
 
 Write this payload to the job `output.json`. It must validate against `harness/schemas/agent-result.schema.json`.
 
+This template may be indexed as `agent-result` only when the result payload is not promoted into a canonical review artifact. Indexed `agent-result` evidence must validate against the schema and match a terminal `agent-job` evidence entry for the same job.
+
 ```json
 {
   "run_id": "replace-with-run-id",

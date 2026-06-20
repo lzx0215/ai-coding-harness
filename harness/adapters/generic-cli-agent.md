@@ -40,6 +40,17 @@ The command runs with the job directory as its working directory. This reduces a
 
 `output.json` must validate against `harness/schemas/agent-result.schema.json`.
 
+## Evidence Indexing
+
+Codex may index generic async job artifacts using the Phase 4 evidence types
+defined in `harness/core/evidence.md`:
+
+- `agent-job` for the job process record
+- `agent-result` for an unpromoted result payload
+- `aggregation` for a Codex fan-in summary
+
+Use an existing canonical review evidence type instead when the result is promoted into `reviews/`.
+
 Required result fields:
 
 - run_id

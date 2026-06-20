@@ -7,7 +7,7 @@
 
 ## Current Status
 
-- Phase 2 run definition/evidence implementation is merged into local `master`: Markdown frontmatter readiness checks, `check-ready`, `index-evidence`, `init-run`, and Phase 2 run templates are available. `check-ready` remains advisory; `validate` remains authoritative for state and evidence validity.
+- Phase 2 run definition/evidence implementation is merged into `master`: Markdown frontmatter readiness checks, `check-ready`, `index-evidence`, `init-run`, and Phase 2 run templates are available. `check-ready` remains advisory; `validate` remains authoritative for state and evidence validity.
 
 ## Specs
 
@@ -30,6 +30,7 @@
 ## Harness
 
 - `harness/core/` - Agent-neutral Harness rules.
+- `harness/core/evidence.md` - Controlled evidence vocabulary and Phase 4 async evidence contract.
 - `harness/adapters/` - Agent-specific adapter rules.
 - `harness/templates/` - Copyable task and evidence templates.
 - `harness/schemas/` - JSON schemas for machine-checkable artifacts, including run state, async jobs, agent results, and aggregation.
