@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Harness Async Job Artifact",
+  "type": "object",
+  "required": [
+    "job_id",
+    "run_id",
+    "agent",
+    "adapter",
+    "status",
+    "input_file",
+    "output_file",
+    "raw_log_file",
+    "created_at",
+    "timeout_seconds"
+  ],
+  "properties": {
+    "job_id": { "type": "string", "minLength": 1 },
+    "run_id": { "type": "string", "minLength": 1 },
+    "agent": { "type": "string", "minLength": 1 },
+    "adapter": { "type": "string", "minLength": 1 },
+    "status": {
+      "type": "string",
+      "enum": ["queued", "running", "succeeded", "failed", "timeout", "cancelled"]
+    },
+    "input_file": { "type": "string", "minLength": 1 },
+    "output_file": { "type": "string", "minLength": 1 },
+    "raw_log_file": { "type": "string", "minLength": 1 },
+    "created_at": {
+      "type": "string",
+      "minLength": 1,
+      "format": "date-time",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?(?:Z|[+-]\\d{2}:\\d{2})$"
+    },
+    "started_at": {
+      "type": ["string", "null"],
+      "minLength": 1,
+      "format": "date-time",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?(?:Z|[+-]\\d{2}:\\d{2})$"
+    },
+    "completed_at": {
+      "type": ["string", "null"],
+      "minLength": 1,
+      "format": "date-time",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?(?:Z|[+-]\\d{2}:\\d{2})$"
+    },
+    "timeout_seconds": { "type": "integer", "minimum": 1 },
+    "error_reason": { "type": ["string", "null"], "minLength": 1 },
+    "provenance": {
+      "type": "object",
+      "properties": {
+        "agent": { "type": "string", "minLength": 1 },
+        "adapter_version": { "type": "string", "minLength": 1 },
+        "runtime": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": false
+}

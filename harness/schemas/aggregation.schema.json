@@ -1,0 +1,88 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Harness Async Job Aggregation Artifact",
+  "type": "object",
+  "required": [
+    "run_id",
+    "generated_at",
+    "consumed_jobs",
+    "succeeded_jobs",
+    "failed_jobs",
+    "timeout_jobs",
+    "cancelled_jobs",
+    "incomplete_jobs",
+    "findings",
+    "conflicts",
+    "recommended_transition",
+    "residual_risks"
+  ],
+  "properties": {
+    "run_id": { "type": "string", "minLength": 1 },
+    "generated_at": {
+      "type": "string",
+      "minLength": 1,
+      "format": "date-time",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?(?:Z|[+-]\\d{2}:\\d{2})$"
+    },
+    "consumed_jobs": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "succeeded_jobs": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "failed_jobs": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "timeout_jobs": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "cancelled_jobs": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "incomplete_jobs": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["job_id", "severity", "title", "evidence", "recommendation"],
+        "properties": {
+          "job_id": { "type": "string", "minLength": 1 },
+          "severity": {
+            "type": "string",
+            "enum": ["info", "low", "medium", "high", "critical"]
+          },
+          "title": { "type": "string", "minLength": 1 },
+          "evidence": { "type": "string", "minLength": 1 },
+          "recommendation": { "type": "string", "minLength": 1 }
+        },
+        "additionalProperties": false
+      }
+    },
+    "conflicts": { "type": "array" },
+    "recommended_transition": {
+      "enum": [
+        null,
+        "reviewed",
+        "review_blocked",
+        "review_failed",
+        "review_timeout",
+        "review_schema_invalid",
+        "external_review_unavailable",
+        "needs_user_decision"
+      ]
+    },
+    "residual_risks": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    }
+  },
+  "additionalProperties": false
+}
