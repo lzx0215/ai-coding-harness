@@ -830,6 +830,41 @@ def check_ready(run_dir: Path | str, *, root: Path = ROOT) -> readiness.Readines
     return readiness.check_run_readiness(resolved_run_dir, state)
 
 
+def index_evidence(
+    run_dir: Path | str,
+    evidence_type: str,
+    evidence_path: str,
+    *,
+    description: str | None = None,
+    root: Path = ROOT,
+) -> dict[str, Any]:
+    resolved_run_dir = Path(run_dir)
+    validation = validate_run(resolved_run_dir, root=root)
+    if not validation.ok:
+        raise HarnessCliError(format_errors(validation.errors))
+
+    path = state_path(resolved_run_dir)
+    try:
+        state = load_json(path)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise HarnessCliError(f"cannot read state file: {exc}") from exc
+
+    entry = {"type": evidence_type, "path": evidence_path}
+    if description:
+        entry["description"] = description
+
+    candidate = dict(state)
+    candidate["evidence"] = list(state.get("evidence", [])) + [entry]
+    candidate["updated_at"] = utc_now()
+
+    candidate_errors = validate_state(candidate, root=root, run_dir=resolved_run_dir)
+    if candidate_errors:
+        raise HarnessCliError(format_errors(candidate_errors))
+
+    write_json_atomic(path, candidate)
+    return candidate
+
+
 def run_generic_agent(
     run_dir: Path | str,
     job_id: str,
@@ -1139,6 +1174,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     check_ready_parser.add_argument("run_dir")
 
+    index_evidence_parser = subparsers.add_parser(
+        "index-evidence",
+        help="Append an evidence entry after existing validation accepts it.",
+    )
+    index_evidence_parser.add_argument("run_dir")
+    index_evidence_parser.add_argument("evidence_type")
+    index_evidence_parser.add_argument("path")
+    index_evidence_parser.add_argument("--description")
+
     advance = subparsers.add_parser("advance", help="Advance a Harness run status.")
     advance.add_argument("run_dir")
     advance.add_argument("status")
@@ -1177,6 +1221,16 @@ def main(argv: list[str] | None = None) -> int:
                 print(format_errors(report.warnings))
                 return 1
             print("ready: no readiness warnings")
+            return 0
+
+        if args.command == "index-evidence":
+            state = index_evidence(
+                args.run_dir,
+                args.evidence_type,
+                args.path,
+                description=args.description,
+            )
+            print(f"indexed evidence: {state['run_id']} {args.evidence_type} {args.path}")
             return 0
 
         if args.command == "advance":

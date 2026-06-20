@@ -636,6 +636,100 @@ workflow: standard-doc-system-change
         self.assertEqual(before, after)
         self.assertIn("ready: no readiness warnings", result.stdout)
 
+    def test_index_evidence_appends_valid_evidence_without_advancing_state(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            write_state(run_dir, minimal_state(status="draft"))
+            evidence_path = run_dir / "task.md"
+            evidence_path.write_text("# Task\n", encoding="utf-8")
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "harness.cli",
+                    "index-evidence",
+                    str(run_dir),
+                    "task",
+                    "task.md",
+                    "--description",
+                    "Task definition.",
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            saved = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertEqual(saved["status"], "draft")
+        self.assertEqual(
+            saved["evidence"],
+            [
+                {
+                    "type": "task",
+                    "path": "task.md",
+                    "description": "Task definition.",
+                }
+            ],
+        )
+
+    def test_index_evidence_rejects_unknown_type_without_writing(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            write_state(run_dir, minimal_state(status="draft"))
+            (run_dir / "note.md").write_text("# Note\n", encoding="utf-8")
+            before = (run_dir / "state.json").read_text(encoding="utf-8")
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "harness.cli",
+                    "index-evidence",
+                    str(run_dir),
+                    "invented-evidence",
+                    "note.md",
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            after = (run_dir / "state.json").read_text(encoding="utf-8")
+
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(before, after)
+        self.assertIn("unknown evidence type", result.stdout)
+
+    def test_index_evidence_rejects_missing_path_without_writing(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            write_state(run_dir, minimal_state(status="draft"))
+            before = (run_dir / "state.json").read_text(encoding="utf-8")
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "harness.cli",
+                    "index-evidence",
+                    str(run_dir),
+                    "task",
+                    "missing.md",
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            after = (run_dir / "state.json").read_text(encoding="utf-8")
+
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(before, after)
+        self.assertIn("evidence path does not exist", result.stdout)
+
     def test_module_entrypoint_validates_run_from_command_line(self):
         run_dir = ROOT / "harness" / "runs" / "example-fast-doc-change"
 
