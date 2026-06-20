@@ -254,6 +254,81 @@ class AsyncJobEvidenceValidationTest(unittest.TestCase):
             result.errors,
         )
 
+    def test_validate_does_not_schema_validate_non_aggregation_evidence(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            review_output_file = run_dir / "reviews" / "review-output.json"
+            aggregation = minimal_aggregation()
+            aggregation["recommended_transition"] = "completed"
+            write_json(review_output_file, aggregation)
+            state = minimal_state()
+            state["evidence"] = [
+                {
+                    "type": "review-output",
+                    "path": str(review_output_file.relative_to(ROOT)),
+                }
+            ]
+            write_json(run_dir / "state.json", state)
+
+            result = cli.validate_run(run_dir, root=ROOT)
+
+        self.assertFalse(
+            any("aggregation schema error" in error for error in result.errors),
+            result.errors,
+        )
+
+    def test_validate_reports_missing_aggregation_path_without_schema_error(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            missing_aggregation_file = run_dir / "jobs" / "missing-aggregation.json"
+            state = minimal_state()
+            state["evidence"] = [
+                {
+                    "type": "aggregation",
+                    "path": str(missing_aggregation_file.relative_to(ROOT)),
+                }
+            ]
+            write_json(run_dir / "state.json", state)
+
+            result = cli.validate_run(run_dir, root=ROOT)
+
+        self.assertTrue(
+            any("evidence path does not exist" in error for error in result.errors),
+            result.errors,
+        )
+        self.assertFalse(
+            any("aggregation schema error" in error for error in result.errors),
+            result.errors,
+        )
+
+    def test_validate_does_not_read_aggregation_outside_repository(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            with tempfile.TemporaryDirectory() as outside_raw:
+                outside_aggregation = Path(outside_raw) / "aggregation.json"
+                aggregation = minimal_aggregation()
+                aggregation["recommended_transition"] = "completed"
+                write_json(outside_aggregation, aggregation)
+                state = minimal_state()
+                state["evidence"] = [
+                    {
+                        "type": "aggregation",
+                        "path": str(outside_aggregation),
+                    }
+                ]
+                write_json(run_dir / "state.json", state)
+
+                result = cli.validate_run(run_dir, root=ROOT)
+
+        self.assertTrue(
+            any("outside repository" in error for error in result.errors),
+            result.errors,
+        )
+        self.assertFalse(
+            any("aggregation schema error" in error for error in result.errors),
+            result.errors,
+        )
+
     def test_validate_does_not_read_agent_job_outside_repository(self):
         with tempfile.TemporaryDirectory(dir=ROOT) as raw:
             run_dir = Path(raw)
