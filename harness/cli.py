@@ -941,6 +941,85 @@ def validate_completion_evidence(
     return errors
 
 
+HANDOFF_REQUIRED_CLOSURE_FIELDS = (
+    "changed",
+    "verified",
+    "not_verified",
+    "residual_risks",
+    "next_step",
+    "memory_update",
+    "memory_files",
+)
+
+
+def validate_handoff_closure(
+    state: dict[str, Any],
+    next_status: str,
+    *,
+    root: Path,
+    run_dir: Path,
+) -> list[str]:
+    if next_status != "completed":
+        return []
+
+    handoff_path = first_indexed_evidence_path(state, "handoff", root=root, run_dir=run_dir)
+    if handoff_path is None:
+        return []
+
+    try:
+        text = handoff_path.read_text(encoding="utf-8-sig")
+    except OSError as exc:
+        return [f"cannot read handoff artifact: {exc}"]
+
+    result = readiness.parse_frontmatter(text)
+    errors: list[str] = []
+    for field_name in HANDOFF_REQUIRED_CLOSURE_FIELDS:
+        if field_name not in result.data:
+            errors.append(f"handoff frontmatter missing field: {field_name}")
+
+    if result.data and errors:
+        return errors
+    if not result.data and errors:
+        return errors
+
+    memory_update = result.data.get("memory_update")
+    memory_files = result.data.get("memory_files")
+    if not isinstance(memory_files, list):
+        memory_files = []
+
+    if memory_update == "updated" and not memory_files:
+        errors.append("handoff memory_update is updated but memory_files is empty")
+
+    for raw_file in memory_files:
+        if not isinstance(raw_file, str) or not raw_file.strip():
+            errors.append("handoff memory_files contains an empty entry")
+            continue
+        candidate = first_existing_evidence_path(raw_file, root=root, run_dir=run_dir)
+        if candidate is None:
+            errors.append(f"handoff memory file does not exist: {raw_file}")
+
+    return errors
+
+
+def first_indexed_evidence_path(
+    state: dict[str, Any],
+    evidence_type: str,
+    *,
+    root: Path,
+    run_dir: Path,
+) -> Path | None:
+    for _index, evidence in evidence_items(state):
+        if evidence.get("type") != evidence_type:
+            continue
+        raw_path = evidence.get("path")
+        if not isinstance(raw_path, str) or not raw_path.strip():
+            continue
+        candidate = first_existing_evidence_path(raw_path, root=root, run_dir=run_dir)
+        if candidate is not None:
+            return candidate
+    return None
+
+
 def validate_transition_policy(
     state: dict[str, Any],
     next_status: str,
@@ -1047,6 +1126,15 @@ def advance_run(
     completion_errors = validate_completion_evidence(state, next_status)
     if completion_errors:
         raise HarnessCliError(format_errors(completion_errors))
+
+    handoff_errors = validate_handoff_closure(
+        state,
+        next_status,
+        root=root,
+        run_dir=resolved_run_dir,
+    )
+    if handoff_errors:
+        raise HarnessCliError(format_errors(handoff_errors))
 
     candidate = dict(state)
     candidate["status"] = next_status

@@ -46,7 +46,31 @@ def write_state(run_dir: Path, state: dict) -> None:
 
 def evidence_entry(run_dir: Path, evidence_type: str) -> dict:
     path = run_dir / f"{evidence_type}.md"
-    path.write_text(f"# {evidence_type}\n", encoding="utf-8")
+    if evidence_type == "handoff":
+        # Phase 3 requires handoff closure frontmatter before a run may
+        # advance to completed. Tests that reach completion index this
+        # closure-valid handoff artifact.
+        path.write_text(
+            """---
+run_id: test-run
+schema_version: 0.1.0
+changed:
+  - "Test change."
+verified:
+  - "Test verification."
+not_verified: []
+residual_risks: []
+next_step: "Next step."
+memory_update: none
+memory_files: []
+---
+
+# handoff
+""",
+            encoding="utf-8",
+        )
+    else:
+        path.write_text(f"# {evidence_type}\n", encoding="utf-8")
     return {
         "type": evidence_type,
         "path": str(path.relative_to(ROOT)),
