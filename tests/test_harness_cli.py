@@ -97,7 +97,7 @@ class HarnessCliTest(unittest.TestCase):
 
         self.assertEqual(errors_by_run, {})
 
-    def test_evidence_type_vocabulary_matches_phase_1_contract(self):
+    def test_evidence_type_vocabulary_matches_phase_4_contract(self):
         self.assertEqual(
             cli.EVIDENCE_TYPES,
             frozenset(
@@ -119,6 +119,9 @@ class HarnessCliTest(unittest.TestCase):
                     "review-waiver",
                     "risk-acceptance",
                     "handoff",
+                    "agent-job",
+                    "agent-result",
+                    "aggregation",
                 }
             ),
         )

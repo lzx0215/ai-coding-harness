@@ -34,12 +34,19 @@ EVIDENCE_TYPES = frozenset(
         "review-waiver",
         "risk-acceptance",
         "handoff",
+        "agent-job",
+        "agent-result",
+        "aggregation",
     }
 )
 REVIEW_COMPLETION_EVIDENCE_TYPES = frozenset(
     {"review", "review-evidence", "review-waiver"},
 )
 COMPLETION_REQUIRED_EVIDENCE_TYPES = frozenset({"verification", "handoff"})
+JOB_SCHEMA = ROOT / "harness" / "schemas" / "job.schema.json"
+AGGREGATION_SCHEMA = ROOT / "harness" / "schemas" / "aggregation.schema.json"
+JOB_STATUSES = frozenset({"queued", "running", "succeeded", "failed", "timeout", "cancelled"})
+TERMINAL_JOB_STATUSES = frozenset({"succeeded", "failed", "timeout", "cancelled"})
 
 NORMAL_TRANSITIONS = {
     "draft": {"triaged"},
@@ -135,6 +142,7 @@ def validate_state(
 
     errors.extend(validate_evidence_types(state))
     errors.extend(validate_evidence_paths(state, root=root, run_dir=run_dir))
+    errors.extend(validate_job_evidence(state, root=root, run_dir=run_dir))
     return errors
 
 
@@ -158,6 +166,40 @@ def validate_evidence_types(state: dict[str, Any]) -> list[str]:
             errors.append(
                 f"unknown evidence type at evidence[{index}]: {evidence_type}",
             )
+    return errors
+
+
+def validate_job_evidence(
+    state: dict[str, Any],
+    *,
+    root: Path,
+    run_dir: Path,
+) -> list[str]:
+    errors: list[str] = []
+    for index, evidence in evidence_items(state):
+        evidence_type = evidence.get("type")
+        if evidence_type != "agent-job":
+            continue
+
+        raw_path = evidence.get("path")
+        if not isinstance(raw_path, str) or not raw_path.strip():
+            continue
+
+        job_path = first_existing_evidence_path(raw_path, root=root, run_dir=run_dir)
+        if job_path is None:
+            continue
+
+        job, job_errors = validate_json_artifact(job_path, JOB_SCHEMA, "job")
+        errors.extend(f"evidence[{index}]: {error}" for error in job_errors)
+        if job is None:
+            continue
+
+        status = job.get("status")
+        if status not in TERMINAL_JOB_STATUSES:
+            errors.append(
+                f"non-terminal job cannot be consumed at evidence[{index}]: {status}",
+            )
+
     return errors
 
 
@@ -191,6 +233,47 @@ def validate_evidence_paths(
             errors.append(f"evidence path does not exist at evidence[{index}]: {raw_path}")
 
     return errors
+
+
+def first_existing_evidence_path(
+    raw_path: str,
+    *,
+    root: Path,
+    run_dir: Path,
+) -> Path | None:
+    for candidate in evidence_path_candidates(raw_path, root=root, run_dir=run_dir):
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def format_schema_errors(prefix: str, errors: Iterable[Any]) -> list[str]:
+    formatted: list[str] = []
+    for error in sorted(errors, key=lambda item: list(item.path)):
+        location = ".".join(str(part) for part in error.path) or "<root>"
+        formatted.append(f"{prefix} schema error at {location}: {error.message}")
+    return formatted
+
+
+def validate_json_artifact(
+    path: Path,
+    schema_path: Path,
+    prefix: str,
+) -> tuple[dict[str, Any] | None, list[str]]:
+    try:
+        payload = load_json(path)
+    except UnicodeDecodeError as exc:
+        return None, [f"{prefix} invalid encoding: {exc}"]
+    except json.JSONDecodeError as exc:
+        return None, [f"{prefix} invalid JSON: {exc}"]
+    except OSError as exc:
+        return None, [f"{prefix} cannot read file: {exc}"]
+
+    schema = load_json(schema_path)
+    errors = format_schema_errors(prefix, Draft202012Validator(schema).iter_errors(payload))
+    if errors:
+        return None, errors
+    return payload, []
 
 
 def evidence_path_candidates(raw_path: str, *, root: Path, run_dir: Path) -> list[Path]:

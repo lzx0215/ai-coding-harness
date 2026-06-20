@@ -5,6 +5,8 @@ from pathlib import Path
 
 from jsonschema import Draft202012Validator
 
+from harness import cli
+
 
 ROOT = Path(__file__).resolve().parents[1]
 JOB_SCHEMA = ROOT / "harness" / "schemas" / "job.schema.json"
@@ -17,6 +19,11 @@ def load_schema(path: Path) -> dict:
 
 def validation_errors(schema_path: Path, payload: dict) -> list:
     return list(Draft202012Validator(load_schema(schema_path)).iter_errors(payload))
+
+
+def write_json(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
 
 def minimal_job(status: str = "succeeded") -> dict:
@@ -56,6 +63,30 @@ def minimal_aggregation() -> dict:
         "conflicts": [],
         "recommended_transition": None,
         "residual_risks": [],
+    }
+
+
+def minimal_state(status: str = "verified") -> dict:
+    return {
+        "run_id": "test-run",
+        "harness_version": "0.2.0",
+        "state_schema_version": "0.2.0",
+        "status": status,
+        "track": "Standard",
+        "current_workflow": "standard-code-change",
+        "owner": "codex",
+        "base_commit": "HEAD",
+        "created_at": "2026-06-20T00:00:00Z",
+        "updated_at": "2026-06-20T00:00:00Z",
+        "external_agents": [
+            {
+                "name": "claude-code",
+                "role": "reviewer",
+                "state_access": "none",
+                "status": "not_requested",
+            }
+        ],
+        "evidence": [],
     }
 
 
@@ -105,6 +136,82 @@ class AsyncJobArtifactSchemaTest(unittest.TestCase):
         ]
 
         self.assertEqual(validation_errors(AGGREGATION_SCHEMA, aggregation), [])
+
+
+class AsyncJobEvidenceValidationTest(unittest.TestCase):
+    def test_validate_accepts_terminal_agent_job_evidence(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            job_file = run_dir / "jobs" / "claude-review-001" / "job.json"
+            write_json(job_file, minimal_job("succeeded"))
+            state = minimal_state()
+            state["evidence"] = [
+                {
+                    "type": "agent-job",
+                    "path": str(job_file.relative_to(ROOT)),
+                }
+            ]
+            write_json(run_dir / "state.json", state)
+
+            result = cli.validate_run(run_dir, root=ROOT)
+
+        self.assertEqual(result.errors, [])
+
+    def test_validate_rejects_non_terminal_agent_job_evidence(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            job_file = run_dir / "jobs" / "claude-review-001" / "job.json"
+            write_json(job_file, minimal_job("running"))
+            state = minimal_state()
+            state["evidence"] = [
+                {
+                    "type": "agent-job",
+                    "path": str(job_file.relative_to(ROOT)),
+                }
+            ]
+            write_json(run_dir / "state.json", state)
+
+            result = cli.validate_run(run_dir, root=ROOT)
+
+        self.assertTrue(
+            any("non-terminal job cannot be consumed" in error for error in result.errors),
+            result.errors,
+        )
+
+    def test_succeeded_job_directory_is_not_auto_indexed_as_evidence(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            job_file = run_dir / "jobs" / "claude-review-001" / "job.json"
+            write_json(job_file, minimal_job("succeeded"))
+            state = minimal_state()
+            write_json(run_dir / "state.json", state)
+
+            result = cli.validate_run(run_dir, root=ROOT)
+
+        self.assertEqual(result.errors, [])
+
+    def test_validate_rejects_invalid_agent_job_schema(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            job_file = run_dir / "jobs" / "claude-review-001" / "job.json"
+            job = minimal_job("succeeded")
+            job["status"] = "done"
+            write_json(job_file, job)
+            state = minimal_state()
+            state["evidence"] = [
+                {
+                    "type": "agent-job",
+                    "path": str(job_file.relative_to(ROOT)),
+                }
+            ]
+            write_json(run_dir / "state.json", state)
+
+            result = cli.validate_run(run_dir, root=ROOT)
+
+        self.assertTrue(
+            any("job schema error" in error for error in result.errors),
+            result.errors,
+        )
 
 
 if __name__ == "__main__":
