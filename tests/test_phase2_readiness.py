@@ -216,6 +216,63 @@ scope:
 
 
 class Phase2TemplateTest(unittest.TestCase):
+    def test_phase2_template_frontmatter_defaults_match_expected_maps(self):
+        expected_frontmatter = {
+            "task.md": {
+                "run_id": "",
+                "schema_version": "0.1.0",
+                "track": "Standard",
+                "workflow": "standard-doc-system-change",
+                "owner": "codex",
+                "requested_outcome": "",
+                "scope": [],
+                "non_goals": [],
+                "constraints": [],
+            },
+            "triage.md": {
+                "run_id": "",
+                "schema_version": "0.1.0",
+                "track": "Standard",
+                "workflow": "standard-doc-system-change",
+                "review_required": True,
+                "strict_triggers": [],
+                "risk_reasons": [],
+                "verification_required": [],
+            },
+            "plan.md": {
+                "run_id": "",
+                "schema_version": "0.1.0",
+                "workflow": "standard-doc-system-change",
+                "acceptance": [],
+                "verification": [],
+                "review_plan": [],
+                "constraints": [],
+                "recovery_strategy": None,
+                "residual_risk_owner": None,
+            },
+            "handoff.md": {
+                "run_id": "",
+                "schema_version": "0.1.0",
+                "changed": [],
+                "verified": [],
+                "not_verified": [],
+                "residual_risks": [],
+                "next_step": "",
+                "memory_update": "none",
+                "memory_files": [],
+            },
+        }
+
+        for template_name, expected_data in expected_frontmatter.items():
+            with self.subTest(template_name=template_name):
+                text = (ROOT / "harness" / "templates" / template_name).read_text(
+                    encoding="utf-8",
+                )
+                result = readiness.parse_frontmatter(text)
+
+                self.assertEqual(result.warnings, [])
+                self.assertEqual(result.data, expected_data)
+
     def test_phase2_templates_have_frontmatter(self):
         for template_name in ("task.md", "triage.md", "plan.md", "handoff.md"):
             with self.subTest(template_name=template_name):
