@@ -608,6 +608,7 @@ class HarnessCliTest(unittest.TestCase):
             state["track"] = "Standard"
             state["current_workflow"] = "standard-doc-system-change"
             write_state(run_dir, state)
+            before = (run_dir / "state.json").read_text(encoding="utf-8")
             for name in ("task.md", "triage.md", "plan.md", "handoff.md"):
                 (run_dir / name).write_text(
                     f"""---
@@ -629,8 +630,10 @@ workflow: standard-doc-system-change
                 capture_output=True,
                 check=False,
             )
+            after = (run_dir / "state.json").read_text(encoding="utf-8")
 
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertEqual(before, after)
         self.assertIn("ready: no readiness warnings", result.stdout)
 
     def test_module_entrypoint_validates_run_from_command_line(self):
