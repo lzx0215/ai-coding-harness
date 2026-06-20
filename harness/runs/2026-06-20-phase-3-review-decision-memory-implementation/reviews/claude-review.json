@@ -1,0 +1,28 @@
+{
+  "status": "passed",
+  "run_id": "2026-06-20-phase-3-review-decision-memory-implementation",
+  "harness_version": "0.2.0",
+  "adapter_version": "0.1.0",
+  "prompt_version": "0.1.0",
+  "reviewer": "claude-code",
+  "reviewer_model": "unknown",
+  "reviewer_model_version": "unknown",
+  "reviewer_cli_version": "unknown",
+  "summary": "Phase 3 implementation reviewed against the spec and plan: review-decision schema, validate integration, advance gate, closure gate, and soft check-ready warning all implemented with TDD. Authority boundaries preserved; historical runs remain valid.",
+  "findings": [],
+  "tested": [
+    "review-decision schema accepts all dispositions and pins consistency",
+    "validate loads and semantically validates indexed review-decision.json",
+    "advance gates review-related targets on review decision",
+    "advance -> completed enforces handoff and memory closure",
+    "check-ready warns on memory files declared without memory_update"
+  ],
+  "not_tested": [
+    "live pip hash validation",
+    "real Claude model invocation"
+  ],
+  "residual_risks": [
+    "required-decision gate scoped to triage targets (reviewed, review_blocked) per plan-time refinement"
+  ],
+  "raw_log_file": "reviews/claude-review.raw.log"
+}

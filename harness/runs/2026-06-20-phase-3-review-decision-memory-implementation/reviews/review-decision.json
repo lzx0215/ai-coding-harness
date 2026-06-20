@@ -1,0 +1,31 @@
+{
+  "schema_version": "0.1.0",
+  "run_id": "2026-06-20-phase-3-review-decision-memory-implementation",
+  "generated_at": "2026-06-20T13:50:00Z",
+  "disposition": "passed",
+  "recommended_status": "reviewed",
+  "decision_owner": "codex",
+  "source_evidence": [
+    {
+      "type": "review-output",
+      "path": "harness/runs/2026-06-20-phase-3-review-decision-memory-implementation/reviews/claude-review.json"
+    }
+  ],
+  "severity_counts": {
+    "critical": 0,
+    "high": 0,
+    "medium": 0,
+    "low": 0,
+    "info": 0
+  },
+  "resolved_findings": [],
+  "accepted_risks": [],
+  "not_tested": [
+    "live pip hash validation",
+    "real Claude model invocation"
+  ],
+  "residual_risks": [
+    "required-decision gate scoped to triage targets (reviewed, review_blocked) per plan-time refinement"
+  ],
+  "notes": "Review output found no blocking findings; disposition passed, recommending reviewed."
+}
