@@ -373,6 +373,21 @@ def validate_completion_evidence(
     return errors
 
 
+def validate_transition_policy(
+    state: dict[str, Any],
+    next_status: str,
+) -> list[str]:
+    if (
+        state.get("status") == "external_review_unavailable"
+        and state.get("track") == "Strict"
+        and next_status == "risk_accepted"
+    ):
+        return [
+            "strict unavailable review requires needs_user_decision before risk acceptance",
+        ]
+    return []
+
+
 def advance_run(
     run_dir: Path | str,
     next_status: str,
@@ -399,6 +414,10 @@ def advance_run(
         raise HarnessCliError(
             f"invalid transition: {current_status} -> {next_status}",
         )
+
+    policy_errors = validate_transition_policy(state, next_status)
+    if policy_errors:
+        raise HarnessCliError(format_errors(policy_errors))
 
     completion_errors = validate_completion_evidence(state, next_status)
     if completion_errors:

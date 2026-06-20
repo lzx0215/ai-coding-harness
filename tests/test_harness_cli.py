@@ -498,6 +498,61 @@ class HarnessCliTest(unittest.TestCase):
         self.assertEqual(risk_state["status"], "risk_accepted")
         self.assertEqual(completed["status"], "completed")
 
+    def test_advance_allows_standard_unavailable_review_to_risk_accepted(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            state = minimal_state(status="external_review_unavailable")
+            state["track"] = "Standard"
+            state["current_workflow"] = "standard-doc-system-change"
+            write_state(run_dir, state)
+
+            advanced = cli.advance_run(
+                run_dir,
+                "risk_accepted",
+                actor="codex",
+                root=ROOT,
+            )
+
+        self.assertEqual(advanced["status"], "risk_accepted")
+
+    def test_advance_rejects_strict_unavailable_review_to_risk_accepted(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            state = minimal_state(status="external_review_unavailable")
+            state["track"] = "Strict"
+            state["current_workflow"] = "strict-risk-change"
+            write_state(run_dir, state)
+
+            with self.assertRaises(cli.HarnessCliError) as raised:
+                cli.advance_run(
+                    run_dir,
+                    "risk_accepted",
+                    actor="codex",
+                    root=ROOT,
+                )
+
+        self.assertIn(
+            "strict unavailable review requires needs_user_decision",
+            str(raised.exception),
+        )
+
+    def test_advance_allows_strict_unavailable_review_to_needs_user_decision(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            state = minimal_state(status="external_review_unavailable")
+            state["track"] = "Strict"
+            state["current_workflow"] = "strict-risk-change"
+            write_state(run_dir, state)
+
+            advanced = cli.advance_run(
+                run_dir,
+                "needs_user_decision",
+                actor="codex",
+                root=ROOT,
+            )
+
+        self.assertEqual(advanced["status"], "needs_user_decision")
+
     def test_advance_rejects_risk_accepted_completion_without_risk_acceptance(self):
         with tempfile.TemporaryDirectory(dir=ROOT) as raw:
             run_dir = Path(raw)
