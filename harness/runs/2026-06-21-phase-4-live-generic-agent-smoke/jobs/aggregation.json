@@ -1,0 +1,20 @@
+{
+  "run_id": "2026-06-21-phase-4-live-generic-agent-smoke",
+  "generated_at": "2026-06-21T08:14:29Z",
+  "consumed_jobs": [
+    "phase4-live-generic-agent"
+  ],
+  "succeeded_jobs": [
+    "phase4-live-generic-agent"
+  ],
+  "failed_jobs": [],
+  "timeout_jobs": [],
+  "cancelled_jobs": [],
+  "incomplete_jobs": [],
+  "findings": [],
+  "conflicts": [],
+  "recommended_transition": null,
+  "residual_risks": [
+    "This live run proves local generic-agent execution, not scheduler supervision."
+  ]
+}

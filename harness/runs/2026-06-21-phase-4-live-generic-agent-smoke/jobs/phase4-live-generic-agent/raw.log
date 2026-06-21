@@ -1,0 +1,9 @@
+command: ["python", "..\\..\\scripts\\agent-smoke.py"]
+returncode: 0
+
+stdout:
+phase4 live generic agent wrote output
+
+
+stderr:
+

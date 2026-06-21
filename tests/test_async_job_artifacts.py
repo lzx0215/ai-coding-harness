@@ -10,6 +10,7 @@ from harness import cli
 
 ROOT = Path(__file__).resolve().parents[1]
 PHASE4_RUN = ROOT / "harness" / "runs" / "2026-06-21-phase-4-async-substrate-closure"
+PHASE4_LIVE_RUN = ROOT / "harness" / "runs" / "2026-06-21-phase-4-live-generic-agent-smoke"
 JOB_SCHEMA = ROOT / "harness" / "schemas" / "job.schema.json"
 AGGREGATION_SCHEMA = ROOT / "harness" / "schemas" / "aggregation.schema.json"
 AGENT_RESULT_SCHEMA = ROOT / "harness" / "schemas" / "agent-result.schema.json"
@@ -42,6 +43,30 @@ class Phase4ClosureRunTest(unittest.TestCase):
         self.assertTrue(PHASE4_RUN.joinpath("jobs", "phase4-substrate-smoke", "job.json").exists())
         self.assertTrue(PHASE4_RUN.joinpath("jobs", "phase4-substrate-smoke", "output.json").exists())
         self.assertTrue(PHASE4_RUN.joinpath("jobs", "aggregation.json").exists())
+
+    def test_phase4_live_run_was_produced_by_run_generic_agent(self):
+        result = cli.validate_run(PHASE4_LIVE_RUN, root=ROOT)
+        state = json.loads((PHASE4_LIVE_RUN / "state.json").read_text(encoding="utf-8"))
+        evidence_types = {item["type"] for item in state["evidence"]}
+        raw_log = PHASE4_LIVE_RUN.joinpath(
+            "jobs",
+            "phase4-live-generic-agent",
+            "raw.log",
+        ).read_text(encoding="utf-8")
+
+        self.assertEqual(result.errors, [])
+        self.assertEqual(state["status"], "completed")
+        self.assertIn("agent-job", evidence_types)
+        self.assertIn("agent-result", evidence_types)
+        self.assertIn("aggregation", evidence_types)
+        self.assertTrue(
+            PHASE4_LIVE_RUN.joinpath(
+                "jobs",
+                "phase4-live-generic-agent",
+                "input.json",
+            ).exists()
+        )
+        self.assertIn("phase4 live generic agent wrote output", raw_log)
 
 
 def minimal_job(status: str = "succeeded") -> dict:
