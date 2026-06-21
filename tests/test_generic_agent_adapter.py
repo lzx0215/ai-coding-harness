@@ -194,6 +194,90 @@ class GenericCliAgentOrchestrationTest(unittest.TestCase):
         self.assertIn("cannot execute job generic-terminal with status succeeded", str(raised.exception))
         self.assertEqual(raw_log, "original raw log\n")
 
+    def test_execute_generic_agent_job_rejects_artifact_paths_that_escape_job_dir(self):
+        for field in ("input_file", "output_file", "raw_log_file"):
+            with self.subTest(field=field):
+                with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+                    run_dir = Path(raw)
+                    original_state_text = json.dumps(minimal_state(), indent=2) + "\n"
+                    (run_dir / "state.json").write_text(original_state_text, encoding="utf-8")
+                    cli.create_generic_agent_job(
+                        run_dir,
+                        "generic-escape",
+                        agent="generic-test-agent",
+                        command=[sys.executable, "-c", "print('escape attempt')"],
+                        timeout_seconds=30,
+                        root=ROOT,
+                    )
+                    job_path = run_dir / "jobs" / "generic-escape" / "job.json"
+                    job = json.loads(job_path.read_text(encoding="utf-8"))
+                    job[field] = "../../state.json"
+                    write_json(job_path, job)
+
+                    with self.assertRaises(cli.HarnessCliError) as raised:
+                        cli.execute_generic_agent_job(
+                            run_dir,
+                            "generic-escape",
+                            root=ROOT,
+                        )
+
+                    saved_state_text = (run_dir / "state.json").read_text(encoding="utf-8")
+
+                self.assertIn(f"{field} escapes job directory", str(raised.exception))
+                self.assertEqual(saved_state_text, original_state_text)
+
+    def test_execute_generic_agent_job_rejects_job_id_mismatch(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            write_json(run_dir / "state.json", minimal_state())
+            cli.create_generic_agent_job(
+                run_dir,
+                "generic-identity",
+                agent="generic-test-agent",
+                command=[sys.executable, "-c", "print('unused')"],
+                timeout_seconds=30,
+                root=ROOT,
+            )
+            job_path = run_dir / "jobs" / "generic-identity" / "job.json"
+            job = json.loads(job_path.read_text(encoding="utf-8"))
+            job["job_id"] = "other-job"
+            write_json(job_path, job)
+
+            with self.assertRaises(cli.HarnessCliError) as raised:
+                cli.execute_generic_agent_job(
+                    run_dir,
+                    "generic-identity",
+                    root=ROOT,
+                )
+
+        self.assertIn("job_id mismatch", str(raised.exception))
+
+    def test_execute_generic_agent_job_rejects_run_id_mismatch(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            write_json(run_dir / "state.json", minimal_state())
+            cli.create_generic_agent_job(
+                run_dir,
+                "generic-run-mismatch",
+                agent="generic-test-agent",
+                command=[sys.executable, "-c", "print('unused')"],
+                timeout_seconds=30,
+                root=ROOT,
+            )
+            job_path = run_dir / "jobs" / "generic-run-mismatch" / "job.json"
+            job = json.loads(job_path.read_text(encoding="utf-8"))
+            job["run_id"] = "other-run"
+            write_json(job_path, job)
+
+            with self.assertRaises(cli.HarnessCliError) as raised:
+                cli.execute_generic_agent_job(
+                    run_dir,
+                    "generic-run-mismatch",
+                    root=ROOT,
+                )
+
+        self.assertIn("run_id mismatch", str(raised.exception))
+
     def test_run_generic_agent_creates_job_result_and_log_without_mutating_state(self):
         with tempfile.TemporaryDirectory(dir=ROOT) as raw:
             run_dir = Path(raw)

@@ -1591,10 +1591,22 @@ def execute_generic_agent_job(
         raise HarnessCliError(f"job cannot be loaded: {job_path}")
     if job["status"] != "queued":
         raise HarnessCliError(f"cannot execute job {job_id} with status {job['status']}")
+    state = load_json(state_path(resolved_run_dir))
+    run_id = state["run_id"]
+    if job["job_id"] != job_id:
+        raise HarnessCliError(f"job_id mismatch: expected {job_id}, got {job['job_id']}")
+    if job["run_id"] != run_id:
+        raise HarnessCliError(f"run_id mismatch: expected {run_id}, got {job['run_id']}")
 
-    input_path = job_dir / job["input_file"]
-    output_path = job_dir / job["output_file"]
-    raw_log_path = job_dir / job["raw_log_file"]
+    def resolve_job_artifact_path(field: str) -> Path:
+        artifact_path = (job_dir / job[field]).resolve(strict=False)
+        if not is_within_path(artifact_path, job_dir):
+            raise HarnessCliError(f"{field} escapes job directory: {job[field]}")
+        return artifact_path
+
+    input_path = resolve_job_artifact_path("input_file")
+    output_path = resolve_job_artifact_path("output_file")
+    raw_log_path = resolve_job_artifact_path("raw_log_file")
     try:
         input_payload = load_json(input_path)
     except (UnicodeDecodeError, json.JSONDecodeError, OSError) as exc:
@@ -1604,7 +1616,6 @@ def execute_generic_agent_job(
     if not isinstance(command, list) or not command:
         raise HarnessCliError("generic agent command must be non-empty")
 
-    run_id = job["run_id"]
     agent = job["agent"]
     adapter = job["adapter"]
     timeout_seconds = job["timeout_seconds"]
