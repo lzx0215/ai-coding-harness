@@ -1815,6 +1815,8 @@ def load_scheduler_jobs(run_dir: Path, *, root: Path) -> list[dict[str, Any]]:
                 f"{job_path}: run_id mismatch: expected {run_id}, got {job.get('run_id')}",
             )
 
+        timestamp_errors = validate_job_timestamp_semantics(job)
+        errors.extend(f"{job_path}: {error}" for error in timestamp_errors)
         jobs.append(job)
 
     if errors:
