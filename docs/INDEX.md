@@ -8,8 +8,9 @@
 ## Current Status
 
 - Phase 3 review decision and memory closure plus follow-up provenance hardening are merged into `master`: indexed `review-decision.json` evidence is schema/semantically validated, review-related transitions are gated by Codex decisions where required, and completion requires handoff/memory closure metadata.
-- Phase 4 async job substrate is implemented in the source tree: run-local job, agent-result, and aggregation schemas are available; consumed async job evidence and aggregation evidence are validated; Standard and Strict unavailable-review policy is enforced. A formal closure run exists at `harness/runs/2026-06-21-phase-4-async-substrate-closure/`.
-- Team-repeatable validation is now defined by `.github/workflows/ci.yml` and `pyproject.toml` with the `harness` console script.
+- Phase 4 async job substrate is implemented in the source tree: run-local job, agent-result, and aggregation schemas are available; consumed async job evidence and aggregation evidence are validated; Standard and Strict unavailable-review policy is enforced.
+- A formal closure run exists at `harness/runs/2026-06-21-phase-4-async-substrate-closure/`; a live `run-generic-agent` smoke run exists at `harness/runs/2026-06-21-phase-4-live-generic-agent-smoke/`.
+- Team-repeatable validation is now defined by `.github/workflows/ci.yml` and `pyproject.toml` with editable tests, non-editable package smoke, packaged console-script run validation, and merge-base scoped whitespace checks.
 
 ## Specs
 
@@ -33,6 +34,7 @@
 
 - `harness/core/` - Agent-neutral Harness rules.
 - `harness/core/evidence.md` - Controlled evidence vocabulary and Phase 4 async evidence contract.
+- `harness/core/run-lifecycle-sop.md` - SOP for creating runs, advancing state, indexing evidence, and completing handoff before considering a reusable skill.
 - `harness/adapters/` - Agent-specific adapter rules.
 - `harness/templates/` - Copyable task and evidence templates.
 - `harness/schemas/` - JSON schemas for machine-checkable artifacts, including run state, async jobs, agent results, and aggregation.

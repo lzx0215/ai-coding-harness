@@ -16,6 +16,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -43,4 +45,48 @@ jobs:
         run: harness validate harness/runs/example-fast-doc-change
 
       - name: Check whitespace
-        run: git diff --check
+        shell: bash
+        run: |
+          git fetch --no-tags --prune origin '+refs/heads/*:refs/remotes/origin/*'
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base="$(git merge-base HEAD "origin/${{ github.base_ref }}")"
+          elif git cat-file -e "${{ github.event.before }}^{commit}" 2>/dev/null; then
+            base="${{ github.event.before }}"
+          else
+            base="$(git merge-base HEAD origin/master)"
+          fi
+          git diff --check "$base" HEAD
+
+  package-smoke:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install package non-editable
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install .
+
+      - name: Smoke packaged console script from outside repository
+        shell: bash
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/.tmp"
+          trap 'rm -rf "$GITHUB_WORKSPACE/.tmp/package-smoke-run"' EXIT
+          cd "$RUNNER_TEMP"
+          harness validate "$GITHUB_WORKSPACE/harness/runs/example-fast-doc-change"
+          for run_dir in "$GITHUB_WORKSPACE"/harness/runs/*; do
+            if [ -d "$run_dir" ]; then
+              harness validate "$run_dir"
+            fi
+          done
+          harness init-run "$GITHUB_WORKSPACE/.tmp/package-smoke-run" --run-id package-smoke --track Fast --workflow fast-doc-change --base-commit HEAD
+          harness validate "$GITHUB_WORKSPACE/.tmp/package-smoke-run"

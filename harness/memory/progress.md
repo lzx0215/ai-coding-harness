@@ -16,23 +16,27 @@ Phase 3 added:
 
 No new Harness state and no new evidence type were introduced; `review-decision.json` is indexed as `review-evidence`. Historical runs remain valid without migration.
 
-Phase 4 async job substrate is implemented in the current source tree. It added run-local async job schemas, aggregation schemas, explicit `agent-job` / `agent-result` / `aggregation` evidence validation, consumed-job duplicate/status checks, aggregation cross-checking, and Standard versus Strict unavailable-review policy. A formal source-controlled Phase 4 closure run now exists at `harness/runs/2026-06-21-phase-4-async-substrate-closure`, indexing terminal `agent-job`, `agent-result`, and `aggregation` artifacts. The Phase 4 plan checkboxes remain unchanged by convention.
+Phase 4 async job substrate is implemented in the current source tree. It added run-local async job schemas, aggregation schemas, explicit `agent-job` / `agent-result` / `aggregation` evidence validation, consumed-job duplicate/status checks, aggregation cross-checking, and Standard versus Strict unavailable-review policy. A formal source-controlled Phase 4 closure run exists at `harness/runs/2026-06-21-phase-4-async-substrate-closure`, indexing terminal `agent-job`, `agent-result`, and `aggregation` artifacts. A live smoke run now exists at `harness/runs/2026-06-21-phase-4-live-generic-agent-smoke`; its `jobs/phase4-live-generic-agent/` artifacts were produced by the real `run-generic-agent` CLI path, and `raw.log` contains deterministic smoke-agent stdout.
 
-The current branch also adds team-repeatable validation entrypoints:
+The current branch also adds team-repeatable validation entrypoints and packaged CLI hardening:
 
-- `.github/workflows/ci.yml` runs editable install, the full unittest suite, every source-controlled run validation, console-script smoke validation, and `git diff --check`.
+- `harness.cli` now separates package resources (`harness/schemas`, `harness/templates`) from repository root discovery used for evidence paths. Packaged console-script execution can validate absolute run directories from outside the repository.
+- `.github/workflows/ci.yml` runs editable install, the full unittest suite, every source-controlled run validation, non-editable package smoke validation from outside the repo, and merge-base scoped `git diff --check`.
 - `pyproject.toml` defines the `ai-coding-harness` package and `harness = harness.cli:main` console script.
+- `harness/core/run-lifecycle-sop.md` captures the repeatable create-run / advance-state / index-evidence / handoff flow; it should become a Codex skill only after at least two real reuses or explicit user request.
 
 The current verification baseline is:
 
-- `python -m unittest discover -s tests` -> 217 tests OK, 1 skipped
-- all 10 `harness/runs/*` directories validated successfully
+- `python -m unittest discover -s tests` -> baseline before this change: 217 tests OK, 1 skipped
+- all 10 pre-existing `harness/runs/*` directories validated successfully before this change
 - `python -m pip install -e .` succeeded locally
 - `harness validate harness/runs/2026-06-21-phase-4-async-substrate-closure` passed locally
+- `python -m harness.cli validate harness/runs/2026-06-21-phase-4-live-generic-agent-smoke` passed locally
+- `python -m unittest tests.test_async_job_artifacts.Phase4ClosureRunTest.test_phase4_live_run_was_produced_by_run_generic_agent -v` passed locally
 - real Claude Code review adapter output is indexed under the Phase 3 run
 
 Follow-up Phase 3 provenance hardening now rejects empty `source_evidence` for review-result decisions, duplicate indexed `review-decision.json` artifacts, and mismatched `severity_counts` when linked review findings can be computed. Historical runs still validate because none indexed a pre-existing `review-decision.json` except the updated Phase 3 run.
 
 ## Next Step
 
-Open or merge the current `codex/phase4-run-ci-package` branch, then choose the next focus: live async worker/scheduler integration, CI hardening after the first GitHub Actions run, or documentation for the Codex review-decision authoring flow.
+Run final full-suite/package verification for the current branch, then choose the next focus: live async worker/scheduler integration, CI hardening after the first GitHub Actions run, or documentation for the Codex review-decision authoring flow.

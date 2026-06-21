@@ -13,12 +13,15 @@
 
 - Fast / Standard / Strict 三类任务分流规则。
 - 运行状态 schema：`harness/schemas/state.schema.json`。
-- 可复制模板：task、plan、agent brief、agent result、verification、handoff。
+- 可复制模板：task、plan、agent brief、agent result、verification、handoff、risk acceptance。
 - 示例 Fast 文档 run：`harness/runs/example-fast-doc-change/`。
 - Codex 项目配置和自定义 agent：`.codex/`。
 - Claude review MCP adapter：`mcp/claude-review/`。
 - Python 单元测试覆盖 state schema 和 Claude review adapter 的关键安全路径。
 - Reviewer provenance v0.2 contract: optional structured provenance, scalar compatibility fields, and additive `0.1.0|0.2.0` state schema validation.
+- Phase 4 async job substrate：`agent-job`、`agent-result`、`aggregation` schema 和证据校验已经实现。
+- 真实 Phase 4 `run-generic-agent` smoke run：`harness/runs/2026-06-21-phase-4-live-generic-agent-smoke/`。
+- 打包入口：`pyproject.toml` 提供 `harness = harness.cli:main` console script，CI 同时覆盖 editable install 和非 editable package smoke。
 
 ## 目录结构
 
@@ -48,6 +51,19 @@ Get-Content AGENTS.md
 ```powershell
 $env:PYTHONDONTWRITEBYTECODE='1'
 python -m unittest discover -s tests -v
+```
+
+本地安装 console script：
+
+```powershell
+python -m pip install -e .
+harness validate harness/runs/example-fast-doc-change
+```
+
+验证 Phase 4 live generic-agent run：
+
+```powershell
+python -m harness.cli validate harness/runs/2026-06-21-phase-4-live-generic-agent-smoke
 ```
 
 运行 Claude review adapter 的本地依赖安装：
@@ -82,4 +98,8 @@ python mcp/claude-review/server.py
 
 ## 当前状态
 
-v0.2 adds reviewer provenance on top of the v0.1 scaffold. State schema compatibility is additive: existing `0.1.0` run records remain valid, and new v0.2 implementation runs may claim `0.2.0` after the schema migration lands.
+Phase 4 async job substrate 已落地并完成一次真实 `run-generic-agent` smoke：`jobs/phase4-live-generic-agent/` 下的 `input.json`、`job.json`、`output.json`、`raw.log` 由 CLI 实际生成，Codex 再索引 `agent-job`、`agent-result` 和 `aggregation` 证据并完成 run 交接。
+
+当前 CI 目标是团队可重复验证：editable install 跑完整单测和历史 run 校验，非 editable install 验证 packaged console script 在 repo 外 cwd 下仍能解析真实仓库 evidence path，`git diff --check` 按 PR/push 基线检查实际 diff。
+
+仍未实现：scheduler / background worker / cloud queue。相关流程先沉淀为 `harness/core/run-lifecycle-sop.md`，至少复用两次或用户明确要求后再升级为 Codex skill。

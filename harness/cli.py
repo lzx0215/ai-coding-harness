@@ -17,8 +17,10 @@ from jsonschema import Draft202012Validator
 from harness import readiness
 
 
-ROOT = Path(__file__).resolve().parents[1]
-STATE_SCHEMA = ROOT / "harness" / "schemas" / "state.schema.json"
+PACKAGE_DIR = Path(__file__).resolve().parent
+ROOT = PACKAGE_DIR.parent
+SCHEMA_DIR = PACKAGE_DIR / "schemas"
+STATE_SCHEMA = SCHEMA_DIR / "state.schema.json"
 CODEX_ACTOR = "codex"
 GENERIC_ADAPTER_VERSION = "0.1.0"
 EVIDENCE_TYPES = frozenset(
@@ -49,10 +51,10 @@ REVIEW_COMPLETION_EVIDENCE_TYPES = frozenset(
     {"review", "review-evidence", "review-waiver"},
 )
 COMPLETION_REQUIRED_EVIDENCE_TYPES = frozenset({"verification", "handoff"})
-JOB_SCHEMA = ROOT / "harness" / "schemas" / "job.schema.json"
-AGGREGATION_SCHEMA = ROOT / "harness" / "schemas" / "aggregation.schema.json"
-AGENT_RESULT_SCHEMA = ROOT / "harness" / "schemas" / "agent-result.schema.json"
-REVIEW_DECISION_SCHEMA = ROOT / "harness" / "schemas" / "review-decision.schema.json"
+JOB_SCHEMA = SCHEMA_DIR / "job.schema.json"
+AGGREGATION_SCHEMA = SCHEMA_DIR / "aggregation.schema.json"
+AGENT_RESULT_SCHEMA = SCHEMA_DIR / "agent-result.schema.json"
+REVIEW_DECISION_SCHEMA = SCHEMA_DIR / "review-decision.schema.json"
 REVIEW_DECISION_FILENAME = "review-decision.json"
 REVIEW_DECISION_SOURCE_REQUIRED_DISPOSITIONS = frozenset(
     {"passed", "findings-triaged", "waived", "risk-accepted", "blocked"},
@@ -166,6 +168,43 @@ class IndexedJob:
     payload: dict[str, Any]
 
 
+def is_repository_root(path: Path) -> bool:
+    return (
+        (path / "AGENTS.md").is_file()
+        and (path / "harness" / "core" / "state-authority.md").is_file()
+    )
+
+
+def walk_candidate_roots(start: Path) -> Iterable[Path]:
+    resolved = start.resolve(strict=False)
+    yield resolved
+    yield from resolved.parents
+
+
+def resolve_repository_root(
+    run_dir: Path | str | None = None,
+    *,
+    root: Path | str | None = None,
+) -> Path:
+    if root is not None:
+        return Path(root).resolve(strict=False)
+
+    env_root = os.environ.get("HARNESS_ROOT")
+    if env_root:
+        return Path(env_root).resolve(strict=False)
+
+    for candidate in walk_candidate_roots(Path.cwd()):
+        if is_repository_root(candidate):
+            return candidate
+
+    if run_dir is not None:
+        for candidate in walk_candidate_roots(Path(run_dir)):
+            if is_repository_root(candidate):
+                return candidate
+
+    return ROOT.resolve(strict=False)
+
+
 def load_json(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8-sig"))
 
@@ -174,8 +213,13 @@ def state_path(run_dir: Path) -> Path:
     return run_dir / "state.json"
 
 
-def validate_run(run_dir: Path | str, *, root: Path = ROOT) -> ValidationResult:
+def validate_run(
+    run_dir: Path | str,
+    *,
+    root: Path | str | None = None,
+) -> ValidationResult:
     resolved_run_dir = Path(run_dir)
+    repo_root = resolve_repository_root(resolved_run_dir, root=root)
     errors: list[str] = []
     state_file = state_path(resolved_run_dir)
 
@@ -191,7 +235,7 @@ def validate_run(run_dir: Path | str, *, root: Path = ROOT) -> ValidationResult:
     except OSError as exc:
         return ValidationResult(resolved_run_dir, [f"cannot read state file: {exc}"])
 
-    errors.extend(validate_state(state, root=root, run_dir=resolved_run_dir))
+    errors.extend(validate_state(state, root=repo_root, run_dir=resolved_run_dir))
 
     return ValidationResult(resolved_run_dir, errors)
 
@@ -199,12 +243,13 @@ def validate_run(run_dir: Path | str, *, root: Path = ROOT) -> ValidationResult:
 def validate_state(
     state: Any,
     *,
-    root: Path = ROOT,
+    root: Path | str | None = None,
     run_dir: Path,
     validate_paths: bool = True,
 ) -> list[str]:
+    repo_root = resolve_repository_root(run_dir, root=root)
     errors: list[str] = []
-    schema = load_json(root / "harness" / "schemas" / "state.schema.json")
+    schema = load_json(STATE_SCHEMA)
     validator = Draft202012Validator(schema)
     for error in sorted(validator.iter_errors(state), key=lambda item: list(item.path)):
         location = ".".join(str(part) for part in error.path) or "<root>"
@@ -215,10 +260,10 @@ def validate_state(
 
     errors.extend(validate_evidence_types(state))
     if validate_paths:
-        errors.extend(validate_evidence_paths(state, root=root, run_dir=run_dir))
+        errors.extend(validate_evidence_paths(state, root=repo_root, run_dir=run_dir))
     indexed_jobs, job_errors = load_indexed_job_evidence(
         state,
-        root=root,
+        root=repo_root,
         run_dir=run_dir,
     )
     errors.extend(job_errors)
@@ -226,7 +271,7 @@ def validate_state(
     errors.extend(
         validate_agent_result_evidence(
             state,
-            root=root,
+            root=repo_root,
             run_dir=run_dir,
             indexed_jobs=indexed_jobs,
         )
@@ -234,7 +279,7 @@ def validate_state(
     errors.extend(
         validate_aggregation_evidence(
             state,
-            root=root,
+            root=repo_root,
             run_dir=run_dir,
             indexed_jobs=indexed_jobs,
         )
@@ -242,7 +287,7 @@ def validate_state(
     errors.extend(
         validate_review_decision_evidence(
             state,
-            root=root,
+            root=repo_root,
             run_dir=run_dir,
         )
     )
@@ -1194,13 +1239,14 @@ def advance_run(
     next_status: str,
     *,
     actor: str = CODEX_ACTOR,
-    root: Path = ROOT,
+    root: Path | str | None = None,
 ) -> dict[str, Any]:
     if actor != CODEX_ACTOR:
         raise HarnessCliError("only codex may advance harness run state")
 
     resolved_run_dir = Path(run_dir)
-    before = validate_run(resolved_run_dir, root=root)
+    repo_root = resolve_repository_root(resolved_run_dir, root=root)
+    before = validate_run(resolved_run_dir, root=repo_root)
     if not before.ok:
         raise HarnessCliError(format_errors(before.errors))
 
@@ -1223,7 +1269,7 @@ def advance_run(
     review_decision_errors = validate_review_decision_transition(
         state,
         next_status,
-        root=root,
+        root=repo_root,
         run_dir=resolved_run_dir,
     )
     if review_decision_errors:
@@ -1236,7 +1282,7 @@ def advance_run(
     handoff_errors = validate_handoff_closure(
         state,
         next_status,
-        root=root,
+        root=repo_root,
         run_dir=resolved_run_dir,
     )
     if handoff_errors:
@@ -1245,7 +1291,7 @@ def advance_run(
     candidate = dict(state)
     candidate["status"] = next_status
     candidate["updated_at"] = utc_now()
-    candidate_errors = validate_state(candidate, root=root, run_dir=resolved_run_dir)
+    candidate_errors = validate_state(candidate, root=repo_root, run_dir=resolved_run_dir)
     if candidate_errors:
         raise HarnessCliError(format_errors(candidate_errors))
 
@@ -1254,9 +1300,14 @@ def advance_run(
     return candidate
 
 
-def check_ready(run_dir: Path | str, *, root: Path = ROOT) -> readiness.ReadinessReport:
+def check_ready(
+    run_dir: Path | str,
+    *,
+    root: Path | str | None = None,
+) -> readiness.ReadinessReport:
     resolved_run_dir = Path(run_dir)
-    validation = validate_run(resolved_run_dir, root=root)
+    repo_root = resolve_repository_root(resolved_run_dir, root=root)
+    validation = validate_run(resolved_run_dir, root=repo_root)
     if not validation.ok:
         raise HarnessCliError(format_errors(validation.errors))
 
@@ -1274,10 +1325,11 @@ def index_evidence(
     evidence_path: str,
     *,
     description: str | None = None,
-    root: Path = ROOT,
+    root: Path | str | None = None,
 ) -> dict[str, Any]:
     resolved_run_dir = Path(run_dir)
-    validation = validate_run(resolved_run_dir, root=root)
+    repo_root = resolve_repository_root(resolved_run_dir, root=root)
+    validation = validate_run(resolved_run_dir, root=repo_root)
     if not validation.ok:
         raise HarnessCliError(format_errors(validation.errors))
 
@@ -1295,7 +1347,7 @@ def index_evidence(
     candidate["evidence"] = list(state.get("evidence", [])) + [entry]
     candidate["updated_at"] = utc_now()
 
-    candidate_errors = validate_state(candidate, root=root, run_dir=resolved_run_dir)
+    candidate_errors = validate_state(candidate, root=repo_root, run_dir=resolved_run_dir)
     if candidate_errors:
         raise HarnessCliError(format_errors(candidate_errors))
 
@@ -1303,7 +1355,7 @@ def index_evidence(
     return candidate
 
 
-TEMPLATE_DIR = ROOT / "harness" / "templates"
+TEMPLATE_DIR = PACKAGE_DIR / "templates"
 
 
 def render_template(template_name: str, replacements: dict[str, str]) -> str:
@@ -1338,9 +1390,10 @@ def init_run(
     track: str,
     workflow: str,
     base_commit: str,
-    root: Path = ROOT,
+    root: Path | str | None = None,
 ) -> dict[str, Any]:
     resolved_run_dir = Path(run_dir)
+    repo_root = resolve_repository_root(resolved_run_dir, root=root)
     if resolved_run_dir.exists():
         raise HarnessCliError(f"run directory already exists: {resolved_run_dir}")
 
@@ -1385,7 +1438,7 @@ def init_run(
 
     precheck_errors = validate_state(
         state,
-        root=root,
+        root=repo_root,
         run_dir=resolved_run_dir,
         validate_paths=False,
     )
@@ -1409,7 +1462,7 @@ def init_run(
             )
 
         write_json_file(state_path(resolved_run_dir), state)
-        validation = validate_run(resolved_run_dir, root=root)
+        validation = validate_run(resolved_run_dir, root=repo_root)
         if not validation.ok:
             raise HarnessCliError(format_errors(validation.errors))
     except Exception:
@@ -1435,7 +1488,7 @@ def run_generic_agent(
     command: list[str],
     adapter: str = "generic-cli-agent",
     timeout_seconds: int = 1800,
-    root: Path = ROOT,
+    root: Path | str | None = None,
 ) -> dict[str, Any]:
     if not job_id.strip():
         raise HarnessCliError("job_id must be non-empty")
@@ -1447,7 +1500,8 @@ def run_generic_agent(
         raise HarnessCliError("timeout_seconds must be at least 1")
 
     resolved_run_dir = Path(run_dir)
-    before = validate_run(resolved_run_dir, root=root)
+    repo_root = resolve_repository_root(resolved_run_dir, root=root)
+    before = validate_run(resolved_run_dir, root=repo_root)
     if not before.ok:
         raise HarnessCliError(format_errors(before.errors))
 

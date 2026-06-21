@@ -123,10 +123,15 @@ class StaticContractsTest(unittest.TestCase):
 
         for command in [
             "python -m pip install -e .",
+            "python -m pip install .",
             "python -m unittest discover -s tests",
             "python -m harness.cli validate",
             "harness validate harness/runs/example-fast-doc-change",
-            "git diff --check",
+            "github.event.before",
+            "github.base_ref",
+            "git merge-base HEAD origin/master",
+            "git diff --check \"$base\" HEAD",
+            "for run_dir in \"$GITHUB_WORKSPACE\"/harness/runs/*",
         ]:
             self.assertIn(command, text)
 

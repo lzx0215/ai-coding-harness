@@ -1,4 +1,6 @@
 import json
+import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -300,6 +302,31 @@ class HarnessCliTest(unittest.TestCase):
             result = cli.validate_run(run_dir, root=ROOT)
 
         self.assertEqual(result.errors, [])
+
+    def test_packaged_module_discovers_repository_root_from_absolute_run_dir(self):
+        with tempfile.TemporaryDirectory() as raw:
+            temp_dir = Path(raw)
+            fake_site_packages = temp_dir / "site-packages"
+            shutil.copytree(
+                ROOT / "harness",
+                fake_site_packages / "harness",
+                ignore=shutil.ignore_patterns("runs", "__pycache__"),
+            )
+            env = os.environ.copy()
+            env["PYTHONPATH"] = str(fake_site_packages)
+            run_dir = ROOT / "harness" / "runs" / "example-fast-doc-change"
+
+            result = subprocess.run(
+                [sys.executable, "-m", "harness.cli", "validate", str(run_dir)],
+                cwd=temp_dir,
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertIn(f"valid: {run_dir}", result.stdout)
 
     def test_validate_rejects_evidence_path_outside_repository(self):
         with tempfile.TemporaryDirectory(dir=ROOT) as raw:
