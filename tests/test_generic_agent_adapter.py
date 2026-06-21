@@ -1323,6 +1323,92 @@ class GenericCliAgentOrchestrationTest(unittest.TestCase):
         self.assertIn("aggregated jobs: test-run consumed=1 incomplete=0", aggregate_result.stdout)
         self.assertEqual(aggregation["consumed_jobs"], ["cli-scheduler-job"])
 
+    def test_module_entrypoint_queue_accepts_equals_style_options_after_job_id(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            write_json(run_dir / "state.json", minimal_state())
+            agent_script = run_dir / "cli_equals_agent.py"
+            write_agent_script(
+                agent_script,
+                """
+                import json
+                import os
+                from pathlib import Path
+
+                payload = json.loads(Path(os.environ["HARNESS_AGENT_INPUT_FILE"]).read_text(encoding="utf-8"))
+                output = {
+                    "run_id": payload["run_id"],
+                    "job_id": payload["job_id"],
+                    "agent": payload["agent"],
+                    "adapter": payload["adapter"],
+                    "status": "passed",
+                    "summary": "CLI equals agent completed.",
+                    "findings": [],
+                    "evidence": [],
+                    "not_tested": [],
+                    "residual_risks": [],
+                    "generated_at": payload["created_at"],
+                }
+                Path(os.environ["HARNESS_AGENT_OUTPUT_FILE"]).write_text(
+                    json.dumps(output, indent=2) + "\\n",
+                    encoding="utf-8",
+                )
+                """,
+            )
+
+            queue_result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "harness.cli",
+                    "queue-generic-agent",
+                    str(run_dir),
+                    "cli-equals-job",
+                    "--agent=generic-test-agent",
+                    "--adapter=custom-cli-agent",
+                    "--timeout-seconds=30",
+                    "--",
+                    sys.executable,
+                    str(agent_script),
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            scheduler_result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "harness.cli",
+                    "run-scheduler",
+                    str(run_dir),
+                    "--once",
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            job = json.loads(
+                (run_dir / "jobs" / "cli-equals-job" / "job.json").read_text(encoding="utf-8")
+            )
+            input_payload = json.loads(
+                (run_dir / "jobs" / "cli-equals-job" / "input.json").read_text(encoding="utf-8")
+            )
+            output = json.loads(
+                (run_dir / "jobs" / "cli-equals-job" / "output.json").read_text(encoding="utf-8")
+            )
+
+        self.assertEqual(queue_result.returncode, 0, queue_result.stderr + queue_result.stdout)
+        self.assertEqual(scheduler_result.returncode, 0, scheduler_result.stderr + scheduler_result.stdout)
+        self.assertEqual(job["agent"], "generic-test-agent")
+        self.assertEqual(job["adapter"], "custom-cli-agent")
+        self.assertEqual(job["timeout_seconds"], 30)
+        self.assertEqual(input_payload["command"], [sys.executable, str(agent_script)])
+        self.assertEqual(output["agent"], "generic-test-agent")
+        self.assertEqual(output["adapter"], "custom-cli-agent")
+
 
 if __name__ == "__main__":
     unittest.main()

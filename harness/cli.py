@@ -2234,12 +2234,17 @@ def _normalize_queue_generic_agent_argv(argv: list[str]) -> list[str]:
     tail = before_separator[2:]
     options: list[str] = []
     remainder: list[str] = []
+    option_names = {"--agent", "--adapter", "--timeout-seconds"}
     index = 0
     while index < len(tail):
         token = tail[index]
-        if token in {"--agent", "--adapter", "--timeout-seconds"} and index + 1 < len(tail):
+        if token in option_names and index + 1 < len(tail):
             options.extend([token, tail[index + 1]])
             index += 2
+            continue
+        if any(token.startswith(f"{option_name}=") for option_name in option_names):
+            options.append(token)
+            index += 1
             continue
         remainder.append(token)
         index += 1
