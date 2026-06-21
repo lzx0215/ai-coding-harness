@@ -2220,7 +2220,10 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _normalize_queue_generic_agent_argv(argv: list[str]) -> list[str]:
+def _normalize_queue_generic_agent_argv(
+    argv: list[str],
+    parser: argparse.ArgumentParser,
+) -> list[str]:
     if not argv or argv[0] != "queue-generic-agent" or "--" not in argv:
         return argv
 
@@ -2238,7 +2241,9 @@ def _normalize_queue_generic_agent_argv(argv: list[str]) -> list[str]:
     index = 0
     while index < len(tail):
         token = tail[index]
-        if token in option_names and index + 1 < len(tail):
+        if token in option_names:
+            if index + 1 >= len(tail) or tail[index + 1].startswith("--"):
+                parser.error(f"argument {token}: expected one argument")
             options.extend([token, tail[index + 1]])
             index += 2
             continue
@@ -2254,7 +2259,10 @@ def _normalize_queue_generic_agent_argv(argv: list[str]) -> list[str]:
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
-    argv = _normalize_queue_generic_agent_argv(list(sys.argv[1:] if argv is None else argv))
+    argv = _normalize_queue_generic_agent_argv(
+        list(sys.argv[1:] if argv is None else argv),
+        parser,
+    )
     args = parser.parse_args(argv)
 
     try:

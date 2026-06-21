@@ -1409,6 +1409,108 @@ class GenericCliAgentOrchestrationTest(unittest.TestCase):
         self.assertEqual(output["agent"], "generic-test-agent")
         self.assertEqual(output["adapter"], "custom-cli-agent")
 
+    def test_module_entrypoint_queue_rejects_missing_adapter_value_without_creating_job(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            write_json(run_dir / "state.json", minimal_state())
+            agent_script = run_dir / "cli_missing_adapter_agent.py"
+            write_agent_script(agent_script, "print('must not run')")
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "harness.cli",
+                    "queue-generic-agent",
+                    str(run_dir),
+                    "cli-missing-adapter",
+                    "--agent",
+                    "generic-test-agent",
+                    "--adapter",
+                    "--",
+                    sys.executable,
+                    str(agent_script),
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            job_dir_exists = (run_dir / "jobs" / "cli-missing-adapter").exists()
+
+        self.assertNotEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertIn("--adapter", result.stderr + result.stdout)
+        self.assertFalse(job_dir_exists)
+
+    def test_module_entrypoint_queue_rejects_missing_timeout_value_without_creating_job(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            write_json(run_dir / "state.json", minimal_state())
+            agent_script = run_dir / "cli_missing_timeout_agent.py"
+            write_agent_script(agent_script, "print('must not run')")
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "harness.cli",
+                    "queue-generic-agent",
+                    str(run_dir),
+                    "cli-missing-timeout",
+                    "--agent",
+                    "generic-test-agent",
+                    "--timeout-seconds",
+                    "--",
+                    sys.executable,
+                    str(agent_script),
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            job_dir_exists = (run_dir / "jobs" / "cli-missing-timeout").exists()
+
+        self.assertNotEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertIn("--timeout-seconds", result.stderr + result.stdout)
+        self.assertFalse(job_dir_exists)
+
+    def test_module_entrypoint_queue_preserves_agent_side_options_after_separator(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            write_json(run_dir / "state.json", minimal_state())
+            agent_script = run_dir / "cli_inner_agent.py"
+            write_agent_script(agent_script, "print('queued only')")
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "harness.cli",
+                    "queue-generic-agent",
+                    str(run_dir),
+                    "cli-inner-agent",
+                    "--agent=outer-agent",
+                    "--",
+                    sys.executable,
+                    str(agent_script),
+                    "--agent=inner-agent",
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            input_payload = json.loads(
+                (run_dir / "jobs" / "cli-inner-agent" / "input.json").read_text(encoding="utf-8")
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertEqual(
+            input_payload["command"],
+            [sys.executable, str(agent_script), "--agent=inner-agent"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
