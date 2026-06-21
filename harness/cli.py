@@ -1879,38 +1879,10 @@ def aggregate_jobs(
         raise HarnessCliError(format_errors(before.errors))
 
     state = load_json(state_path(resolved_run_dir))
-    jobs_dir = resolved_run_dir / "jobs"
-    jobs: list[dict[str, Any]] = []
-    errors: list[str] = []
-    if jobs_dir.exists():
-        for job_path in sorted(jobs_dir.glob("*/job.json")):
-            job, job_errors = validate_json_artifact(job_path, JOB_SCHEMA, "job")
-            errors.extend(f"{job_path}: {error}" for error in job_errors)
-            if job is None:
-                continue
-
-            job_id = job.get("job_id")
-            if isinstance(job_id, str):
-                try:
-                    validate_generic_agent_job_id(job_id)
-                except HarnessCliError as exc:
-                    errors.append(f"{job_path}: {exc}")
-                if job_path.parent.name != job_id:
-                    errors.append(
-                        f"{job_path}: job_id mismatch: expected {job_path.parent.name}, "
-                        f"got {job_id}",
-                    )
-            if job.get("run_id") != state["run_id"]:
-                errors.append(
-                    f"{job_path}: run_id mismatch: expected {state['run_id']}, "
-                    f"got {job.get('run_id')}",
-                )
-
-            jobs.append(job)
-    if errors:
-        raise HarnessCliError(format_errors(errors))
-
-    jobs.sort(key=lambda job: job["job_id"])
+    jobs = sorted(
+        load_scheduler_jobs(resolved_run_dir, root=repo_root),
+        key=lambda job: job["job_id"],
+    )
     aggregation: dict[str, Any] = {
         "run_id": state["run_id"],
         "generated_at": utc_now(),
