@@ -4,6 +4,7 @@ import os
 import re
 import subprocess
 import sys
+import tomllib
 import unittest
 from pathlib import Path
 
@@ -24,6 +25,8 @@ RISK_ACCEPTANCE_TEMPLATE = ROOT / "harness" / "templates" / "risk-acceptance.md"
 V011_REVIEW_FIXTURE = (
     ROOT / "tests" / "fixtures" / "claude-review" / "v0.1.1-envelope.json"
 )
+PYPROJECT = ROOT / "pyproject.toml"
+CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 
 spec = importlib.util.spec_from_file_location("claude_review_adapter", ADAPTER_PATH)
 adapter = importlib.util.module_from_spec(spec)
@@ -103,6 +106,30 @@ def logical_requirements(path: Path) -> list[str]:
 
 
 class StaticContractsTest(unittest.TestCase):
+    def test_pyproject_defines_harness_console_script(self):
+        payload = tomllib.loads(read_text(PYPROJECT))
+
+        self.assertEqual(payload["project"]["name"], "ai-coding-harness")
+        self.assertEqual(payload["project"]["scripts"]["harness"], "harness.cli:main")
+        self.assertIn("jsonschema>=4.26,<5", payload["project"]["dependencies"])
+        self.assertIn("harness*", payload["tool"]["setuptools"]["packages"]["find"]["include"])
+        self.assertEqual(
+            payload["tool"]["setuptools"]["package-data"]["harness"],
+            ["schemas/*.json", "templates/*.md"],
+        )
+
+    def test_ci_workflow_runs_core_validation_steps(self):
+        text = read_text(CI_WORKFLOW)
+
+        for command in [
+            "python -m pip install -e .",
+            "python -m unittest discover -s tests",
+            "python -m harness.cli validate",
+            "harness validate harness/runs/example-fast-doc-change",
+            "git diff --check",
+        ]:
+            self.assertIn(command, text)
+
     def test_risk_acceptance_template_exists_with_required_sections(self):
         text = read_text(RISK_ACCEPTANCE_TEMPLATE)
 

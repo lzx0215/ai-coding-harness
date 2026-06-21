@@ -1,0 +1,22 @@
+{
+  "run_id": "2026-06-21-phase-4-async-substrate-closure",
+  "job_id": "phase4-substrate-smoke",
+  "agent": "generic-cli-agent",
+  "adapter": "generic-cli-agent",
+  "status": "passed",
+  "summary": "Async substrate smoke job produced a terminal result for source-controlled validation.",
+  "findings": [],
+  "evidence": [
+    {
+      "path": "jobs/phase4-substrate-smoke/job.json",
+      "description": "Terminal job record consumed by Codex aggregation."
+    }
+  ],
+  "not_tested": [
+    "No real external async worker process was launched; this run validates the source-controlled artifact substrate."
+  ],
+  "residual_risks": [
+    "This proves artifact validation and fan-in semantics, not background worker scheduling."
+  ],
+  "generated_at": "2026-06-21T03:30:02Z"
+}

@@ -9,6 +9,7 @@ from harness import cli
 
 
 ROOT = Path(__file__).resolve().parents[1]
+PHASE4_RUN = ROOT / "harness" / "runs" / "2026-06-21-phase-4-async-substrate-closure"
 JOB_SCHEMA = ROOT / "harness" / "schemas" / "job.schema.json"
 AGGREGATION_SCHEMA = ROOT / "harness" / "schemas" / "aggregation.schema.json"
 AGENT_RESULT_SCHEMA = ROOT / "harness" / "schemas" / "agent-result.schema.json"
@@ -25,6 +26,22 @@ def validation_errors(schema_path: Path, payload: dict) -> list:
 def write_json(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+
+class Phase4ClosureRunTest(unittest.TestCase):
+    def test_phase4_closure_run_indexes_async_substrate_artifacts(self):
+        result = cli.validate_run(PHASE4_RUN, root=ROOT)
+        state = json.loads((PHASE4_RUN / "state.json").read_text(encoding="utf-8"))
+        evidence_types = {item["type"] for item in state["evidence"]}
+
+        self.assertEqual(result.errors, [])
+        self.assertEqual(state["status"], "completed")
+        self.assertIn("agent-job", evidence_types)
+        self.assertIn("agent-result", evidence_types)
+        self.assertIn("aggregation", evidence_types)
+        self.assertTrue(PHASE4_RUN.joinpath("jobs", "phase4-substrate-smoke", "job.json").exists())
+        self.assertTrue(PHASE4_RUN.joinpath("jobs", "phase4-substrate-smoke", "output.json").exists())
+        self.assertTrue(PHASE4_RUN.joinpath("jobs", "aggregation.json").exists())
 
 
 def minimal_job(status: str = "succeeded") -> dict:

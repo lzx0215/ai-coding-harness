@@ -2,7 +2,7 @@
 
 ## Current Phase
 
-Phase 3 review decision and memory closure is merged and pushed to `master` (`c0151b5 == origin/master`). The run `harness/runs/2026-06-20-phase-3-review-decision-memory-implementation` reached `completed` end-to-end, exercising every Phase 3 gate against real artifacts and a real Claude Code review adapter output.
+Phase 3 review decision and memory closure is merged and pushed to `master`. The original Phase 3 merge was `c0151b5`; the follow-up hardening/document reconciliation PR merged at `610bcc1` and became the baseline for the current Phase 4 closure branch. The run `harness/runs/2026-06-20-phase-3-review-decision-memory-implementation` reached `completed` end-to-end, exercising every Phase 3 gate against real artifacts and a real Claude Code review adapter output.
 
 Phase 3 added:
 
@@ -16,17 +16,23 @@ Phase 3 added:
 
 No new Harness state and no new evidence type were introduced; `review-decision.json` is indexed as `review-evidence`. Historical runs remain valid without migration.
 
-Phase 4 async job substrate is implemented in the current source tree. It added run-local async job schemas, aggregation schemas, explicit `agent-job` / `agent-result` / `aggregation` evidence validation, consumed-job duplicate/status checks, aggregation cross-checking, and Standard versus Strict unavailable-review policy. No source-controlled Phase 4 implementation run record has been created, and the Phase 4 plan checkboxes remain unchanged by convention.
+Phase 4 async job substrate is implemented in the current source tree. It added run-local async job schemas, aggregation schemas, explicit `agent-job` / `agent-result` / `aggregation` evidence validation, consumed-job duplicate/status checks, aggregation cross-checking, and Standard versus Strict unavailable-review policy. A formal source-controlled Phase 4 closure run now exists at `harness/runs/2026-06-21-phase-4-async-substrate-closure`, indexing terminal `agent-job`, `agent-result`, and `aggregation` artifacts. The Phase 4 plan checkboxes remain unchanged by convention.
+
+The current branch also adds team-repeatable validation entrypoints:
+
+- `.github/workflows/ci.yml` runs editable install, the full unittest suite, every source-controlled run validation, console-script smoke validation, and `git diff --check`.
+- `pyproject.toml` defines the `ai-coding-harness` package and `harness = harness.cli:main` console script.
 
 The current verification baseline is:
 
-- `python -m unittest discover -s tests` -> 214 tests OK, 1 skipped
-- all `harness/runs/*` directories validated successfully
-- `HARNESS_RUN_PIP_HASH_CHECK=1` live pip hash validation passes locally
+- `python -m unittest discover -s tests` -> 217 tests OK, 1 skipped
+- all 10 `harness/runs/*` directories validated successfully
+- `python -m pip install -e .` succeeded locally
+- `harness validate harness/runs/2026-06-21-phase-4-async-substrate-closure` passed locally
 - real Claude Code review adapter output is indexed under the Phase 3 run
 
 Follow-up Phase 3 provenance hardening now rejects empty `source_evidence` for review-result decisions, duplicate indexed `review-decision.json` artifacts, and mismatched `severity_counts` when linked review findings can be computed. Historical runs still validate because none indexed a pre-existing `review-decision.json` except the updated Phase 3 run.
 
 ## Next Step
 
-Merge or PR the current `codex/phase3-hardening-doc-reconcile` branch, then choose the next focus: create a source-controlled Phase 4 run record, continue Phase 4 async adapter integration, or document the Codex review-decision authoring flow.
+Open or merge the current `codex/phase4-run-ci-package` branch, then choose the next focus: live async worker/scheduler integration, CI hardening after the first GitHub Actions run, or documentation for the Codex review-decision authoring flow.

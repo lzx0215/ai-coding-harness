@@ -1,0 +1,20 @@
+{
+  "job_id": "phase4-substrate-smoke",
+  "run_id": "2026-06-21-phase-4-async-substrate-closure",
+  "agent": "generic-cli-agent",
+  "adapter": "generic-cli-agent",
+  "status": "succeeded",
+  "input_file": "input.json",
+  "output_file": "output.json",
+  "raw_log_file": "raw.log",
+  "created_at": "2026-06-21T03:30:00Z",
+  "started_at": "2026-06-21T03:30:01Z",
+  "completed_at": "2026-06-21T03:30:02Z",
+  "timeout_seconds": 60,
+  "error_reason": null,
+  "provenance": {
+    "agent": "generic-cli-agent",
+    "adapter_version": "0.1.0",
+    "runtime": "source-controlled-fixture"
+  }
+}

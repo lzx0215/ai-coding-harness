@@ -1,0 +1,10 @@
+{
+  "run_id": "2026-06-21-phase-4-async-substrate-closure",
+  "job_id": "phase4-substrate-smoke",
+  "objective": "Produce a terminal generic agent result artifact for Phase 4 async job substrate validation.",
+  "instructions": [
+    "Return a schema-valid agent result with no findings.",
+    "Do not mutate harness state.",
+    "Declare any limitations in not_tested and residual_risks."
+  ]
+}

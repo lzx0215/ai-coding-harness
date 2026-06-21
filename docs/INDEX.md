@@ -7,8 +7,9 @@
 
 ## Current Status
 
-- Phase 3 review decision and memory closure is merged into `master`: indexed `review-decision.json` evidence is schema/semantically validated, review-related transitions are gated by Codex decisions where required, and completion requires handoff/memory closure metadata.
-- Phase 4 async job substrate is implemented in the source tree: run-local job, agent-result, and aggregation schemas are available; consumed async job evidence and aggregation evidence are validated; Standard and Strict unavailable-review policy is enforced. No source-controlled Phase 4 run record has been created.
+- Phase 3 review decision and memory closure plus follow-up provenance hardening are merged into `master`: indexed `review-decision.json` evidence is schema/semantically validated, review-related transitions are gated by Codex decisions where required, and completion requires handoff/memory closure metadata.
+- Phase 4 async job substrate is implemented in the source tree: run-local job, agent-result, and aggregation schemas are available; consumed async job evidence and aggregation evidence are validated; Standard and Strict unavailable-review policy is enforced. A formal closure run exists at `harness/runs/2026-06-21-phase-4-async-substrate-closure/`.
+- Team-repeatable validation is now defined by `.github/workflows/ci.yml` and `pyproject.toml` with the `harness` console script.
 
 ## Specs
 
