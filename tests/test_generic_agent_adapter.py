@@ -679,6 +679,143 @@ class GenericCliAgentOrchestrationTest(unittest.TestCase):
                 self.assertEqual(saved_job["status"], "queued")
                 self.assertFalse(raw_log_exists)
 
+    def test_scheduler_run_once_executes_queued_jobs_in_order_and_continues_after_failed_terminal_job(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            write_json(run_dir / "state.json", minimal_state())
+            agent_script = run_dir / "success_agent.py"
+            write_agent_script(
+                agent_script,
+                """
+                import json
+                import os
+                from pathlib import Path
+
+                payload = json.loads(Path(os.environ["HARNESS_AGENT_INPUT_FILE"]).read_text(encoding="utf-8"))
+                output = {
+                    "run_id": payload["run_id"],
+                    "job_id": payload["job_id"],
+                    "agent": payload["agent"],
+                    "adapter": payload["adapter"],
+                    "status": "passed",
+                    "summary": f"{payload['job_id']} completed.",
+                    "findings": [],
+                    "evidence": [],
+                    "not_tested": [],
+                    "residual_risks": [],
+                    "generated_at": payload["created_at"],
+                }
+                Path(os.environ["HARNESS_AGENT_OUTPUT_FILE"]).write_text(
+                    json.dumps(output, indent=2) + "\\n",
+                    encoding="utf-8",
+                )
+                print(payload["job_id"])
+                """,
+            )
+            cli.create_generic_agent_job(
+                run_dir,
+                "001-fails",
+                agent="generic-test-agent",
+                command=[sys.executable, "-c", "import sys; sys.exit(7)"],
+                timeout_seconds=30,
+                root=ROOT,
+            )
+            cli.create_generic_agent_job(
+                run_dir,
+                "002-succeeds",
+                agent="generic-test-agent",
+                command=[sys.executable, str(agent_script)],
+                timeout_seconds=30,
+                root=ROOT,
+            )
+
+            summary = cli.scheduler_run_once(run_dir, root=ROOT)
+            failed_job = json.loads(
+                (run_dir / "jobs" / "001-fails" / "job.json").read_text(
+                    encoding="utf-8",
+                )
+            )
+            succeeded_job = json.loads(
+                (run_dir / "jobs" / "002-succeeds" / "job.json").read_text(
+                    encoding="utf-8",
+                )
+            )
+
+        self.assertEqual(summary["executed_jobs"], ["001-fails", "002-succeeds"])
+        self.assertEqual(failed_job["status"], "failed")
+        self.assertEqual(succeeded_job["status"], "succeeded")
+
+    def test_scheduler_run_once_skips_running_and_terminal_jobs_without_claiming_them(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            write_json(run_dir / "state.json", minimal_state())
+            cli.create_generic_agent_job(
+                run_dir,
+                "running-job",
+                agent="generic-test-agent",
+                command=[sys.executable, "-c", "print('running')"],
+                timeout_seconds=30,
+                root=ROOT,
+            )
+            running_path = run_dir / "jobs" / "running-job" / "job.json"
+            running_job = json.loads(running_path.read_text(encoding="utf-8"))
+            running_job["status"] = "running"
+            running_job["started_at"] = "2026-06-20T00:00:01Z"
+            write_json(running_path, running_job)
+
+            cli.create_generic_agent_job(
+                run_dir,
+                "terminal-job",
+                agent="generic-test-agent",
+                command=[sys.executable, "-c", "print('terminal')"],
+                timeout_seconds=30,
+                root=ROOT,
+            )
+            terminal_path = run_dir / "jobs" / "terminal-job" / "job.json"
+            terminal_job = json.loads(terminal_path.read_text(encoding="utf-8"))
+            terminal_job["status"] = "failed"
+            terminal_job["started_at"] = "2026-06-20T00:00:01Z"
+            terminal_job["completed_at"] = "2026-06-20T00:00:02Z"
+            terminal_job["error_reason"] = "preexisting terminal"
+            write_json(terminal_path, terminal_job)
+
+            summary = cli.scheduler_run_once(run_dir, root=ROOT)
+            saved_running = json.loads(running_path.read_text(encoding="utf-8"))
+            saved_terminal = json.loads(terminal_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(summary["executed_jobs"], [])
+        self.assertEqual(summary["skipped_jobs"], ["running-job", "terminal-job"])
+        self.assertEqual(saved_running["status"], "running")
+        self.assertEqual(saved_terminal["error_reason"], "preexisting terminal")
+
+    def test_scheduler_run_once_aborts_on_invalid_job_record_before_executing_any_job(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            write_json(run_dir / "state.json", minimal_state())
+            invalid_path = run_dir / "jobs" / "000-invalid" / "job.json"
+            invalid_path.parent.mkdir(parents=True, exist_ok=True)
+            invalid_path.write_text("[]\n", encoding="utf-8")
+            cli.create_generic_agent_job(
+                run_dir,
+                "001-valid",
+                agent="generic-test-agent",
+                command=[sys.executable, "-c", "print('must not run')"],
+                timeout_seconds=30,
+                root=ROOT,
+            )
+
+            with self.assertRaises(cli.HarnessCliError) as raised:
+                cli.scheduler_run_once(run_dir, root=ROOT)
+
+            valid_job = json.loads(
+                (run_dir / "jobs" / "001-valid" / "job.json").read_text(
+                    encoding="utf-8",
+                )
+            )
+
+        self.assertIn("job schema error", str(raised.exception))
+        self.assertEqual(valid_job["status"], "queued")
+
     def test_run_generic_agent_creates_job_result_and_log_without_mutating_state(self):
         with tempfile.TemporaryDirectory(dir=ROOT) as raw:
             run_dir = Path(raw)

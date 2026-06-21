@@ -1784,6 +1784,87 @@ def execute_generic_agent_job(
     return job
 
 
+def load_scheduler_jobs(run_dir: Path, *, root: Path) -> list[dict[str, Any]]:
+    state = load_json(state_path(run_dir))
+    run_id = state["run_id"]
+    jobs_dir = run_dir / "jobs"
+    if not jobs_dir.exists():
+        return []
+
+    jobs: list[dict[str, Any]] = []
+    errors: list[str] = []
+    for job_path in sorted(jobs_dir.glob("*/job.json")):
+        job, job_errors = validate_json_artifact(job_path, JOB_SCHEMA, "job")
+        errors.extend(f"{job_path}: {error}" for error in job_errors)
+        if job is None:
+            continue
+
+        job_id = job.get("job_id")
+        if isinstance(job_id, str):
+            try:
+                validate_generic_agent_job_id(job_id)
+            except HarnessCliError as exc:
+                errors.append(f"{job_path}: {exc}")
+            if job_path.parent.name != job_id:
+                errors.append(
+                    f"{job_path}: job_id mismatch: expected {job_path.parent.name}, "
+                    f"got {job_id}",
+                )
+        if job.get("run_id") != run_id:
+            errors.append(
+                f"{job_path}: run_id mismatch: expected {run_id}, got {job.get('run_id')}",
+            )
+
+        jobs.append(job)
+
+    if errors:
+        raise HarnessCliError(format_errors(errors))
+    return jobs
+
+
+def scheduler_run_once(
+    run_dir: Path | str,
+    *,
+    root: Path | str | None = None,
+) -> dict[str, Any]:
+    resolved_run_dir = Path(run_dir)
+    repo_root = resolve_repository_root(resolved_run_dir, root=root)
+    before = validate_run(resolved_run_dir, root=repo_root)
+    if not before.ok:
+        raise HarnessCliError(format_errors(before.errors))
+
+    state = load_json(state_path(resolved_run_dir))
+    jobs = load_scheduler_jobs(resolved_run_dir, root=repo_root)
+    ordered_jobs = sorted(jobs, key=lambda job: (job["created_at"], job["job_id"]))
+    executed_jobs: list[str] = []
+    skipped_jobs: list[str] = []
+    terminal_statuses: dict[str, str] = {}
+
+    for job in ordered_jobs:
+        job_id = job["job_id"]
+        status = job["status"]
+        if status == "queued":
+            executed_job = execute_generic_agent_job(
+                resolved_run_dir,
+                job_id,
+                root=repo_root,
+            )
+            executed_jobs.append(job_id)
+            if executed_job["status"] in TERMINAL_JOB_STATUSES:
+                terminal_statuses[job_id] = executed_job["status"]
+        elif status == "running" or status in TERMINAL_JOB_STATUSES:
+            skipped_jobs.append(job_id)
+            if status in TERMINAL_JOB_STATUSES:
+                terminal_statuses[job_id] = status
+
+    return {
+        "run_id": state["run_id"],
+        "executed_jobs": executed_jobs,
+        "skipped_jobs": skipped_jobs,
+        "terminal_statuses": terminal_statuses,
+    }
+
+
 def run_generic_agent(
     run_dir: Path | str,
     job_id: str,
