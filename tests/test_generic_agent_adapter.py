@@ -48,6 +48,152 @@ def write_agent_script(path: Path, body: str) -> None:
 
 
 class GenericCliAgentOrchestrationTest(unittest.TestCase):
+    def test_create_generic_agent_job_writes_queued_artifacts_without_mutating_state(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            original_state = minimal_state()
+            write_json(run_dir / "state.json", original_state)
+
+            job = cli.create_generic_agent_job(
+                run_dir,
+                "generic-queued",
+                agent="generic-test-agent",
+                command=[sys.executable, "-c", "print('not executed')"],
+                timeout_seconds=30,
+                root=ROOT,
+            )
+            saved_state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
+            saved_job = json.loads(
+                (run_dir / "jobs" / "generic-queued" / "job.json").read_text(
+                    encoding="utf-8",
+                )
+            )
+            input_payload = json.loads(
+                (run_dir / "jobs" / "generic-queued" / "input.json").read_text(
+                    encoding="utf-8",
+                )
+            )
+            raw_log_exists = (
+                run_dir / "jobs" / "generic-queued" / "raw.log"
+            ).exists()
+
+        self.assertEqual(job["status"], "queued")
+        self.assertEqual(saved_job["status"], "queued")
+        self.assertIsNone(saved_job["started_at"])
+        self.assertIsNone(saved_job["completed_at"])
+        self.assertEqual(input_payload["command"], [sys.executable, "-c", "print('not executed')"])
+        self.assertFalse(raw_log_exists)
+        self.assertEqual(saved_state, original_state)
+
+    def test_execute_generic_agent_job_consumes_preexisting_queued_job(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            write_json(run_dir / "state.json", minimal_state())
+            agent_script = run_dir / "queued_agent.py"
+            write_agent_script(
+                agent_script,
+                """
+                import json
+                import os
+                from pathlib import Path
+
+                payload = json.loads(Path(os.environ["HARNESS_AGENT_INPUT_FILE"]).read_text(encoding="utf-8"))
+                output = {
+                    "run_id": payload["run_id"],
+                    "job_id": payload["job_id"],
+                    "agent": payload["agent"],
+                    "adapter": payload["adapter"],
+                    "status": "passed",
+                    "summary": "Queued agent completed.",
+                    "findings": [],
+                    "evidence": [],
+                    "not_tested": [],
+                    "residual_risks": [],
+                    "generated_at": payload["created_at"],
+                }
+                Path(os.environ["HARNESS_AGENT_OUTPUT_FILE"]).write_text(
+                    json.dumps(output, indent=2) + "\\n",
+                    encoding="utf-8",
+                )
+                print("queued agent wrote output")
+                """,
+            )
+            cli.create_generic_agent_job(
+                run_dir,
+                "generic-queued",
+                agent="generic-test-agent",
+                command=[sys.executable, str(agent_script)],
+                timeout_seconds=30,
+                root=ROOT,
+            )
+
+            job = cli.execute_generic_agent_job(
+                run_dir,
+                "generic-queued",
+                root=ROOT,
+            )
+            raw_log = (run_dir / "jobs" / "generic-queued" / "raw.log").read_text(
+                encoding="utf-8",
+            )
+
+        self.assertEqual(job["status"], "succeeded")
+        self.assertIn("queued agent wrote output", raw_log)
+
+    def test_execute_generic_agent_job_rejects_terminal_job_without_overwriting_raw_log(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            write_json(run_dir / "state.json", minimal_state())
+            agent_script = run_dir / "terminal_agent.py"
+            write_agent_script(
+                agent_script,
+                """
+                import json
+                import os
+                from pathlib import Path
+
+                payload = json.loads(Path(os.environ["HARNESS_AGENT_INPUT_FILE"]).read_text(encoding="utf-8"))
+                output = {
+                    "run_id": payload["run_id"],
+                    "job_id": payload["job_id"],
+                    "agent": payload["agent"],
+                    "adapter": payload["adapter"],
+                    "status": "passed",
+                    "summary": "Terminal agent completed.",
+                    "findings": [],
+                    "evidence": [],
+                    "not_tested": [],
+                    "residual_risks": [],
+                    "generated_at": payload["created_at"],
+                }
+                Path(os.environ["HARNESS_AGENT_OUTPUT_FILE"]).write_text(
+                    json.dumps(output, indent=2) + "\\n",
+                    encoding="utf-8",
+                )
+                """,
+            )
+            cli.run_generic_agent(
+                run_dir,
+                "generic-terminal",
+                agent="generic-test-agent",
+                command=[sys.executable, str(agent_script)],
+                timeout_seconds=30,
+                root=ROOT,
+            )
+            raw_log_path = run_dir / "jobs" / "generic-terminal" / "raw.log"
+            raw_log_path.write_text("original raw log\n", encoding="utf-8")
+
+            with self.assertRaises(cli.HarnessCliError) as raised:
+                cli.execute_generic_agent_job(
+                    run_dir,
+                    "generic-terminal",
+                    root=ROOT,
+                )
+
+            raw_log = raw_log_path.read_text(encoding="utf-8")
+
+        self.assertIn("cannot execute job generic-terminal with status succeeded", str(raised.exception))
+        self.assertEqual(raw_log, "original raw log\n")
+
     def test_run_generic_agent_creates_job_result_and_log_without_mutating_state(self):
         with tempfile.TemporaryDirectory(dir=ROOT) as raw:
             run_dir = Path(raw)

@@ -1480,7 +1480,7 @@ def remove_created_run_dir(run_dir: Path) -> None:
     shutil.rmtree(target)
 
 
-def run_generic_agent(
+def create_generic_agent_job(
     run_dir: Path | str,
     job_id: str,
     *,
@@ -1560,7 +1560,54 @@ def run_generic_agent(
             "raw_log_file": str(raw_log_path),
         },
     )
+    return job
 
+
+def execute_generic_agent_job(
+    run_dir: Path | str,
+    job_id: str,
+    *,
+    root: Path | str | None = None,
+) -> dict[str, Any]:
+    if not job_id.strip():
+        raise HarnessCliError("job_id must be non-empty")
+
+    resolved_run_dir = Path(run_dir)
+    repo_root = resolve_repository_root(resolved_run_dir, root=root)
+    before = validate_run(resolved_run_dir, root=repo_root)
+    if not before.ok:
+        raise HarnessCliError(format_errors(before.errors))
+
+    jobs_dir = (resolved_run_dir / "jobs").resolve(strict=False)
+    job_dir = (jobs_dir / job_id).resolve(strict=False)
+    if not is_within_path(job_dir, jobs_dir):
+        raise HarnessCliError(f"job_id escapes jobs directory: {job_id}")
+
+    job_path = job_dir / "job.json"
+    job, job_errors = validate_json_artifact(job_path, JOB_SCHEMA, "job")
+    if job_errors:
+        raise HarnessCliError(format_errors(job_errors))
+    if job is None:
+        raise HarnessCliError(f"job cannot be loaded: {job_path}")
+    if job["status"] != "queued":
+        raise HarnessCliError(f"cannot execute job {job_id} with status {job['status']}")
+
+    input_path = job_dir / job["input_file"]
+    output_path = job_dir / job["output_file"]
+    raw_log_path = job_dir / job["raw_log_file"]
+    try:
+        input_payload = load_json(input_path)
+    except (UnicodeDecodeError, json.JSONDecodeError, OSError) as exc:
+        raise HarnessCliError(f"job input cannot be loaded: {exc}") from exc
+
+    command = input_payload.get("command")
+    if not isinstance(command, list) or not command:
+        raise HarnessCliError("generic agent command must be non-empty")
+
+    run_id = job["run_id"]
+    agent = job["agent"]
+    adapter = job["adapter"]
+    timeout_seconds = job["timeout_seconds"]
     job["status"] = "running"
     job["started_at"] = utc_now()
     write_json_file(job_path, job)
@@ -1631,6 +1678,28 @@ def run_generic_agent(
     job["error_reason"] = error_reason
     write_json_file(job_path, job)
     return job
+
+
+def run_generic_agent(
+    run_dir: Path | str,
+    job_id: str,
+    *,
+    agent: str,
+    command: list[str],
+    adapter: str = "generic-cli-agent",
+    timeout_seconds: int = 1800,
+    root: Path | str | None = None,
+) -> dict[str, Any]:
+    create_generic_agent_job(
+        run_dir,
+        job_id,
+        agent=agent,
+        command=command,
+        adapter=adapter,
+        timeout_seconds=timeout_seconds,
+        root=root,
+    )
+    return execute_generic_agent_job(run_dir, job_id, root=root)
 
 
 def run_agent_subprocess(
