@@ -47,6 +47,8 @@ Created a live Phase 5.2 run whose async job artifacts were produced by the real
 - `jobs/phase5-live-scheduler-agent/raw.log`
 - `jobs/aggregation.json`
 
+`input.json` is retained as historical runtime input from this worktree execution. Its absolute artifact paths document what the scheduler used for this run; they are not a portable replay interface.
+
 ## State
 
 completed
