@@ -1,7 +1,7 @@
 {
   "schema_version": "0.1.0",
   "run_id": "2026-06-20-phase-3-review-decision-memory-implementation",
-  "generated_at": "2026-06-20T14:55:04Z",
+  "generated_at": "2026-06-21T02:54:43Z",
   "disposition": "findings-triaged",
   "recommended_status": "reviewed",
   "decision_owner": "codex",
@@ -37,22 +37,31 @@
       "title": "review-decision.json in the run dir is codex-authored, not produced by an external Claude Code review",
       "severity": "info",
       "evidence": "Resolved for provenance by invoking the real Claude Code review adapter and indexing claude-review.json, claude-review-evidence.json, and claude-review.raw.log."
+    },
+    {
+      "title": "Schema permits empty source_evidence array",
+      "severity": "low",
+      "evidence": "Resolved by semantic validation requiring non-empty source_evidence for passed, findings-triaged, waived, risk-accepted, and blocked review decisions while preserving unavailable/process-failed exceptions."
+    },
+    {
+      "title": "load_indexed_review_decision silently picks the first review-decision.json by basename",
+      "severity": "low",
+      "evidence": "Resolved by detecting and rejecting duplicate indexed review-decision.json evidence entries during review-decision loading."
+    },
+    {
+      "title": "severity_counts is self-reported and not cross-validated against review content",
+      "severity": "info",
+      "evidence": "Resolved for calculable sources by comparing severity_counts against findings[] counts in linked review-output or review-evidence artifacts, skipping only sources whose findings cannot be computed."
     }
   ],
   "accepted_risks": [],
   "not_tested": [
-    "live pip hash validation",
     "explicit advance_run coverage for every non-required REVIEW_DECISION_TARGETS branch",
-    "duplicate indexed review-decision.json detection",
-    "semantic cross-validation between severity_counts and linked review-output contents",
     "steady-state validate enforcement of completed-run handoff frontmatter"
   ],
   "residual_risks": [
-    "source_evidence is required but can be an empty array by schema; this run uses non-empty source_evidence and leaves stricter minItems semantics as future scope.",
-    "load_indexed_review_decision validates the first indexed review-decision.json by basename; duplicate decision artifacts are not rejected in Phase 3.",
-    "severity_counts are self-reported by the Codex decision artifact and are not cross-validated against the linked review-output contents.",
     "handoff closure is enforced by advance -> completed, not by steady-state validate, to preserve the no-migration contract for historical runs.",
     "review-decision requiredness is scoped to reviewed/review_blocked; other review-related states reuse Phase 1 evidence contracts."
   ],
-  "notes": "Real Claude Code review completed with status findings. The prior medium finding was fixed and re-reviewed; the final review has no high, critical, or medium findings. Remaining low/info items were triaged as non-blocking residual risks, so the recommended status remains reviewed."
+  "notes": "Real Claude Code review completed with status findings. The prior medium finding was fixed and re-reviewed; follow-up validation hardening closed the source_evidence, duplicate-decision, and severity_counts provenance gaps. The linked review-output severity_counts remain unchanged because they count the original Claude review findings."
 }

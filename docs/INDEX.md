@@ -7,7 +7,8 @@
 
 ## Current Status
 
-- Phase 2 run definition/evidence implementation is merged into `master`: Markdown frontmatter readiness checks, `check-ready`, `index-evidence`, `init-run`, and Phase 2 run templates are available. `check-ready` remains advisory; `validate` remains authoritative for state and evidence validity.
+- Phase 3 review decision and memory closure is merged into `master`: indexed `review-decision.json` evidence is schema/semantically validated, review-related transitions are gated by Codex decisions where required, and completion requires handoff/memory closure metadata.
+- Phase 4 async job substrate is implemented in the source tree: run-local job, agent-result, and aggregation schemas are available; consumed async job evidence and aggregation evidence are validated; Standard and Strict unavailable-review policy is enforced. No source-controlled Phase 4 run record has been created.
 
 ## Specs
 

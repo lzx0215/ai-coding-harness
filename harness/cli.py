@@ -54,6 +54,9 @@ AGGREGATION_SCHEMA = ROOT / "harness" / "schemas" / "aggregation.schema.json"
 AGENT_RESULT_SCHEMA = ROOT / "harness" / "schemas" / "agent-result.schema.json"
 REVIEW_DECISION_SCHEMA = ROOT / "harness" / "schemas" / "review-decision.schema.json"
 REVIEW_DECISION_FILENAME = "review-decision.json"
+REVIEW_DECISION_SOURCE_REQUIRED_DISPOSITIONS = frozenset(
+    {"passed", "findings-triaged", "waived", "risk-accepted", "blocked"},
+)
 REVIEW_DECISION_TARGETS = frozenset(
     {
         "reviewed",
@@ -102,6 +105,7 @@ TERMINAL_AGGREGATION_JOB_BUCKETS = (
     "timeout_jobs",
     "cancelled_jobs",
 )
+SEVERITIES = ("critical", "high", "medium", "low", "info")
 AGGREGATION_BUCKET_STATUSES = {
     "succeeded_jobs": "succeeded",
     "failed_jobs": "failed",
@@ -634,6 +638,8 @@ def load_indexed_review_decision(
     review-evidence entries, matching the canonical path in the Phase 3 spec."""
     errors: list[str] = []
     state_run_id = state.get("run_id")
+    decision: dict[str, Any] | None = None
+    decision_index = -1
     for index, evidence in evidence_items(state):
         if evidence.get("type") != "review-evidence":
             continue
@@ -647,14 +653,22 @@ def load_indexed_review_decision(
         if candidate_path.name != REVIEW_DECISION_FILENAME:
             continue
 
-        decision, decision_errors = validate_json_artifact(
+        if decision_index != -1:
+            errors.append(
+                f"evidence[{index}]: duplicate review-decision evidence",
+            )
+            continue
+
+        loaded_decision, decision_errors = validate_json_artifact(
             candidate_path,
             REVIEW_DECISION_SCHEMA,
             "review-decision",
         )
         errors.extend(f"evidence[{index}]: {error}" for error in decision_errors)
-        if decision is None:
-            return None, index, errors
+        decision_index = index
+        if loaded_decision is None:
+            continue
+        decision = loaded_decision
 
         if isinstance(state_run_id, str) and decision.get("run_id") != state_run_id:
             errors.append(
@@ -662,7 +676,8 @@ def load_indexed_review_decision(
                 f"does not match state run_id {state_run_id}",
             )
 
-        return decision, index, errors
+    if decision_index != -1:
+        return decision, decision_index, errors
 
     return None, -1, errors
 
@@ -724,6 +739,16 @@ def validate_review_decision_semantics(
 
     recommended_status = decision.get("recommended_status")
     disposition = decision.get("disposition")
+    source_evidence = decision.get("source_evidence")
+
+    if (
+        disposition in REVIEW_DECISION_SOURCE_REQUIRED_DISPOSITIONS
+        and not source_evidence
+    ):
+        errors.append(
+            f"evidence[{index}]: {disposition} review-decision requires non-empty "
+            "source_evidence",
+        )
 
     if high_or_critical and recommended_status == "reviewed":
         if not decision.get("resolved_findings") and not decision.get("accepted_risks"):
@@ -752,7 +777,6 @@ def validate_review_decision_semantics(
             "risk-acceptance evidence",
         )
 
-    source_evidence = decision.get("source_evidence")
     if isinstance(source_evidence, list):
         for position, entry in enumerate(source_evidence):
             if not isinstance(entry, dict):
@@ -760,18 +784,92 @@ def validate_review_decision_semantics(
             raw_path = entry.get("path")
             if not isinstance(raw_path, str) or not raw_path.strip():
                 continue
-            if raw_path in indexed_paths:
-                continue
             # Not indexed, so it must at least be indexable: the artifact must
             # exist within the repository or the run directory.
             candidate = first_existing_evidence_path(raw_path, root=root, run_dir=run_dir)
-            if candidate is None:
+            if raw_path not in indexed_paths and candidate is None:
                 errors.append(
                     f"evidence[{index}]: review-decision source_evidence[{position}] "
                     f"path {raw_path} is not indexed and does not exist",
                 )
+                continue
+            if candidate is None:
+                continue
+
+            errors.extend(
+                validate_review_decision_severity_counts(
+                    decision,
+                    source_type=entry.get("type"),
+                    source_path=candidate,
+                    index=index,
+                    position=position,
+                )
+            )
 
     return errors
+
+
+def validate_review_decision_severity_counts(
+    decision: dict[str, Any],
+    *,
+    source_type: Any,
+    source_path: Path,
+    index: int,
+    position: int,
+) -> list[str]:
+    if source_type not in {"review-output", "review-evidence"}:
+        return []
+    expected_counts = decision.get("severity_counts")
+    if not isinstance(expected_counts, dict):
+        return []
+
+    try:
+        payload = load_json(source_path)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return []
+    if not isinstance(payload, dict):
+        return []
+
+    findings = extract_review_findings(payload)
+    if findings is None:
+        return []
+    actual_counts = severity_counts_from_findings(findings)
+    if actual_counts is None:
+        return []
+
+    expected = {severity: expected_counts.get(severity, 0) for severity in SEVERITIES}
+    if actual_counts == expected:
+        return []
+
+    return [
+        f"evidence[{index}]: review-decision severity_counts {expected} do not match "
+        f"{source_type} source_evidence[{position}] findings counts {actual_counts}",
+    ]
+
+
+def extract_review_findings(payload: dict[str, Any]) -> list[Any] | None:
+    findings = payload.get("findings")
+    if isinstance(findings, list):
+        return findings
+
+    for container_name in ("structured_output", "content"):
+        container = payload.get(container_name)
+        if isinstance(container, dict) and isinstance(container.get("findings"), list):
+            return container["findings"]
+
+    return None
+
+
+def severity_counts_from_findings(findings: list[Any]) -> dict[str, int] | None:
+    counts = {severity: 0 for severity in SEVERITIES}
+    for finding in findings:
+        if not isinstance(finding, dict):
+            return None
+        severity = finding.get("severity")
+        if severity not in counts:
+            return None
+        counts[severity] += 1
+    return counts
 
 
 def validate_evidence_paths(

@@ -930,3 +930,9 @@ If the user explicitly asks to create a source-controlled implementation run rec
 - [ ] Standard unavailable review can enter risk acceptance.
 - [ ] Strict unavailable review goes to `needs_user_decision` instead of silent risk acceptance.
 - [ ] Existing synchronous `reviews/claude-review*.json` artifacts remain valid without migration.
+
+## Outcome
+
+As of 2026-06-21, the Phase 4 async job substrate described by this plan is implemented in the source tree and covered by the default test suite. The implementation includes run-local `job`, `agent-result`, and `aggregation` schemas, explicit async evidence validation, consumed job duplicate/status checks, aggregation cross-checking, and Standard versus Strict unavailable-review policy.
+
+The plan checkboxes intentionally remain unchanged as historical planning text. No source-controlled Phase 4 implementation run record has been created.

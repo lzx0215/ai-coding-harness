@@ -2,7 +2,7 @@
 
 ## Current Phase
 
-Phase 3 review decision and memory closure is implemented on branch `phase-3-review-decision-memory` (commits `19669a0`..`HEAD`), pending merge to `master`. The run `harness/runs/2026-06-20-phase-3-review-decision-memory-implementation` reached `completed` end-to-end, exercising every Phase 3 gate against real artifacts and a real Claude Code review adapter output.
+Phase 3 review decision and memory closure is merged and pushed to `master` (`c0151b5 == origin/master`). The run `harness/runs/2026-06-20-phase-3-review-decision-memory-implementation` reached `completed` end-to-end, exercising every Phase 3 gate against real artifacts and a real Claude Code review adapter output.
 
 Phase 3 added:
 
@@ -16,12 +16,17 @@ Phase 3 added:
 
 No new Harness state and no new evidence type were introduced; `review-decision.json` is indexed as `review-evidence`. Historical runs remain valid without migration.
 
-The final verification baseline is:
+Phase 4 async job substrate is implemented in the current source tree. It added run-local async job schemas, aggregation schemas, explicit `agent-job` / `agent-result` / `aggregation` evidence validation, consumed-job duplicate/status checks, aggregation cross-checking, and Standard versus Strict unavailable-review policy. No source-controlled Phase 4 implementation run record has been created, and the Phase 4 plan checkboxes remain unchanged by convention.
 
-- `python -m unittest discover -s tests` -> 209 tests OK, 1 skipped
+The current verification baseline is:
+
+- `python -m unittest discover -s tests` -> 214 tests OK, 1 skipped
 - all `harness/runs/*` directories validated successfully
-- real Claude Code review adapter output indexed under the Phase 3 run
+- `HARNESS_RUN_PIP_HASH_CHECK=1` live pip hash validation passes locally
+- real Claude Code review adapter output is indexed under the Phase 3 run
+
+Follow-up Phase 3 provenance hardening now rejects empty `source_evidence` for review-result decisions, duplicate indexed `review-decision.json` artifacts, and mismatched `severity_counts` when linked review findings can be computed. Historical runs still validate because none indexed a pre-existing `review-decision.json` except the updated Phase 3 run.
 
 ## Next Step
 
-Merge `phase-3-review-decision-memory` to `master` (or open a PR), then start the next focus: hardening review-decision source attribution and duplicate decision detection, or documenting the Codex review-decision authoring flow.
+Merge or PR the current `codex/phase3-hardening-doc-reconcile` branch, then choose the next focus: create a source-controlled Phase 4 run record, continue Phase 4 async adapter integration, or document the Codex review-decision authoring flow.

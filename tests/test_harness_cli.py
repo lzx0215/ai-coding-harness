@@ -44,6 +44,59 @@ def write_state(run_dir: Path, state: dict) -> None:
     )
 
 
+def write_json(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+
+def review_decision_payload(
+    *,
+    disposition: str = "passed",
+    recommended_status: str = "reviewed",
+    source_evidence: list[dict] | None = None,
+    severity_counts: dict[str, int] | None = None,
+    run_id: str = "test-run",
+) -> dict:
+    return {
+        "schema_version": "0.1.0",
+        "run_id": run_id,
+        "generated_at": "2026-06-20T00:00:00Z",
+        "disposition": disposition,
+        "recommended_status": recommended_status,
+        "decision_owner": "codex",
+        "source_evidence": source_evidence if source_evidence is not None else [],
+        "severity_counts": severity_counts
+        if severity_counts is not None
+        else {
+            "critical": 0,
+            "high": 0,
+            "medium": 0,
+            "low": 0,
+            "info": 0,
+        },
+        "resolved_findings": [],
+        "accepted_risks": [],
+        "not_tested": [],
+        "residual_risks": [],
+    }
+
+
+def indexed_review_decision(path: str = "reviews/review-decision.json") -> dict:
+    return {
+        "type": "review-evidence",
+        "path": path,
+        "description": "Review decision artifact.",
+    }
+
+
+def indexed_review_output(path: str = "reviews/claude-review.json") -> dict:
+    return {
+        "type": "review-output",
+        "path": path,
+        "description": "Claude review output.",
+    }
+
+
 def evidence_entry(run_dir: Path, evidence_type: str) -> dict:
     path = run_dir / f"{evidence_type}.md"
     if evidence_type == "handoff":
@@ -1078,6 +1131,191 @@ memory_files: []
 
         self.assertEqual(result.errors, [], result.errors)
 
+    def test_validate_rejects_reviewed_decision_without_source_evidence(self):
+        required_source_dispositions = [
+            ("passed", "reviewed"),
+            ("findings-triaged", "reviewed"),
+            ("waived", "reviewed"),
+            ("risk-accepted", "risk_accepted"),
+            ("blocked", "review_blocked"),
+        ]
+        for disposition, recommended_status in required_source_dispositions:
+            with self.subTest(disposition=disposition):
+                with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+                    run_dir = Path(raw)
+                    decision_path = run_dir / "reviews" / "review-decision.json"
+                    decision = review_decision_payload(
+                        disposition=disposition,
+                        recommended_status=recommended_status,
+                    )
+                    if disposition == "waived":
+                        (run_dir / "review-waiver.md").write_text(
+                            "# Review Waiver\n",
+                            encoding="utf-8",
+                        )
+                    if disposition == "risk-accepted":
+                        (run_dir / "risk-acceptance.md").write_text(
+                            "# Risk Acceptance\n",
+                            encoding="utf-8",
+                        )
+                    write_json(decision_path, decision)
+                    state = minimal_state(status="reviewing")
+                    state["evidence"] = [indexed_review_decision()]
+                    if disposition == "waived":
+                        state["evidence"].append(
+                            {
+                                "type": "review-waiver",
+                                "path": "review-waiver.md",
+                                "description": "Review waiver evidence.",
+                            }
+                        )
+                    if disposition == "risk-accepted":
+                        state["evidence"].append(
+                            {
+                                "type": "risk-acceptance",
+                                "path": "risk-acceptance.md",
+                                "description": "Risk acceptance evidence.",
+                            }
+                        )
+                    write_state(run_dir, state)
+
+                    result = cli.validate_run(run_dir, root=ROOT)
+
+                self.assertTrue(
+                    any("requires non-empty source_evidence" in error for error in result.errors),
+                    result.errors,
+                )
+
+    def test_validate_allows_process_outcome_decision_without_source_evidence(self):
+        allowed_empty_source = [
+            ("unavailable", "external_review_unavailable"),
+            ("process-failed", "review_failed"),
+            ("process-failed", "review_timeout"),
+            ("process-failed", "review_schema_invalid"),
+        ]
+        for disposition, recommended_status in allowed_empty_source:
+            with self.subTest(disposition=disposition, recommended_status=recommended_status):
+                with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+                    run_dir = Path(raw)
+                    decision_path = run_dir / "reviews" / "review-decision.json"
+                    write_json(
+                        decision_path,
+                        review_decision_payload(
+                            disposition=disposition,
+                            recommended_status=recommended_status,
+                        ),
+                    )
+                    state = minimal_state(status="reviewing")
+                    state["evidence"] = [indexed_review_decision()]
+                    write_state(run_dir, state)
+
+                    result = cli.validate_run(run_dir, root=ROOT)
+
+                self.assertEqual(result.errors, [], result.errors)
+
+    def test_validate_rejects_duplicate_indexed_review_decision_evidence(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            source_path = run_dir / "reviews" / "claude-review.json"
+            write_json(source_path, {"status": "passed"})
+            source_evidence = [{"type": "review-output", "path": "reviews/claude-review.json"}]
+            write_json(
+                run_dir / "reviews" / "review-decision.json",
+                review_decision_payload(source_evidence=source_evidence),
+            )
+            write_json(
+                run_dir / "second" / "review-decision.json",
+                review_decision_payload(source_evidence=source_evidence),
+            )
+            state = minimal_state(status="reviewing")
+            state["evidence"] = [
+                indexed_review_decision("reviews/review-decision.json"),
+                indexed_review_decision("second/review-decision.json"),
+            ]
+            write_state(run_dir, state)
+
+            result = cli.validate_run(run_dir, root=ROOT)
+
+        self.assertTrue(
+            any(
+                "evidence[1]: duplicate review-decision evidence" in error
+                for error in result.errors
+            ),
+            result.errors,
+        )
+
+    def test_validate_rejects_review_decision_severity_count_mismatch(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            review_output_path = run_dir / "reviews" / "claude-review.json"
+            write_json(
+                review_output_path,
+                {
+                    "findings": [
+                        {"severity": "low", "title": "First"},
+                        {"severity": "low", "title": "Second"},
+                        {"severity": "info", "title": "Third"},
+                    ]
+                },
+            )
+            decision_path = run_dir / "reviews" / "review-decision.json"
+            write_json(
+                decision_path,
+                review_decision_payload(
+                    disposition="findings-triaged",
+                    recommended_status="reviewed",
+                    source_evidence=[
+                        {"type": "review-output", "path": "reviews/claude-review.json"}
+                    ],
+                    severity_counts={
+                        "critical": 0,
+                        "high": 0,
+                        "medium": 0,
+                        "low": 1,
+                        "info": 1,
+                    },
+                ),
+            )
+            state = minimal_state(status="reviewing")
+            state["evidence"] = [
+                indexed_review_output(),
+                indexed_review_decision(),
+            ]
+            write_state(run_dir, state)
+
+            result = cli.validate_run(run_dir, root=ROOT)
+
+        self.assertTrue(
+            any("severity_counts" in error and "review-output" in error for error in result.errors),
+            result.errors,
+        )
+
+    def test_validate_skips_severity_cross_check_when_source_findings_are_not_computable(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            review_output_path = run_dir / "reviews" / "claude-review.json"
+            review_output_path.parent.mkdir(parents=True, exist_ok=True)
+            review_output_path.write_text("[]\n", encoding="utf-8")
+            decision_path = run_dir / "reviews" / "review-decision.json"
+            write_json(
+                decision_path,
+                review_decision_payload(
+                    source_evidence=[
+                        {"type": "review-output", "path": "reviews/claude-review.json"}
+                    ],
+                ),
+            )
+            state = minimal_state(status="reviewing")
+            state["evidence"] = [
+                indexed_review_output(),
+                indexed_review_decision(),
+            ]
+            write_state(run_dir, state)
+
+            result = cli.validate_run(run_dir, root=ROOT)
+
+        self.assertEqual(result.errors, [], result.errors)
+
     def test_validate_rejects_indexed_review_decision_with_unknown_disposition(self):
         with tempfile.TemporaryDirectory(dir=ROOT) as raw:
             run_dir = Path(raw)
@@ -1227,6 +1465,10 @@ memory_files: []
             run_dir = Path(raw)
             reviews_dir = run_dir / "reviews"
             reviews_dir.mkdir()
+            write_json(
+                reviews_dir / "claude-review.json",
+                {"findings": [{"severity": "critical", "title": "Critical finding"}]},
+            )
             decision_path = reviews_dir / "review-decision.json"
             decision_path.write_text(
                 json.dumps(
@@ -1237,7 +1479,9 @@ memory_files: []
                         "disposition": "blocked",
                         "recommended_status": "review_blocked",
                         "decision_owner": "codex",
-                        "source_evidence": [],
+                        "source_evidence": [
+                            {"type": "review-output", "path": "reviews/claude-review.json"}
+                        ],
                         "severity_counts": {
                             "critical": 1,
                             "high": 0,
@@ -1272,6 +1516,10 @@ memory_files: []
             run_dir = Path(raw)
             reviews_dir = run_dir / "reviews"
             reviews_dir.mkdir()
+            write_json(
+                reviews_dir / "claude-review.json",
+                {"findings": [{"severity": "high", "title": "High finding"}]},
+            )
             decision_path = reviews_dir / "review-decision.json"
             decision_path.write_text(
                 json.dumps(
@@ -1282,7 +1530,9 @@ memory_files: []
                         "disposition": "risk-accepted",
                         "recommended_status": "risk_accepted",
                         "decision_owner": "codex",
-                        "source_evidence": [],
+                        "source_evidence": [
+                            {"type": "review-output", "path": "reviews/claude-review.json"}
+                        ],
                         "severity_counts": {
                             "critical": 0,
                             "high": 1,
@@ -1487,6 +1737,7 @@ memory_files: []
             run_dir = Path(raw)
             reviews_dir = run_dir / "reviews"
             reviews_dir.mkdir()
+            write_json(reviews_dir / "claude-review.json", {"findings": []})
             decision_path = reviews_dir / "review-decision.json"
             decision_path.write_text(
                 json.dumps(
@@ -1497,7 +1748,9 @@ memory_files: []
                         "disposition": "passed",
                         "recommended_status": "reviewed",
                         "decision_owner": "codex",
-                        "source_evidence": [],
+                        "source_evidence": [
+                            {"type": "review-output", "path": "reviews/claude-review.json"}
+                        ],
                         "severity_counts": {
                             "critical": 0,
                             "high": 0,
@@ -1532,6 +1785,10 @@ memory_files: []
             run_dir = Path(raw)
             reviews_dir = run_dir / "reviews"
             reviews_dir.mkdir()
+            write_json(
+                reviews_dir / "claude-review.json",
+                {"findings": [{"severity": "critical", "title": "Critical finding"}]},
+            )
             decision_path = reviews_dir / "review-decision.json"
             decision_path.write_text(
                 json.dumps(
@@ -1542,7 +1799,9 @@ memory_files: []
                         "disposition": "blocked",
                         "recommended_status": "review_blocked",
                         "decision_owner": "codex",
-                        "source_evidence": [],
+                        "source_evidence": [
+                            {"type": "review-output", "path": "reviews/claude-review.json"}
+                        ],
                         "severity_counts": {
                             "critical": 1,
                             "high": 0,
