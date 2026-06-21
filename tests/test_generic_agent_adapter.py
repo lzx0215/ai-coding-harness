@@ -126,6 +126,46 @@ class GenericCliAgentOrchestrationTest(unittest.TestCase):
         self.assertIn("command must be a non-empty list of strings", str(raised.exception))
         self.assertFalse(job_dir_exists)
 
+    def test_create_generic_agent_job_rejects_forward_slash_job_id_before_directory_created(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            write_json(run_dir / "state.json", minimal_state())
+
+            with self.assertRaises(cli.HarnessCliError) as raised:
+                cli.create_generic_agent_job(
+                    run_dir,
+                    "nested/job",
+                    agent="generic-test-agent",
+                    command=[sys.executable, "-c", "print('unused')"],
+                    timeout_seconds=30,
+                    root=ROOT,
+                )
+
+            jobs_dir_exists = (run_dir / "jobs").exists()
+
+        self.assertIn("job_id must be a single safe path segment", str(raised.exception))
+        self.assertFalse(jobs_dir_exists)
+
+    def test_create_generic_agent_job_rejects_backslash_job_id_before_directory_created(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            write_json(run_dir / "state.json", minimal_state())
+
+            with self.assertRaises(cli.HarnessCliError) as raised:
+                cli.create_generic_agent_job(
+                    run_dir,
+                    "nested\\job",
+                    agent="generic-test-agent",
+                    command=[sys.executable, "-c", "print('unused')"],
+                    timeout_seconds=30,
+                    root=ROOT,
+                )
+
+            jobs_dir_exists = (run_dir / "jobs").exists()
+
+        self.assertIn("job_id must be a single safe path segment", str(raised.exception))
+        self.assertFalse(jobs_dir_exists)
+
     def test_execute_generic_agent_job_consumes_preexisting_queued_job(self):
         with tempfile.TemporaryDirectory(dir=ROOT) as raw:
             run_dir = Path(raw)
@@ -237,6 +277,26 @@ class GenericCliAgentOrchestrationTest(unittest.TestCase):
 
         self.assertIn("cannot execute job generic-terminal with status succeeded", str(raised.exception))
         self.assertEqual(raw_log, "original raw log\n")
+
+    def test_execute_generic_agent_job_rejects_forward_slash_job_id_before_artifacts(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            write_json(run_dir / "state.json", minimal_state())
+            nested_job_dir = run_dir / "jobs" / "nested" / "job"
+            nested_job_dir.mkdir(parents=True)
+            (nested_job_dir / "job.json").write_text("not json\n", encoding="utf-8")
+
+            with self.assertRaises(cli.HarnessCliError) as raised:
+                cli.execute_generic_agent_job(
+                    run_dir,
+                    "nested/job",
+                    root=ROOT,
+                )
+
+            raw_log_exists = (nested_job_dir / "raw.log").exists()
+
+        self.assertIn("job_id must be a single safe path segment", str(raised.exception))
+        self.assertFalse(raw_log_exists)
 
     def test_execute_generic_agent_job_rejects_artifact_paths_that_escape_job_dir(self):
         for field in ("input_file", "output_file", "raw_log_file"):
@@ -637,7 +697,7 @@ class GenericCliAgentOrchestrationTest(unittest.TestCase):
                     root=ROOT,
                 )
 
-        self.assertIn("job_id escapes jobs directory", str(raised.exception))
+        self.assertIn("job_id must be a single safe path segment", str(raised.exception))
 
     def test_module_entrypoint_runs_generic_agent_command(self):
         with tempfile.TemporaryDirectory(dir=ROOT) as raw:

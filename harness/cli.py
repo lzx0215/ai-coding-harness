@@ -1480,6 +1480,16 @@ def remove_created_run_dir(run_dir: Path) -> None:
     shutil.rmtree(target)
 
 
+def validate_generic_agent_job_id(job_id: str) -> None:
+    if (
+        Path(job_id).is_absolute()
+        or "/" in job_id
+        or "\\" in job_id
+        or job_id in {".", ".."}
+    ):
+        raise HarnessCliError("job_id must be a single safe path segment")
+
+
 def create_generic_agent_job(
     run_dir: Path | str,
     job_id: str,
@@ -1492,6 +1502,7 @@ def create_generic_agent_job(
 ) -> dict[str, Any]:
     if not job_id.strip():
         raise HarnessCliError("job_id must be non-empty")
+    validate_generic_agent_job_id(job_id)
     if not agent.strip():
         raise HarnessCliError("agent must be non-empty")
     if not adapter.strip():
@@ -1634,6 +1645,7 @@ def execute_generic_agent_job(
 ) -> dict[str, Any]:
     if not job_id.strip():
         raise HarnessCliError("job_id must be non-empty")
+    validate_generic_agent_job_id(job_id)
 
     resolved_run_dir = Path(run_dir)
     repo_root = resolve_repository_root(resolved_run_dir, root=root)
