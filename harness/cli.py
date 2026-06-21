@@ -6,6 +6,7 @@ import os
 import signal
 import shutil
 import subprocess
+import sys
 import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -2181,6 +2182,30 @@ def build_parser() -> argparse.ArgumentParser:
     advance.add_argument("status")
     advance.add_argument("--actor", default=CODEX_ACTOR)
 
+    queue_generic = subparsers.add_parser(
+        "queue-generic-agent",
+        help="Queue a generic CLI agent as a run-local async job without executing it.",
+    )
+    queue_generic.add_argument("run_dir")
+    queue_generic.add_argument("job_id")
+    queue_generic.add_argument("--agent", required=True)
+    queue_generic.add_argument("--adapter", default="generic-cli-agent")
+    queue_generic.add_argument("--timeout-seconds", type=int, default=1800)
+    queue_generic.add_argument("agent_command", nargs=argparse.REMAINDER)
+
+    scheduler = subparsers.add_parser(
+        "run-scheduler",
+        help="Run the local async scheduler for queued jobs.",
+    )
+    scheduler.add_argument("run_dir")
+    scheduler.add_argument("--once", action="store_true", required=True)
+
+    aggregate = subparsers.add_parser(
+        "aggregate-jobs",
+        help="Write jobs/aggregation.json for a Harness run.",
+    )
+    aggregate.add_argument("run_dir")
+
     generic = subparsers.add_parser(
         "run-generic-agent",
         help="Run a generic CLI agent as a run-local async job.",
@@ -2195,8 +2220,36 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _normalize_queue_generic_agent_argv(argv: list[str]) -> list[str]:
+    if not argv or argv[0] != "queue-generic-agent" or "--" not in argv:
+        return argv
+
+    separator = argv.index("--")
+    before_separator = argv[1:separator]
+    if len(before_separator) < 2:
+        return argv
+
+    run_dir = before_separator[0]
+    job_id = before_separator[1]
+    tail = before_separator[2:]
+    options: list[str] = []
+    remainder: list[str] = []
+    index = 0
+    while index < len(tail):
+        token = tail[index]
+        if token in {"--agent", "--adapter", "--timeout-seconds"} and index + 1 < len(tail):
+            options.extend([token, tail[index + 1]])
+            index += 2
+            continue
+        remainder.append(token)
+        index += 1
+
+    return [argv[0], *options, run_dir, job_id, *remainder, *argv[separator:]]
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
+    argv = _normalize_queue_generic_agent_argv(list(sys.argv[1:] if argv is None else argv))
     args = parser.parse_args(argv)
 
     try:
@@ -2240,6 +2293,39 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "advance":
             state = advance_run(args.run_dir, args.status, actor=args.actor)
             print(f"advanced: {state['run_id']} -> {state['status']}")
+            return 0
+
+        if args.command == "queue-generic-agent":
+            command = args.agent_command
+            if command and command[0] == "--":
+                command = command[1:]
+            job = create_generic_agent_job(
+                args.run_dir,
+                args.job_id,
+                agent=args.agent,
+                adapter=args.adapter,
+                command=command,
+                timeout_seconds=args.timeout_seconds,
+            )
+            print(f"queued generic-agent: {job['run_id']}/{job['job_id']}")
+            return 0
+
+        if args.command == "run-scheduler":
+            summary = scheduler_run_once(args.run_dir)
+            print(
+                f"scheduler: {summary['run_id']} "
+                f"executed={len(summary['executed_jobs'])} "
+                f"skipped={len(summary['skipped_jobs'])}",
+            )
+            return 0
+
+        if args.command == "aggregate-jobs":
+            aggregation = aggregate_jobs(args.run_dir)
+            print(
+                f"aggregated jobs: {aggregation['run_id']} "
+                f"consumed={len(aggregation['consumed_jobs'])} "
+                f"incomplete={len(aggregation['incomplete_jobs'])}",
+            )
             return 0
 
         if args.command == "run-generic-agent":

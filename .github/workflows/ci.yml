@@ -90,3 +90,32 @@ jobs:
           done
           harness init-run "$GITHUB_WORKSPACE/.tmp/package-smoke-run" --run-id package-smoke --track Fast --workflow fast-doc-change --base-commit HEAD
           harness validate "$GITHUB_WORKSPACE/.tmp/package-smoke-run"
+          cat > "$GITHUB_WORKSPACE/.tmp/package-smoke-scheduler-agent.py" <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          payload = json.loads(Path(os.environ["HARNESS_AGENT_INPUT_FILE"]).read_text(encoding="utf-8"))
+          output = {
+              "run_id": payload["run_id"],
+              "job_id": payload["job_id"],
+              "agent": payload["agent"],
+              "adapter": payload["adapter"],
+              "status": "passed",
+              "summary": "Package smoke scheduler agent completed.",
+              "findings": [],
+              "evidence": [],
+              "not_tested": [],
+              "residual_risks": [],
+              "generated_at": payload["created_at"],
+          }
+          Path(os.environ["HARNESS_AGENT_OUTPUT_FILE"]).write_text(
+              json.dumps(output, indent=2) + "\n",
+              encoding="utf-8",
+          )
+          print("package-smoke-scheduler-agent wrote output")
+          PY
+          harness queue-generic-agent "$GITHUB_WORKSPACE/.tmp/package-smoke-run" package-smoke-scheduler --agent package-smoke-agent --timeout-seconds 30 -- python "$GITHUB_WORKSPACE/.tmp/package-smoke-scheduler-agent.py"
+          harness run-scheduler "$GITHUB_WORKSPACE/.tmp/package-smoke-run" --once
+          harness aggregate-jobs "$GITHUB_WORKSPACE/.tmp/package-smoke-run"
+          harness validate "$GITHUB_WORKSPACE/.tmp/package-smoke-run"
