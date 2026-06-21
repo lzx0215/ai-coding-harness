@@ -1867,6 +1867,145 @@ def scheduler_run_once(
     }
 
 
+def aggregate_jobs(
+    run_dir: Path | str,
+    *,
+    root: Path | str | None = None,
+) -> dict[str, Any]:
+    resolved_run_dir = Path(run_dir)
+    repo_root = resolve_repository_root(resolved_run_dir, root=root)
+    before = validate_run(resolved_run_dir, root=repo_root)
+    if not before.ok:
+        raise HarnessCliError(format_errors(before.errors))
+
+    state = load_json(state_path(resolved_run_dir))
+    jobs_dir = resolved_run_dir / "jobs"
+    jobs: list[dict[str, Any]] = []
+    errors: list[str] = []
+    if jobs_dir.exists():
+        for job_path in sorted(jobs_dir.glob("*/job.json")):
+            job, job_errors = validate_json_artifact(job_path, JOB_SCHEMA, "job")
+            errors.extend(f"{job_path}: {error}" for error in job_errors)
+            if job is None:
+                continue
+
+            job_id = job.get("job_id")
+            if isinstance(job_id, str):
+                try:
+                    validate_generic_agent_job_id(job_id)
+                except HarnessCliError as exc:
+                    errors.append(f"{job_path}: {exc}")
+                if job_path.parent.name != job_id:
+                    errors.append(
+                        f"{job_path}: job_id mismatch: expected {job_path.parent.name}, "
+                        f"got {job_id}",
+                    )
+            if job.get("run_id") != state["run_id"]:
+                errors.append(
+                    f"{job_path}: run_id mismatch: expected {state['run_id']}, "
+                    f"got {job.get('run_id')}",
+                )
+
+            jobs.append(job)
+    if errors:
+        raise HarnessCliError(format_errors(errors))
+
+    jobs.sort(key=lambda job: job["job_id"])
+    aggregation: dict[str, Any] = {
+        "run_id": state["run_id"],
+        "generated_at": utc_now(),
+        "consumed_jobs": [],
+        "succeeded_jobs": [],
+        "failed_jobs": [],
+        "timeout_jobs": [],
+        "cancelled_jobs": [],
+        "incomplete_jobs": [],
+        "findings": [],
+        "conflicts": [],
+        "recommended_transition": None,
+        "residual_risks": [],
+    }
+    status_buckets = {
+        "succeeded": "succeeded_jobs",
+        "failed": "failed_jobs",
+        "timeout": "timeout_jobs",
+        "cancelled": "cancelled_jobs",
+    }
+
+    for job in jobs:
+        job_id = job["job_id"]
+        status = job["status"]
+        if status not in TERMINAL_JOB_STATUSES:
+            aggregation["incomplete_jobs"].append(job_id)
+            continue
+
+        aggregation["consumed_jobs"].append(job_id)
+        aggregation[status_buckets[status]].append(job_id)
+
+        output_file = job.get("output_file")
+        if not isinstance(output_file, str) or not output_file.strip():
+            aggregation["residual_risks"].append(
+                f"job {job_id} terminal output is missing or invalid: output_file",
+            )
+            continue
+
+        job_dir = resolved_run_dir / "jobs" / job_id
+        raw_output_path = Path(output_file)
+        output_path = raw_output_path if raw_output_path.is_absolute() else job_dir / raw_output_path
+        output_path = output_path.resolve(strict=False)
+        if not is_within_path(output_path, job_dir.resolve(strict=False)):
+            aggregation["residual_risks"].append(
+                f"job {job_id} terminal output is invalid: {output_file}",
+            )
+            continue
+        if not output_path.exists():
+            aggregation["residual_risks"].append(
+                f"job {job_id} terminal output is missing: {output_file}",
+            )
+            continue
+
+        agent_result, result_errors = validate_json_artifact(
+            output_path,
+            AGENT_RESULT_SCHEMA,
+            "agent-result",
+        )
+        if result_errors:
+            aggregation["residual_risks"].append(
+                f"job {job_id} terminal output is invalid: {output_file}: "
+                f"{'; '.join(result_errors)}",
+            )
+            continue
+        if agent_result is None:
+            aggregation["residual_risks"].append(
+                f"job {job_id} terminal output could not be loaded: {output_file}",
+            )
+            continue
+
+        result_contract_errors = validate_agent_result_matches_job(agent_result, job)
+        if result_contract_errors:
+            aggregation["residual_risks"].append(
+                f"job {job_id} terminal output is invalid: {output_file}: "
+                f"{'; '.join(result_contract_errors)}",
+            )
+            continue
+
+        for finding in agent_result["findings"]:
+            aggregation["findings"].append(
+                {
+                    "job_id": job_id,
+                    "severity": finding["severity"],
+                    "title": finding["title"],
+                    "evidence": finding["evidence"],
+                    "recommendation": finding["recommendation"],
+                }
+            )
+        aggregation["residual_risks"].extend(agent_result["residual_risks"])
+
+    aggregation_path = resolved_run_dir / "jobs" / "aggregation.json"
+    write_json_file(aggregation_path, aggregation)
+    return aggregation
+
+
 def run_generic_agent(
     run_dir: Path | str,
     job_id: str,

@@ -856,6 +856,118 @@ class GenericCliAgentOrchestrationTest(unittest.TestCase):
         self.assertIn("running job requires started_at", str(raised.exception))
         self.assertEqual(valid_job["status"], "queued")
 
+    def test_aggregate_jobs_classifies_terminal_and_incomplete_jobs_without_mutating_state(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            state = minimal_state()
+            write_json(run_dir / "state.json", state)
+            agent_script = run_dir / "finding_agent.py"
+            write_agent_script(
+                agent_script,
+                """
+                import json
+                import os
+                from pathlib import Path
+
+                payload = json.loads(Path(os.environ["HARNESS_AGENT_INPUT_FILE"]).read_text(encoding="utf-8"))
+                output = {
+                    "run_id": payload["run_id"],
+                    "job_id": payload["job_id"],
+                    "agent": payload["agent"],
+                    "adapter": payload["adapter"],
+                    "status": "findings",
+                    "summary": "Finding agent completed.",
+                    "findings": [
+                        {
+                            "severity": "low",
+                            "title": "Sample finding",
+                            "evidence": "Synthetic finding for aggregation.",
+                            "recommendation": "Record it in aggregation."
+                        }
+                    ],
+                    "evidence": [],
+                    "not_tested": [],
+                    "residual_risks": ["Synthetic residual risk."],
+                    "generated_at": payload["created_at"],
+                }
+                Path(os.environ["HARNESS_AGENT_OUTPUT_FILE"]).write_text(
+                    json.dumps(output, indent=2) + "\\n",
+                    encoding="utf-8",
+                )
+                """,
+            )
+            cli.run_generic_agent(
+                run_dir,
+                "succeeded-job",
+                agent="generic-test-agent",
+                command=[sys.executable, str(agent_script)],
+                timeout_seconds=30,
+                root=ROOT,
+            )
+            cli.create_generic_agent_job(
+                run_dir,
+                "running-job",
+                agent="generic-test-agent",
+                command=[sys.executable, "-c", "print('still running')"],
+                timeout_seconds=30,
+                root=ROOT,
+            )
+            running_path = run_dir / "jobs" / "running-job" / "job.json"
+            running_job = json.loads(running_path.read_text(encoding="utf-8"))
+            running_job["status"] = "running"
+            running_job["started_at"] = "2026-06-20T00:00:01Z"
+            write_json(running_path, running_job)
+
+            aggregation = cli.aggregate_jobs(run_dir, root=ROOT)
+            saved_state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
+            saved_aggregation = json.loads(
+                (run_dir / "jobs" / "aggregation.json").read_text(encoding="utf-8")
+            )
+
+        self.assertEqual(saved_state, state)
+        self.assertEqual(aggregation, saved_aggregation)
+        self.assertEqual(saved_aggregation["consumed_jobs"], ["succeeded-job"])
+        self.assertEqual(saved_aggregation["succeeded_jobs"], ["succeeded-job"])
+        self.assertEqual(saved_aggregation["incomplete_jobs"], ["running-job"])
+        self.assertEqual(saved_aggregation["findings"][0]["job_id"], "succeeded-job")
+        self.assertEqual(saved_aggregation["findings"][0]["severity"], "low")
+        self.assertIn("Synthetic residual risk.", saved_aggregation["residual_risks"])
+
+    def test_aggregate_jobs_records_missing_or_invalid_terminal_output_as_residual_risk(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            write_json(run_dir / "state.json", minimal_state())
+            cli.create_generic_agent_job(
+                run_dir,
+                "failed-job",
+                agent="generic-test-agent",
+                command=[sys.executable, "-c", "import sys; sys.exit(7)"],
+                timeout_seconds=30,
+                root=ROOT,
+            )
+            cli.execute_generic_agent_job(run_dir, "failed-job", root=ROOT)
+
+            aggregation = cli.aggregate_jobs(run_dir, root=ROOT)
+
+        self.assertEqual(aggregation["failed_jobs"], ["failed-job"])
+        self.assertTrue(
+            any("failed-job" in risk and "output" in risk for risk in aggregation["residual_risks"]),
+            aggregation["residual_risks"],
+        )
+
+    def test_aggregate_jobs_aborts_on_invalid_job_record(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            write_json(run_dir / "state.json", minimal_state())
+            invalid_path = run_dir / "jobs" / "invalid" / "job.json"
+            invalid_path.parent.mkdir(parents=True, exist_ok=True)
+            invalid_path.write_text("[]\n", encoding="utf-8")
+
+            with self.assertRaises(cli.HarnessCliError) as raised:
+                cli.aggregate_jobs(run_dir, root=ROOT)
+
+        self.assertIn("job schema error", str(raised.exception))
+
     def test_run_generic_agent_creates_job_result_and_log_without_mutating_state(self):
         with tempfile.TemporaryDirectory(dir=ROOT) as raw:
             run_dir = Path(raw)
