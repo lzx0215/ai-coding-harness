@@ -118,4 +118,7 @@ jobs:
           harness queue-generic-agent "$GITHUB_WORKSPACE/.tmp/package-smoke-run" package-smoke-scheduler --agent package-smoke-agent --timeout-seconds 30 -- python "$GITHUB_WORKSPACE/.tmp/package-smoke-scheduler-agent.py"
           harness run-scheduler "$GITHUB_WORKSPACE/.tmp/package-smoke-run" --once
           harness aggregate-jobs "$GITHUB_WORKSPACE/.tmp/package-smoke-run"
+          harness index-evidence "$GITHUB_WORKSPACE/.tmp/package-smoke-run" agent-job jobs/package-smoke-scheduler/job.json --description "Package smoke scheduler job."
+          harness index-evidence "$GITHUB_WORKSPACE/.tmp/package-smoke-run" agent-result jobs/package-smoke-scheduler/output.json --description "Package smoke scheduler result."
+          harness index-evidence "$GITHUB_WORKSPACE/.tmp/package-smoke-run" aggregation jobs/aggregation.json --description "Package smoke job aggregation."
           harness validate "$GITHUB_WORKSPACE/.tmp/package-smoke-run"
