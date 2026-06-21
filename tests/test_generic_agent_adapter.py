@@ -88,7 +88,8 @@ class GenericCliAgentOrchestrationTest(unittest.TestCase):
     def test_execute_generic_agent_job_consumes_preexisting_queued_job(self):
         with tempfile.TemporaryDirectory(dir=ROOT) as raw:
             run_dir = Path(raw)
-            write_json(run_dir / "state.json", minimal_state())
+            original_state = minimal_state()
+            write_json(run_dir / "state.json", original_state)
             agent_script = run_dir / "queued_agent.py"
             write_agent_script(
                 agent_script,
@@ -135,9 +136,11 @@ class GenericCliAgentOrchestrationTest(unittest.TestCase):
             raw_log = (run_dir / "jobs" / "generic-queued" / "raw.log").read_text(
                 encoding="utf-8",
             )
+            saved_state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
 
         self.assertEqual(job["status"], "succeeded")
         self.assertIn("queued agent wrote output", raw_log)
+        self.assertEqual(saved_state, original_state)
 
     def test_execute_generic_agent_job_rejects_terminal_job_without_overwriting_raw_log(self):
         with tempfile.TemporaryDirectory(dir=ROOT) as raw:
@@ -277,6 +280,143 @@ class GenericCliAgentOrchestrationTest(unittest.TestCase):
                 )
 
         self.assertIn("run_id mismatch", str(raised.exception))
+
+    def test_execute_generic_agent_job_rejects_non_object_input_before_claim(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            write_json(run_dir / "state.json", minimal_state())
+            cli.create_generic_agent_job(
+                run_dir,
+                "generic-input-shape",
+                agent="generic-test-agent",
+                command=[sys.executable, "-c", "print('unused')"],
+                timeout_seconds=30,
+                root=ROOT,
+            )
+            job_dir = run_dir / "jobs" / "generic-input-shape"
+            (job_dir / "input.json").write_text("[]\n", encoding="utf-8")
+
+            with self.assertRaises(cli.HarnessCliError) as raised:
+                cli.execute_generic_agent_job(
+                    run_dir,
+                    "generic-input-shape",
+                    root=ROOT,
+                )
+
+            saved_job = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
+            raw_log_exists = (job_dir / "raw.log").exists()
+
+        self.assertIn("job input must be an object", str(raised.exception))
+        self.assertEqual(saved_job["status"], "queued")
+        self.assertFalse(raw_log_exists)
+
+    def test_execute_generic_agent_job_rejects_non_string_command_before_claim(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            write_json(run_dir / "state.json", minimal_state())
+            cli.create_generic_agent_job(
+                run_dir,
+                "generic-command-shape",
+                agent="generic-test-agent",
+                command=[sys.executable, "-c", "print('unused')"],
+                timeout_seconds=30,
+                root=ROOT,
+            )
+            job_dir = run_dir / "jobs" / "generic-command-shape"
+            input_path = job_dir / "input.json"
+            input_payload = json.loads(input_path.read_text(encoding="utf-8"))
+            input_payload["command"] = [sys.executable, 7]
+            write_json(input_path, input_payload)
+
+            with self.assertRaises(cli.HarnessCliError) as raised:
+                cli.execute_generic_agent_job(
+                    run_dir,
+                    "generic-command-shape",
+                    root=ROOT,
+                )
+
+            saved_job = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
+            raw_log_exists = (job_dir / "raw.log").exists()
+
+        self.assertIn("command must be a non-empty list of strings", str(raised.exception))
+        self.assertEqual(saved_job["status"], "queued")
+        self.assertFalse(raw_log_exists)
+
+    def test_execute_generic_agent_job_rejects_input_identity_mismatch_before_claim(self):
+        for field, value in (("run_id", "other-run"), ("job_id", "other-job")):
+            with self.subTest(field=field):
+                with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+                    run_dir = Path(raw)
+                    write_json(run_dir / "state.json", minimal_state())
+                    cli.create_generic_agent_job(
+                        run_dir,
+                        "generic-input-identity",
+                        agent="generic-test-agent",
+                        command=[sys.executable, "-c", "print('unused')"],
+                        timeout_seconds=30,
+                        root=ROOT,
+                    )
+                    job_dir = run_dir / "jobs" / "generic-input-identity"
+                    input_path = job_dir / "input.json"
+                    input_payload = json.loads(input_path.read_text(encoding="utf-8"))
+                    input_payload[field] = value
+                    write_json(input_path, input_payload)
+
+                    with self.assertRaises(cli.HarnessCliError) as raised:
+                        cli.execute_generic_agent_job(
+                            run_dir,
+                            "generic-input-identity",
+                            root=ROOT,
+                        )
+
+                    saved_job = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
+                    raw_log_exists = (job_dir / "raw.log").exists()
+
+                self.assertIn(f"input {field} mismatch", str(raised.exception))
+                self.assertEqual(saved_job["status"], "queued")
+                self.assertFalse(raw_log_exists)
+
+    def test_execute_generic_agent_job_rejects_input_path_escape_or_mismatch_before_claim(self):
+        cases = (
+            ("input_file", "../../state.json", "input input_file escapes job directory"),
+            ("output_file", "../../state.json", "input output_file escapes job directory"),
+            ("raw_log_file", "../../state.json", "input raw_log_file escapes job directory"),
+            ("input_file", "other-input.json", "input input_file mismatch"),
+            ("output_file", "other-output.json", "input output_file mismatch"),
+            ("raw_log_file", "other-raw.log", "input raw_log_file mismatch"),
+        )
+        for field, value, expected_error in cases:
+            with self.subTest(field=field, value=value):
+                with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+                    run_dir = Path(raw)
+                    write_json(run_dir / "state.json", minimal_state())
+                    cli.create_generic_agent_job(
+                        run_dir,
+                        "generic-input-path",
+                        agent="generic-test-agent",
+                        command=[sys.executable, "-c", "print('unused')"],
+                        timeout_seconds=30,
+                        root=ROOT,
+                    )
+                    job_dir = run_dir / "jobs" / "generic-input-path"
+                    input_path = job_dir / "input.json"
+                    input_payload = json.loads(input_path.read_text(encoding="utf-8"))
+                    input_payload[field] = value
+                    write_json(input_path, input_payload)
+
+                    with self.assertRaises(cli.HarnessCliError) as raised:
+                        cli.execute_generic_agent_job(
+                            run_dir,
+                            "generic-input-path",
+                            root=ROOT,
+                        )
+
+                    saved_job = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
+                    raw_log_exists = (job_dir / "raw.log").exists()
+
+                self.assertIn(expected_error, str(raised.exception))
+                self.assertEqual(saved_job["status"], "queued")
+                self.assertFalse(raw_log_exists)
 
     def test_run_generic_agent_creates_job_result_and_log_without_mutating_state(self):
         with tempfile.TemporaryDirectory(dir=ROOT) as raw:

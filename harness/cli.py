@@ -1563,6 +1563,65 @@ def create_generic_agent_job(
     return job
 
 
+def validate_generic_agent_input(
+    input_payload: Any,
+    job: dict[str, Any],
+    state: dict[str, Any],
+    job_dir: Path,
+    input_path: Path,
+    output_path: Path,
+    raw_log_path: Path,
+) -> list[str]:
+    if not isinstance(input_payload, dict):
+        return ["job input must be an object"]
+
+    errors: list[str] = []
+    command = input_payload.get("command")
+    if (
+        not isinstance(command, list)
+        or not command
+        or any(not isinstance(item, str) for item in command)
+    ):
+        errors.append("command must be a non-empty list of strings")
+
+    expected_fields = {
+        "run_id": state["run_id"],
+        "job_id": job["job_id"],
+        "agent": job["agent"],
+        "adapter": job["adapter"],
+        "timeout_seconds": job["timeout_seconds"],
+    }
+    for field, expected in expected_fields.items():
+        if input_payload.get(field) != expected:
+            errors.append(
+                f"input {field} mismatch: expected {expected}, got {input_payload.get(field)}",
+            )
+
+    expected_paths = {
+        "input_file": input_path,
+        "output_file": output_path,
+        "raw_log_file": raw_log_path,
+    }
+    for field, expected_path in expected_paths.items():
+        raw_path = input_payload.get(field)
+        if not isinstance(raw_path, str) or not raw_path.strip():
+            errors.append(f"input {field} must be a non-empty string")
+            continue
+
+        candidate = Path(raw_path)
+        if not candidate.is_absolute():
+            candidate = job_dir / candidate
+        resolved_candidate = candidate.resolve(strict=False)
+        if not is_within_path(resolved_candidate, job_dir):
+            errors.append(f"input {field} escapes job directory: {raw_path}")
+        elif not same_path(resolved_candidate, expected_path):
+            errors.append(
+                f"input {field} mismatch: expected {expected_path}, got {raw_path}",
+            )
+
+    return errors
+
+
 def execute_generic_agent_job(
     run_dir: Path | str,
     job_id: str,
@@ -1612,10 +1671,19 @@ def execute_generic_agent_job(
     except (UnicodeDecodeError, json.JSONDecodeError, OSError) as exc:
         raise HarnessCliError(f"job input cannot be loaded: {exc}") from exc
 
-    command = input_payload.get("command")
-    if not isinstance(command, list) or not command:
-        raise HarnessCliError("generic agent command must be non-empty")
+    input_errors = validate_generic_agent_input(
+        input_payload,
+        job,
+        state,
+        job_dir,
+        input_path,
+        output_path,
+        raw_log_path,
+    )
+    if input_errors:
+        raise HarnessCliError(format_errors(input_errors))
 
+    command = input_payload["command"]
     agent = job["agent"]
     adapter = job["adapter"]
     timeout_seconds = job["timeout_seconds"]
