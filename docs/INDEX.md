@@ -10,7 +10,7 @@
 - Phase 3 review decision and memory closure plus follow-up provenance hardening are merged into `master`: indexed `review-decision.json` evidence is schema/semantically validated, review-related transitions are gated by Codex decisions where required, and completion requires handoff/memory closure metadata.
 - Phase 4 async job substrate is implemented in the source tree: run-local job, agent-result, and aggregation schemas are available; consumed async job evidence and aggregation evidence are validated; Standard and Strict unavailable-review policy is enforced.
 - A formal closure run exists at `harness/runs/2026-06-21-phase-4-async-substrate-closure/`; a live `run-generic-agent` smoke run exists at `harness/runs/2026-06-21-phase-4-live-generic-agent-smoke/`.
-- Phase 5.2 local scheduler smoke is implemented and exercised by `harness/runs/2026-06-22-phase-5-live-scheduler-smoke/`, covering `queue-generic-agent`, `run-scheduler --once`, and `aggregate-jobs`.
+- Phase 5.2 local scheduler smoke is implemented and exercised by `harness/runs/2026-06-22-phase-5-live-scheduler-smoke/`, covering `queue-generic-agent`, `run-scheduler --once`, and `aggregate-jobs`. Residual risks: local single-process scheduler smoke only; watch mode, multi-worker concurrency, cloud queue, and stale-running recovery are unverified; orphaned running jobs are skipped, not recovered.
 - Team-repeatable validation is now defined by `.github/workflows/ci.yml` and `pyproject.toml` with editable tests, non-editable package smoke, packaged console-script run validation, and merge-base scoped whitespace checks.
 
 ## Specs
