@@ -1,0 +1,15 @@
+{
+  "run_id": "2026-06-22-phase-5-live-scheduler-smoke",
+  "job_id": "phase5-live-scheduler-agent",
+  "agent": "generic-cli-agent",
+  "adapter": "generic-cli-agent",
+  "command": [
+    "python",
+    "..\\..\\scripts\\scheduler-smoke.py"
+  ],
+  "created_at": "2026-06-21T23:28:18Z",
+  "timeout_seconds": 30,
+  "input_file": "E:\\ai-coding-harness\\.worktrees\\phase5-live-scheduler\\harness\\runs\\2026-06-22-phase-5-live-scheduler-smoke\\jobs\\phase5-live-scheduler-agent\\input.json",
+  "output_file": "E:\\ai-coding-harness\\.worktrees\\phase5-live-scheduler\\harness\\runs\\2026-06-22-phase-5-live-scheduler-smoke\\jobs\\phase5-live-scheduler-agent\\output.json",
+  "raw_log_file": "E:\\ai-coding-harness\\.worktrees\\phase5-live-scheduler\\harness\\runs\\2026-06-22-phase-5-live-scheduler-smoke\\jobs\\phase5-live-scheduler-agent\\raw.log"
+}

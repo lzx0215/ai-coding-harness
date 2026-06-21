@@ -21,6 +21,7 @@
 - Reviewer provenance v0.2 contract: optional structured provenance, scalar compatibility fields, and additive `0.1.0|0.2.0` state schema validation.
 - Phase 4 async job substrate：`agent-job`、`agent-result`、`aggregation` schema 和证据校验已经实现。
 - 真实 Phase 4 `run-generic-agent` smoke run：`harness/runs/2026-06-21-phase-4-live-generic-agent-smoke/`。
+- Phase 5.2 local scheduler smoke is implemented and exercised by the live run at `harness/runs/2026-06-22-phase-5-live-scheduler-smoke/`.
 - 打包入口：`pyproject.toml` 提供 `harness = harness.cli:main` console script，CI 同时覆盖 editable install 和非 editable package smoke。
 
 ## 目录结构
@@ -98,8 +99,8 @@ python mcp/claude-review/server.py
 
 ## 当前状态
 
-Phase 4 async job substrate 已落地并完成一次真实 `run-generic-agent` smoke：`jobs/phase4-live-generic-agent/` 下的 `input.json`、`job.json`、`output.json`、`raw.log` 由 CLI 实际生成，Codex 再索引 `agent-job`、`agent-result` 和 `aggregation` 证据并完成 run 交接。
+Phase 4 async job substrate 已落地并完成一次真实 `run-generic-agent` smoke：`jobs/phase4-live-generic-agent/` 下的 `input.json`、`job.json`、`output.json`、`raw.log` 由 CLI 实际生成，Codex 再索引 `agent-job`、`agent-result` 和 `aggregation` 证据并完成 run 交接。Phase 5.2 local scheduler smoke is also implemented and exercised by `harness/runs/2026-06-22-phase-5-live-scheduler-smoke/`, covering `queue-generic-agent`, `run-scheduler --once`, and `aggregate-jobs`.
 
 当前 CI 目标是团队可重复验证：editable install 跑完整单测和历史 run 校验，非 editable install 验证 packaged console script 在 repo 外 cwd 下仍能解析真实仓库 evidence path，`git diff --check` 按 PR/push 基线检查实际 diff。
 
-仍未实现：scheduler / background worker / cloud queue。相关流程先沉淀为 `harness/core/run-lifecycle-sop.md`，至少复用两次或用户明确要求后再升级为 Codex skill。
+仍未实现：scheduler watch mode / background worker / multi-worker concurrency / cloud queue / automatic stale-running recovery。相关流程先沉淀为 `harness/core/run-lifecycle-sop.md`，至少复用两次或用户明确要求后再升级为 Codex skill。

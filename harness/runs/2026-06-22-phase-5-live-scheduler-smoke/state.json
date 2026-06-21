@@ -1,0 +1,67 @@
+{
+  "run_id": "2026-06-22-phase-5-live-scheduler-smoke",
+  "harness_version": "0.2.0",
+  "state_schema_version": "0.2.0",
+  "status": "completed",
+  "track": "Standard",
+  "current_workflow": "standard-agent-adapter-change",
+  "owner": "codex",
+  "base_commit": "HEAD",
+  "created_at": "2026-06-21T23:26:53Z",
+  "updated_at": "2026-06-21T23:31:34Z",
+  "external_agents": [
+    {
+      "name": "claude-code",
+      "role": "reviewer",
+      "state_access": "none",
+      "status": "not_requested"
+    }
+  ],
+  "evidence": [
+    {
+      "type": "task",
+      "path": "task.md",
+      "description": "Task definition."
+    },
+    {
+      "type": "triage",
+      "path": "triage.md",
+      "description": "Task triage."
+    },
+    {
+      "type": "plan",
+      "path": "plan.md",
+      "description": "Implementation plan."
+    },
+    {
+      "type": "agent-job",
+      "path": "jobs/phase5-live-scheduler-agent/job.json",
+      "description": "Scheduler-executed generic CLI job process record."
+    },
+    {
+      "type": "agent-result",
+      "path": "jobs/phase5-live-scheduler-agent/output.json",
+      "description": "Structured result from the scheduler-executed smoke agent."
+    },
+    {
+      "type": "aggregation",
+      "path": "jobs/aggregation.json",
+      "description": "Aggregation summary for the scheduler-executed smoke job."
+    },
+    {
+      "type": "verification",
+      "path": "verification.md",
+      "description": "Verification record for the live scheduler smoke run."
+    },
+    {
+      "type": "review-waiver",
+      "path": "review-waiver.md",
+      "description": "Run-record-only review waiver."
+    },
+    {
+      "type": "handoff",
+      "path": "handoff.md",
+      "description": "Closure handoff for the live scheduler smoke run."
+    }
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "run_id": "2026-06-22-phase-5-live-scheduler-smoke",
+  "generated_at": "2026-06-21T23:28:41Z",
+  "consumed_jobs": [
+    "phase5-live-scheduler-agent"
+  ],
+  "succeeded_jobs": [
+    "phase5-live-scheduler-agent"
+  ],
+  "failed_jobs": [],
+  "timeout_jobs": [],
+  "cancelled_jobs": [],
+  "incomplete_jobs": [],
+  "findings": [],
+  "conflicts": [],
+  "recommended_transition": null,
+  "residual_risks": [
+    "Watch mode was not exercised.",
+    "Multi-worker concurrency was not exercised.",
+    "Cloud queue behavior was not exercised.",
+    "Automatic stale-running recovery was not exercised.",
+    "Orphaned running jobs are skipped, not recovered."
+  ]
+}
