@@ -1480,6 +1480,13 @@ def remove_created_run_dir(run_dir: Path) -> None:
     shutil.rmtree(target)
 
 
+def validate_non_empty_string(value: Any, field: str) -> None:
+    if not isinstance(value, str):
+        raise HarnessCliError(f"{field} must be a string")
+    if not value.strip():
+        raise HarnessCliError(f"{field} must be non-empty")
+
+
 def validate_generic_agent_job_id(job_id: str) -> None:
     if (
         Path(job_id).is_absolute()
@@ -1500,13 +1507,10 @@ def create_generic_agent_job(
     timeout_seconds: int = 1800,
     root: Path | str | None = None,
 ) -> dict[str, Any]:
-    if not job_id.strip():
-        raise HarnessCliError("job_id must be non-empty")
+    validate_non_empty_string(job_id, "job_id")
     validate_generic_agent_job_id(job_id)
-    if not agent.strip():
-        raise HarnessCliError("agent must be non-empty")
-    if not adapter.strip():
-        raise HarnessCliError("adapter must be non-empty")
+    validate_non_empty_string(agent, "agent")
+    validate_non_empty_string(adapter, "adapter")
     if not command:
         raise HarnessCliError("generic agent command must be non-empty")
     if not isinstance(command, list) or any(not isinstance(item, str) for item in command):
@@ -1559,22 +1563,24 @@ def create_generic_agent_job(
             "runtime": "local-cli",
         },
     }
-    write_json_file(job_path, job)
-    write_json_file(
-        input_path,
-        {
-            "run_id": run_id,
-            "job_id": job_id,
-            "agent": agent,
-            "adapter": adapter,
-            "command": command,
-            "created_at": created_at,
-            "timeout_seconds": timeout_seconds,
-            "input_file": str(input_path),
-            "output_file": str(output_path),
-            "raw_log_file": str(raw_log_path),
-        },
-    )
+    input_payload = {
+        "run_id": run_id,
+        "job_id": job_id,
+        "agent": agent,
+        "adapter": adapter,
+        "command": command,
+        "created_at": created_at,
+        "timeout_seconds": timeout_seconds,
+        "input_file": str(input_path),
+        "output_file": str(output_path),
+        "raw_log_file": str(raw_log_path),
+    }
+    try:
+        write_json_file(input_path, input_payload)
+        write_json_file(job_path, job)
+    except Exception:
+        remove_created_run_dir(job_dir)
+        raise
     return job
 
 
@@ -1643,8 +1649,7 @@ def execute_generic_agent_job(
     *,
     root: Path | str | None = None,
 ) -> dict[str, Any]:
-    if not job_id.strip():
-        raise HarnessCliError("job_id must be non-empty")
+    validate_non_empty_string(job_id, "job_id")
     validate_generic_agent_job_id(job_id)
 
     resolved_run_dir = Path(run_dir)
@@ -1698,6 +1703,10 @@ def execute_generic_agent_job(
     )
     if input_errors:
         raise HarnessCliError(format_errors(input_errors))
+    if output_path.exists():
+        raise HarnessCliError(f"output_file already exists: {output_path}")
+    if raw_log_path.exists():
+        raise HarnessCliError(f"raw_log_file already exists: {raw_log_path}")
 
     command = input_payload["command"]
     agent = job["agent"]

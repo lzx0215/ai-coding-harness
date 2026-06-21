@@ -5,6 +5,7 @@ import tempfile
 import textwrap
 import time
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from harness import cli
@@ -166,6 +167,70 @@ class GenericCliAgentOrchestrationTest(unittest.TestCase):
         self.assertIn("job_id must be a single safe path segment", str(raised.exception))
         self.assertFalse(jobs_dir_exists)
 
+    def test_create_generic_agent_job_cleans_job_dir_when_input_write_fails(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            write_json(run_dir / "state.json", minimal_state())
+            original_write_json_file = cli.write_json_file
+
+            def flaky_write_json_file(path: Path, payload: dict) -> None:
+                if path.name == "input.json":
+                    raise OSError("injected input write failure")
+                original_write_json_file(path, payload)
+
+            with mock.patch("harness.cli.write_json_file", side_effect=flaky_write_json_file):
+                with self.assertRaises(OSError):
+                    cli.create_generic_agent_job(
+                        run_dir,
+                        "generic-write-failure",
+                        agent="generic-test-agent",
+                        command=[sys.executable, "-c", "print('unused')"],
+                        timeout_seconds=30,
+                        root=ROOT,
+                    )
+
+            job_dir_exists = (run_dir / "jobs" / "generic-write-failure").exists()
+            job_json_exists = (
+                run_dir / "jobs" / "generic-write-failure" / "job.json"
+            ).exists()
+
+        self.assertFalse(job_dir_exists)
+        self.assertFalse(job_json_exists)
+
+    def test_create_generic_agent_job_rejects_non_string_identifiers(self):
+        cases = (
+            ("job_id", 123),
+            ("agent", 123),
+            ("adapter", 123),
+        )
+        for field, value in cases:
+            with self.subTest(field=field):
+                with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+                    run_dir = Path(raw)
+                    write_json(run_dir / "state.json", minimal_state())
+                    kwargs = {
+                        "job_id": "generic-non-string",
+                        "agent": "generic-test-agent",
+                        "adapter": "generic-cli-agent",
+                    }
+                    kwargs[field] = value
+
+                    with self.assertRaises(cli.HarnessCliError) as raised:
+                        cli.create_generic_agent_job(
+                            run_dir,
+                            kwargs["job_id"],
+                            agent=kwargs["agent"],
+                            adapter=kwargs["adapter"],
+                            command=[sys.executable, "-c", "print('unused')"],
+                            timeout_seconds=30,
+                            root=ROOT,
+                        )
+
+                    jobs_dir_exists = (run_dir / "jobs").exists()
+
+                self.assertIn(f"{field} must be a string", str(raised.exception))
+                self.assertFalse(jobs_dir_exists)
+
     def test_execute_generic_agent_job_consumes_preexisting_queued_job(self):
         with tempfile.TemporaryDirectory(dir=ROOT) as raw:
             run_dir = Path(raw)
@@ -222,6 +287,95 @@ class GenericCliAgentOrchestrationTest(unittest.TestCase):
         self.assertEqual(job["status"], "succeeded")
         self.assertIn("queued agent wrote output", raw_log)
         self.assertEqual(saved_state, original_state)
+
+    def test_execute_generic_agent_job_rejects_preexisting_output_before_claim(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            write_json(run_dir / "state.json", minimal_state())
+            cli.create_generic_agent_job(
+                run_dir,
+                "generic-stale-output",
+                agent="generic-test-agent",
+                command=[sys.executable, "-c", "pass"],
+                timeout_seconds=30,
+                root=ROOT,
+            )
+            job_dir = run_dir / "jobs" / "generic-stale-output"
+            input_payload = json.loads((job_dir / "input.json").read_text(encoding="utf-8"))
+            stale_output = {
+                "run_id": input_payload["run_id"],
+                "job_id": input_payload["job_id"],
+                "agent": input_payload["agent"],
+                "adapter": input_payload["adapter"],
+                "status": "passed",
+                "summary": "Stale output should not be trusted.",
+                "findings": [],
+                "evidence": [],
+                "not_tested": [],
+                "residual_risks": [],
+                "generated_at": input_payload["created_at"],
+            }
+            write_json(job_dir / "output.json", stale_output)
+
+            with self.assertRaises(cli.HarnessCliError) as raised:
+                cli.execute_generic_agent_job(
+                    run_dir,
+                    "generic-stale-output",
+                    root=ROOT,
+                )
+
+            saved_job = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
+            saved_output = json.loads((job_dir / "output.json").read_text(encoding="utf-8"))
+            raw_log_exists = (job_dir / "raw.log").exists()
+
+        self.assertIn("output_file already exists", str(raised.exception))
+        self.assertEqual(saved_job["status"], "queued")
+        self.assertEqual(saved_output, stale_output)
+        self.assertFalse(raw_log_exists)
+
+    def test_execute_generic_agent_job_rejects_preexisting_raw_log_before_claim(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            write_json(run_dir / "state.json", minimal_state())
+            cli.create_generic_agent_job(
+                run_dir,
+                "generic-stale-log",
+                agent="generic-test-agent",
+                command=[sys.executable, "-c", "print('unused')"],
+                timeout_seconds=30,
+                root=ROOT,
+            )
+            job_dir = run_dir / "jobs" / "generic-stale-log"
+            raw_log_path = job_dir / "raw.log"
+            raw_log_path.write_text("stale raw log\n", encoding="utf-8")
+
+            with self.assertRaises(cli.HarnessCliError) as raised:
+                cli.execute_generic_agent_job(
+                    run_dir,
+                    "generic-stale-log",
+                    root=ROOT,
+                )
+
+            saved_job = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
+            raw_log = raw_log_path.read_text(encoding="utf-8")
+
+        self.assertIn("raw_log_file already exists", str(raised.exception))
+        self.assertEqual(saved_job["status"], "queued")
+        self.assertEqual(raw_log, "stale raw log\n")
+
+    def test_execute_generic_agent_job_rejects_non_string_job_id(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            write_json(run_dir / "state.json", minimal_state())
+
+            with self.assertRaises(cli.HarnessCliError) as raised:
+                cli.execute_generic_agent_job(
+                    run_dir,
+                    123,
+                    root=ROOT,
+                )
+
+        self.assertIn("job_id must be a string", str(raised.exception))
 
     def test_execute_generic_agent_job_rejects_terminal_job_without_overwriting_raw_log(self):
         with tempfile.TemporaryDirectory(dir=ROOT) as raw:
