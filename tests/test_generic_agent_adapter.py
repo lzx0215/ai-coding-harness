@@ -85,6 +85,47 @@ class GenericCliAgentOrchestrationTest(unittest.TestCase):
         self.assertFalse(raw_log_exists)
         self.assertEqual(saved_state, original_state)
 
+    def test_create_generic_agent_job_rejects_empty_adapter_before_job_dir_created(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            write_json(run_dir / "state.json", minimal_state())
+
+            with self.assertRaises(cli.HarnessCliError) as raised:
+                cli.create_generic_agent_job(
+                    run_dir,
+                    "generic-empty-adapter",
+                    agent="generic-test-agent",
+                    adapter="",
+                    command=[sys.executable, "-c", "print('unused')"],
+                    timeout_seconds=30,
+                    root=ROOT,
+                )
+
+            job_dir_exists = (run_dir / "jobs" / "generic-empty-adapter").exists()
+
+        self.assertIn("adapter must be non-empty", str(raised.exception))
+        self.assertFalse(job_dir_exists)
+
+    def test_create_generic_agent_job_rejects_malformed_command_before_job_dir_created(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            write_json(run_dir / "state.json", minimal_state())
+
+            with self.assertRaises(cli.HarnessCliError) as raised:
+                cli.create_generic_agent_job(
+                    run_dir,
+                    "generic-bad-command",
+                    agent="generic-test-agent",
+                    command=[123],
+                    timeout_seconds=30,
+                    root=ROOT,
+                )
+
+            job_dir_exists = (run_dir / "jobs" / "generic-bad-command").exists()
+
+        self.assertIn("command must be a non-empty list of strings", str(raised.exception))
+        self.assertFalse(job_dir_exists)
+
     def test_execute_generic_agent_job_consumes_preexisting_queued_job(self):
         with tempfile.TemporaryDirectory(dir=ROOT) as raw:
             run_dir = Path(raw)
@@ -343,7 +384,13 @@ class GenericCliAgentOrchestrationTest(unittest.TestCase):
         self.assertFalse(raw_log_exists)
 
     def test_execute_generic_agent_job_rejects_input_identity_mismatch_before_claim(self):
-        for field, value in (("run_id", "other-run"), ("job_id", "other-job")):
+        for field, value in (
+            ("run_id", "other-run"),
+            ("job_id", "other-job"),
+            ("agent", "other-agent"),
+            ("adapter", "other-adapter"),
+            ("timeout_seconds", 31),
+        ):
             with self.subTest(field=field):
                 with tempfile.TemporaryDirectory(dir=ROOT) as raw:
                     run_dir = Path(raw)

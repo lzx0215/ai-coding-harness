@@ -1494,8 +1494,12 @@ def create_generic_agent_job(
         raise HarnessCliError("job_id must be non-empty")
     if not agent.strip():
         raise HarnessCliError("agent must be non-empty")
+    if not adapter.strip():
+        raise HarnessCliError("adapter must be non-empty")
     if not command:
         raise HarnessCliError("generic agent command must be non-empty")
+    if not isinstance(command, list) or any(not isinstance(item, str) for item in command):
+        raise HarnessCliError("command must be a non-empty list of strings")
     if timeout_seconds < 1:
         raise HarnessCliError("timeout_seconds must be at least 1")
 
