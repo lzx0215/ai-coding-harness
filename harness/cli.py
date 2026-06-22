@@ -1910,7 +1910,7 @@ def write_scheduler_worker(
         "max_seconds": max_seconds,
         "cli_version": HARNESS_VERSION,
     }
-    write_json_file(scheduler_worker_path(resolved_run_dir), worker)
+    write_json_atomic(scheduler_worker_path(resolved_run_dir), worker)
     return worker
 
 
@@ -1932,7 +1932,7 @@ def write_scheduler_heartbeat(
         "status": status,
         "current_job_id": current_job_id,
     }
-    write_json_file(scheduler_heartbeat_path(run_dir), heartbeat)
+    write_json_atomic(scheduler_heartbeat_path(run_dir), heartbeat)
     return heartbeat
 
 
@@ -1953,7 +1953,7 @@ def request_scheduler_stop(
         "requested_by": CODEX_ACTOR,
         "reason": reason or "operator requested shutdown",
     }
-    write_json_file(scheduler_stop_path(resolved_run_dir), payload)
+    write_json_atomic(scheduler_stop_path(resolved_run_dir), payload)
     return payload
 
 
@@ -2632,6 +2632,7 @@ def write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
     temp_path: Path | None = None
     replaced = False
     try:
+        path.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.NamedTemporaryFile(
             "w",
             dir=path.parent,

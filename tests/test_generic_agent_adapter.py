@@ -1113,6 +1113,42 @@ class GenericCliAgentOrchestrationTest(unittest.TestCase):
                     self.assertIn(expected_error, str(raised.exception))
                     self.assertFalse((run_dir / "jobs" / "scheduler").exists())
 
+    def test_scheduler_watch_stops_when_max_seconds_elapsed(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            state = minimal_state()
+            write_json(run_dir / "state.json", state)
+            monotonic_values = iter([10.0, 10.6])
+
+            summary = cli.scheduler_run_watch(
+                run_dir,
+                poll_interval_seconds=0,
+                max_seconds=0.5,
+                worker_id="max-seconds-worker",
+                root=ROOT,
+                sleep_fn=lambda seconds: None,
+                monotonic_fn=lambda: next(monotonic_values),
+            )
+            saved_state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
+            heartbeat = json.loads(
+                (run_dir / "jobs" / "scheduler" / "heartbeat.json").read_text(
+                    encoding="utf-8",
+                ),
+            )
+            events = [
+                json.loads(line)
+                for line in (run_dir / "jobs" / "scheduler" / "events.log").read_text(
+                    encoding="utf-8",
+                ).splitlines()
+            ]
+
+        self.assertEqual(saved_state, state)
+        self.assertEqual(summary["iterations"], 0)
+        self.assertEqual(summary["executed_jobs"], [])
+        self.assertEqual(summary["stop_reason"], "max_seconds")
+        self.assertEqual(heartbeat["status"], "stopped")
+        self.assertIn("max_seconds_reached", [event["event"] for event in events])
+
     def test_scheduler_watch_stop_waits_for_current_job_and_does_not_claim_next_job(self):
         with tempfile.TemporaryDirectory(dir=ROOT) as raw:
             run_dir = Path(raw)
