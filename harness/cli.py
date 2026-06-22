@@ -629,7 +629,7 @@ def validate_aggregation_semantics(aggregation: dict[str, Any]) -> list[str]:
     for job_id in sorted(consumed_jobs - classified_jobs):
         errors.append(
             "aggregation semantic error at consumed_jobs: "
-            f"job id {job_id} has no terminal or incomplete classification",
+            f"consumed job id {job_id} has no terminal classification",
         )
 
     return errors

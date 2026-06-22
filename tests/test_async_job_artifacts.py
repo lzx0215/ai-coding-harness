@@ -919,7 +919,7 @@ class AsyncJobEvidenceValidationTest(unittest.TestCase):
             result = cli.validate_run(run_dir, root=ROOT)
 
         self.assertTrue(
-            any("has no terminal or incomplete classification" in error for error in result.errors),
+            any("has no terminal classification" in error for error in result.errors),
             result.errors,
         )
 
