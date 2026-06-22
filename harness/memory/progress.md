@@ -39,7 +39,7 @@ Follow-up Phase 3 provenance hardening now rejects empty `source_evidence` for r
 
 ## Next Step
 
-Phase 5.2 release closure is complete. `master` is pushed at `b314474f3abbcc933d4a0154050e19ecc43a7621` (`fix: clarify aggregation classification error`), and GitHub Actions CI run `27924953687` / `CI #9` for the `master` push completed with `conclusion=success` on `2026-06-22T02:00:38Z`.
+Phase 5.2 release closure is complete. The Phase 5.2 implementation baseline was pushed to `master` at `b314474f3abbcc933d4a0154050e19ecc43a7621` (`fix: clarify aggregation classification error`), and GitHub Actions CI run `27924953687` / `CI #9` for that `master` push completed with `conclusion=success` on `2026-06-22T02:00:38Z`.
 
 No Phase 5.2 release tag is recorded; GitHub currently has no repository tags. The remote branch `codex/phase5-live-scheduler` points at the same SHA as `master`, and `codex/phase4-run-ci-package` is an older merged branch. They are cleanup candidates only and do not block the durable release state.
 
