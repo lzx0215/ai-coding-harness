@@ -2658,7 +2658,7 @@ def write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
                 retry_seconds *= 2
         replaced = True
     except OSError as exc:
-        raise HarnessCliError(f"failed to write state atomically: {exc}") from exc
+        raise HarnessCliError(f"failed to write {path} atomically: {exc}") from exc
     finally:
         if temp_path is not None:
             try:
