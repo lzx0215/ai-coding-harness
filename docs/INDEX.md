@@ -40,6 +40,7 @@
 - `docs/superpowers/plans/2026-06-22-phase-6-scheduler-background-worker-implementation.md` - Implementation plan for the Phase 6 scheduler watch/background-worker slice, including Task 7 live run closure.
 - `docs/superpowers/plans/2026-06-22-phase-7-1-crash-smoke-claim-locking-implementation.md` - Implementation plan for Phase 7.1 crash smoke and claim locking.
 - `docs/superpowers/plans/2026-06-22-phase-8-multi-worker-concurrency-implementation.md` - Implementation plan for Phase 8 local multi-worker concurrency hardening.
+- `docs/superpowers/plans/2026-06-23-phase-9-entry-gate-local-scheduler-closure-implementation.md` - Implementation plan for closing local scheduler evidence gates before Phase 9 queue work.
 - `docs/superpowers/plans/2026-06-19-v0.2-reviewer-provenance-implementation.md` - Implementation plan for v0.2 reviewer provenance and state schema compatibility.
 - `docs/superpowers/plans/2026-06-19-v0.2.1-reviewer-provenance-hardening.md` - Follow-up hardening queue for v0.2.1 reviewer provenance cleanup and schema edge cases.
 - `docs/superpowers/plans/2026-06-20-phase-2-run-definition-evidence-implementation.md` - Implementation plan for Phase 2 run definition, readiness checks, and evidence helper commands.
