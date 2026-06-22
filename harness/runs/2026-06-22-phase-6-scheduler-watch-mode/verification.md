@@ -62,13 +62,27 @@ python -m harness.cli index-evidence harness/runs/2026-06-22-phase-6-scheduler-w
 - `python -m unittest tests.test_generic_agent_adapter -v` exited 0 with 52 tests after the review follow-up commits.
 - Review output, structured review evidence, raw log, and review decision were indexed into `state.json`, and `validate` accepted the run after indexing.
 
+## Post-Completion Correction Evidence
+
+Recorded at `2026-06-22T10:50:57Z`.
+
+- `git rev-parse HEAD` returned `f0558c77baefaa7cc5ca9257394dab8a440b48f2`.
+- `git rev-parse HEAD~1` returned `fa324a73f8d4516b6fb7d00446e73c3578f3c885`.
+- `git rev-parse origin/codex/phase6-scheduler-watch-mode` returned `f0558c77baefaa7cc5ca9257394dab8a440b48f2`.
+- `git rev-list --left-right --count HEAD...origin/codex/phase6-scheduler-watch-mode` returned `0 0`.
+- `gh run view 27945733032 --json databaseId,headSha,headBranch,status,conclusion,jobs` returned `status=completed`, `conclusion=success`, `headSha=f0558c77baefaa7cc5ca9257394dab8a440b48f2`.
+- Run `27945733032` had both `test` and `package-smoke` jobs completed with `conclusion=success`.
+- The `package-smoke` job ran on GitHub Actions Ubuntu/bash and exercised the packaged console-script smoke path, including `run-scheduler --once` and `run-scheduler --watch --poll-interval-seconds 0.1 --max-iterations 3`.
+
+This supersedes the earlier review-time and verification-time statement that remote GitHub Actions execution for this branch was not verified.
+
 ## Not Verified
 
+- Superseded historical item: Remote GitHub Actions execution for this branch is now verified by run `27945733032`.
 - Multi-worker claim locking.
 - Automatic stale-running recovery.
 - Cloud queue execution.
 - Cross-run queue execution.
-- Remote GitHub Actions execution for this branch.
 - Real non-mocked detached child lifecycle via `start-scheduler`.
 - KeyboardInterrupt / hard-kill heartbeat cleanup.
 

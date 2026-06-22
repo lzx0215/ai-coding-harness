@@ -15,9 +15,15 @@
 - The current review diff includes follow-up commit 246dc62 covering watch-mode failed jobs and confirming the worker continues to another queued job.
 - Local bash parity for the run-validation loop was attempted, but this Windows host routes bash to an unavailable WSL environment, so local bash validation could not run. GitHub Actions uses Ubuntu/bash and is expected to cover that path after push.
 
+Post-push CI correction:
+
+- GitHub Actions run 27945733032 for `codex/phase6-scheduler-watch-mode` at `f0558c77baefaa7cc5ca9257394dab8a440b48f2` completed successfully.
+- Both `test` and `package-smoke` jobs completed with conclusion `success`.
+- The `package-smoke` job covered the Ubuntu/bash packaged console-script path, including `run-scheduler --once` and `run-scheduler --watch --poll-interval-seconds 0.1 --max-iterations 3`.
+
 Not verified locally:
 
-- Remote GitHub Actions for this branch.
+- Superseded historical item: Remote GitHub Actions for this branch is now verified by run 27945733032.
 - Multi-worker claim locking.
 - Automatic stale-running recovery.
 - Cloud queue execution.

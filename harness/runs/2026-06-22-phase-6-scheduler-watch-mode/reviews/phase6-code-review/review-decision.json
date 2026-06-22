@@ -37,11 +37,16 @@
       "title": "SIGINT/SIGTERM leaves heartbeat at transient status",
       "severity": "low",
       "evidence": "Accepted as part of the documented no-stale-recovery boundary. Phase 6 cooperative stop uses stop.json between jobs and does not claim automatic recovery from hard interruption or process termination."
+    },
+    {
+      "title": "Remote GitHub Actions execution of the new watch package smoke is not verified locally",
+      "severity": "info",
+      "evidence": "Superseded by post-push CI evidence. GitHub Actions run 27945733032 for codex/phase6-scheduler-watch-mode at f0558c77baefaa7cc5ca9257394dab8a440b48f2 completed successfully, with both test and package-smoke jobs successful. The package-smoke job covered the Ubuntu/bash packaged console-script path including run-scheduler --once and run-scheduler --watch --poll-interval-seconds 0.1 --max-iterations 3."
     }
   ],
   "accepted_risks": [],
   "not_tested": [
-    "Remote GitHub Actions Ubuntu/bash execution of the new watch package-smoke job.",
+    "Superseded historical item: Remote GitHub Actions Ubuntu/bash execution of the new watch package-smoke job is now verified by GitHub Actions run 27945733032.",
     "Real non-mocked detached child process lifecycle via start-scheduler.",
     "events.log integrity under concurrent append from two workers.",
     "SIGKILL or power-loss crash recovery semantics for partial events.log lines and stale heartbeat.",
@@ -58,8 +63,8 @@
     "A crashed worker can leave heartbeat.json at a non-terminal status.",
     "events.log is append-only with no rotation or fsync.",
     "Detached background process behavior varies by OS shell and terminal.",
-    "Remote CI for this branch has not run yet.",
+    "Superseded historical item: Remote CI for this branch has run and passed as GitHub Actions run 27945733032.",
     "Scheduler subprocess execution inherits the same local permission and environment risks as the generic adapter."
   ],
-  "notes": "External Claude Code review completed with status findings and no medium, high, or critical findings after follow-up commits fixed the earlier max_seconds and failed-job coverage gaps. Low findings are triaged as documented Phase 6 diagnostics or interruption limitations and do not block reviewed status."
+  "notes": "External Claude Code review completed with status findings and no medium, high, or critical findings after follow-up commits fixed the earlier max_seconds and failed-job coverage gaps. Low findings are triaged as documented Phase 6 diagnostics or interruption limitations and do not block reviewed status. Post-push correction: GitHub Actions run 27945733032 for f0558c77baefaa7cc5ca9257394dab8a440b48f2 passed test and package-smoke, superseding the review-time remote-CI-not-run item."
 }
