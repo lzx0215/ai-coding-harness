@@ -1,0 +1,65 @@
+{
+  "schema_version": "0.1.0",
+  "run_id": "2026-06-22-phase-6-scheduler-watch-mode",
+  "generated_at": "2026-06-22T09:57:05Z",
+  "disposition": "findings-triaged",
+  "recommended_status": "reviewed",
+  "decision_owner": "codex",
+  "source_evidence": [
+    {
+      "type": "review-output",
+      "path": "reviews/phase6-code-review/claude-review.json"
+    },
+    {
+      "type": "review-evidence",
+      "path": "reviews/phase6-code-review/claude-review.evidence.json"
+    }
+  ],
+  "severity_counts": {
+    "critical": 0,
+    "high": 0,
+    "medium": 0,
+    "low": 3,
+    "info": 2
+  },
+  "resolved_findings": [
+    {
+      "title": "Design-spec event vocabulary partially unimplemented",
+      "severity": "low",
+      "evidence": "Accepted as a Phase 6 scope boundary. The implemented events cover worker lifecycle, polling, job lifecycle, invalid jobs, stop observation, bounds, and worker failure. Startup-failure and heartbeat-written event vocabulary can be reconciled in a future diagnostics cleanup without changing the Phase 6 watch contract."
+    },
+    {
+      "title": "events.log appends are not fsync'd or atomically renamed",
+      "severity": "low",
+      "evidence": "Accepted as an observational-artifact durability limitation. The design and handoff already state that scheduler events are local JSONL diagnostics and that long-running retention/rotation remains future work."
+    },
+    {
+      "title": "SIGINT/SIGTERM leaves heartbeat at transient status",
+      "severity": "low",
+      "evidence": "Accepted as part of the documented no-stale-recovery boundary. Phase 6 cooperative stop uses stop.json between jobs and does not claim automatic recovery from hard interruption or process termination."
+    }
+  ],
+  "accepted_risks": [],
+  "not_tested": [
+    "Remote GitHub Actions Ubuntu/bash execution of the new watch package-smoke job.",
+    "Real non-mocked detached child process lifecycle via start-scheduler.",
+    "events.log integrity under concurrent append from two workers.",
+    "SIGKILL or power-loss crash recovery semantics for partial events.log lines and stale heartbeat.",
+    "events.log size growth and rotation behavior under long-running unbounded watch.",
+    "KeyboardInterrupt path through scheduler_run_watch.",
+    "Cloud queue and cross-run queue execution.",
+    "Automatic stale-running recovery.",
+    "Multi-worker claim locking and double-claim prevention."
+  ],
+  "residual_risks": [
+    "Double-claim risk remains if two workers are launched against the same run.",
+    "Heartbeat is observational only and stale-running jobs are not recovered.",
+    "Stop requests are cooperative and do not interrupt running jobs.",
+    "A crashed worker can leave heartbeat.json at a non-terminal status.",
+    "events.log is append-only with no rotation or fsync.",
+    "Detached background process behavior varies by OS shell and terminal.",
+    "Remote CI for this branch has not run yet.",
+    "Scheduler subprocess execution inherits the same local permission and environment risks as the generic adapter."
+  ],
+  "notes": "External Claude Code review completed with status findings and no medium, high, or critical findings after follow-up commits fixed the earlier max_seconds and failed-job coverage gaps. Low findings are triaged as documented Phase 6 diagnostics or interruption limitations and do not block reviewed status."
+}

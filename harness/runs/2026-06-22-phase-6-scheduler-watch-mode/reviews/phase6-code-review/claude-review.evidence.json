@@ -1,0 +1,129 @@
+{
+  "run_id": "phase6-scheduler-watch-code-review",
+  "status": "findings",
+  "reviewer": "claude-code",
+  "reviewer_model": "glm-5.2[1m]",
+  "reviewer_model_version": null,
+  "reviewer_cli_version": "2.1.168 (Claude Code)",
+  "reviewer_provenance": {
+    "schema_version": "0.2.0",
+    "reviewer": "claude-code",
+    "cli": {
+      "name": "Claude Code",
+      "raw_version": "2.1.168 (Claude Code)",
+      "version": "2.1.168"
+    },
+    "models": [
+      {
+        "name": "glm-5.2[1m]",
+        "version": null,
+        "source": "modelUsage",
+        "usage": {
+          "input_tokens": null,
+          "output_tokens": null
+        },
+        "raw_usage": {
+          "inputTokens": 84649,
+          "outputTokens": 19708,
+          "cacheReadInputTokens": 65088,
+          "cacheCreationInputTokens": 0,
+          "webSearchRequests": 0,
+          "costUSD": 0.948489,
+          "contextWindow": 1000000,
+          "maxOutputTokens": 32000
+        }
+      }
+    ],
+    "primary_model": "glm-5.2[1m]",
+    "unknowns": [
+      "model_version",
+      "token_usage"
+    ]
+  },
+  "summary": "The Phase 6 scheduler watch/background-worker implementation is correct, well-tested, and respects the Codex-owned state/evidence authority boundary. The watch loop (scheduler_run_watch) properly writes worker.json/heartbeat.json/events.log, never mutates state.json (confirmed by SHA256 check and unit assertions), checks stop requests after each job completion without claiming the next job, records invalid job sets as non-fatal warnings, and supports bounded execution via max_iterations/max_seconds. The mutually-exclusive --once/--watch parser, start-scheduler detached launch (with correct Windows creationflags/Unix start_new_session split and stale stop.json clearing), and stop-scheduler cooperative request all behave per the design spec. write_json_atomic was correctly hardened with parent-dir creation and PermissionError retry for non-state artifacts. No blocking regressions or high/critical risks were found; the --once path and existing package smoke are preserved. All findings are low/info severity and align with explicitly documented non-goals (multi-worker locking, stale-running recovery, log rotation).",
+  "findings": [
+    {
+      "severity": "low",
+      "title": "Design-spec event vocabulary partially unimplemented (startup_failed, heartbeat_written, stop_requested never emitted)",
+      "evidence": "The design spec lists an event vocabulary including startup_failed, heartbeat_written, and stop_requested. The implementation only ever emits worker_started, poll_started, poll_completed, job_started, job_completed, invalid_jobs_observed, invalid_stop_request, stop_observed, max_iterations_reached, max_seconds_reached, worker_stopped, and worker_failed. append_scheduler_event is never called with 'startup_failed', 'heartbeat_written', or 'stop_requested'. Notably, if write_scheduler_worker/write_scheduler_heartbeat/append_scheduler_event(worker_started) raise before the try-block in scheduler_run_watch, no startup_failed event or failed heartbeat is written, so the only observable startup failure is a non-zero CLI exit and a possibly-missing scheduler directory.",
+      "recommendation": "Either remove the unimplemented events from the spec vocabulary or add minimal emission paths. At minimum, consider wrapping the pre-loop startup writes so an infrastructure failure after worker.json is created still records a startup_failed/failed heartbeat, since the spec says 'If the scheduler directory can be written, startup failure may append a startup_failed event and write heartbeat status = failed.'",
+      "file": "harness/cli.py",
+      "line": 2057
+    },
+    {
+      "severity": "low",
+      "title": "events.log appends are not fsync'd or atomically renamed",
+      "evidence": "append_scheduler_event opens events.log in append mode and writes one JSON line via handle.write without fsync, and does not use write_json_atomic. Each event opens/closes the file (flush on close), but OS page-cache buffering means a hard crash (SIGKILL/power loss) can truncate the last appended line, yielding a partial JSON object that breaks JSONL consumers that json.loads every line.",
+      "recommendation": "For smoke/bounded mode this is acceptable. If events.log is ever promoted to durable evidence or used by automated consumers, add os.fsync(handle.fileno()) before close or switch to an atomic-rename accumulation strategy. Document the crash-truncation caveat in the residual risks.",
+      "file": "harness/cli.py",
+      "line": 1872
+    },
+    {
+      "severity": "low",
+      "title": "SIGINT/SIGTERM (BaseException) leaves heartbeat at transient status",
+      "evidence": "scheduler_run_watch catches 'except Exception' to write status='failed' and worker_failed. KeyboardInterrupt and SystemExit are BaseException subclasses not caught by 'except Exception', so a Ctrl+C while status is 'running-job' or 'sleeping' propagates without writing the terminal 'stopped'/'failed' heartbeat or worker_stopped event. An operator relying on heartbeat.json would observe a stale non-terminal status with no worker_failed event.",
+      "recommendation": "Consider a bare 'except BaseException' (re-raise after recording) or a try/finally that writes a 'stopped'/'failed' heartbeat when the loop exits via any path, while preserving cooperative stop semantics. At minimum, document that interruption may leave a stale heartbeat consistent with the 'no stale-running recovery' non-goal.",
+      "file": "harness/cli.py",
+      "line": 2278
+    },
+    {
+      "severity": "info",
+      "title": "Remote GitHub Actions execution of the new watch package smoke is not verified locally",
+      "evidence": "verification-summary.md explicitly lists 'Remote GitHub Actions for this branch' under 'Not verified locally'. The CI heredoc embedding Python under a YAML literal block scalar appears correct (YAML strips common indentation, so the closing 'PY' delimiter and top-level Python statements land at column 0), and the local non-editable package smoke reproduced the queue/watch/aggregate/validate sequence successfully, but the Ubuntu/bash Actions runner has not executed this exact job yet.",
+      "recommendation": "Confirm the first push CI run is green before merge, particularly the heredoc delimiter handling under bash on the runner, since the test_static_contracts.py assertion only checks for substring presence of the command and agent name, not valid heredoc execution.",
+      "file": ".github/workflows/ci.yml",
+      "line": 122
+    },
+    {
+      "severity": "info",
+      "title": "No events.log rotation; long-running unbounded workers grow the file without bound",
+      "evidence": "events.log is append-only with no size cap, rotation, or truncation. The design spec lists 'events.log can grow without rotation' as a residual risk, and the handoff records it, but no code guard or operator guidance bounds the file. For bounded smoke mode (max_iterations=3) this is irrelevant; for an unbounded foreground watch it is an operational hazard.",
+      "recommendation": "Keep as documented residual risk for Phase 6. Before promoting watch mode to long-running production use, add rotation or a max-size cap and note it in the operator guide.",
+      "file": "harness/cli.py",
+      "line": 1872
+    }
+  ],
+  "tested": [
+    "scheduler_run_watch writes worker.json/heartbeat.json/events.log and does not mutate state.json (unit assertion saved_state == state and live-run SHA256 before/after)",
+    "Parser requires exactly one of --once/--watch (missing returns exit 2 'one of the arguments --once --watch is required'; both returns 'not allowed with argument')",
+    "Bounded watch executes a queued job and exits with stop_reason=max_iterations",
+    "max_seconds behavioral stop (monotonic_fn mock) exits with stop_reason=max_seconds and iteration=0",
+    "Non-finite (nan/inf) poll_interval_seconds and max_seconds rejected before artifacts are written",
+    "Zero poll_interval_seconds rejected unless max_iterations or max_seconds is supplied",
+    "Stop request observed between jobs: current job runs to terminal, next queued job is NOT claimed, heartbeat ends stopped, stop_observed emitted",
+    "Pre-existing stop.json observed before first poll exits cleanly with iteration=0",
+    "Invalid job record produces invalid_jobs_observed + status=warning, valid queued jobs in the same iteration are NOT executed",
+    "Failed job (exit code 7) records job_completed status=failed and the worker continues to the next queued job without worker_failed",
+    "Detached launch via start_scheduler uses CREATE_NEW_PROCESS_GROUP|DETACHED_PROCESS on Windows and start_new_session on Unix, redirects stdin/stdout/stderr to DEVNULL, and clears stale stop.json before spawn (mocked Popen)",
+    "stop-scheduler CLI writes stop.json with requested_by=codex without mutating state.json",
+    "write_scheduler_heartbeat rejects statuses outside SCHEDULER_STATUSES",
+    "clear_scheduler_stop_request removes stop.json and is idempotent on FileNotFoundError",
+    "write_json_atomic creates parent dirs and retries PermissionError on replace up to 5 times with exponential backoff",
+    "init_run now uses HARNESS_VERSION constant for harness_version and state_schema_version",
+    "Live Phase 6 run validates, heartbeat ends stopped, events.log contains worker_started and job_completed, aggregation consumed_jobs=['phase6-watch-agent'] incomplete_jobs=[]",
+    "Static contract test pins CI presence of 'run-scheduler --watch --poll-interval-seconds 0.1 --max-iterations 3' and 'package-smoke-watch-agent'",
+    "Local non-editable package smoke reproduced queue/watch/aggregate/validate from outside the repo cwd",
+    "Full unit suite (266 passed, 1 skipped) and all 13 source-controlled runs validate"
+  ],
+  "not_tested": [
+    "Remote GitHub Actions Ubuntu/bash execution of the new watch package-smoke job (heredoc handling under runner bash)",
+    "Real (non-mocked) detached child process lifecycle via start-scheduler: no integration test launches and waits on an actual subprocess",
+    "events.log integrity under concurrent append from two workers (multi-worker is an explicit non-goal)",
+    "SIGKILL/power-loss crash recovery semantics for partial events.log lines and stale heartbeat",
+    "events.log size growth / rotation behavior under long-running unbounded watch",
+    "KeyboardInterrupt path through scheduler_run_watch (BaseException not caught, no terminal heartbeat written)",
+    "Cloud queue and cross-run queue execution (explicit non-goals)",
+    "Automatic stale-running recovery (explicit non-goal)",
+    "Multi-worker claim locking / double-claim prevention (explicit non-goal)"
+  ],
+  "residual_risks": [
+    "Double-claim risk remains if two workers are launched against the same run; no lockfile or compare-and-swap claim is implemented (explicit non-goal, documented in handoff/progress/spec)",
+    "Heartbeat is observational only; stale-running jobs left by a crashed worker are observed but never reclassified or recovered (explicit non-goal)",
+    "Stop requests are cooperative: a stop.json does not interrupt a running job and may be delayed by long-running jobs or job timeouts",
+    "A crashed worker can leave heartbeat.json at a non-terminal status (e.g., running-job) with no worker_failed event, since infrastructure exceptions are caught but SIGKILL/SIGINT(BaseException) are not",
+    "events.log is append-only with no rotation or fsync; hard crashes can truncate the last JSONL line, and unbounded watch grows the file without limit",
+    "Detached background process behavior varies by OS shell/terminal; start-scheduler returns immediately and does not confirm the child entered its poll loop",
+    "Remote CI for the branch has not executed the new watch package-smoke heredoc under the Ubuntu runner bash environment",
+    "Scheduler subprocess execution inherits the same local permission/environment risks as the existing generic adapter; no sandbox was added"
+  ]
+}

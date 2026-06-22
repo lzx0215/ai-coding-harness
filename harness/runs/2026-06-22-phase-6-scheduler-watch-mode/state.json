@@ -8,7 +8,7 @@
   "owner": "codex",
   "base_commit": "HEAD",
   "created_at": "2026-06-22T05:21:18Z",
-  "updated_at": "2026-06-22T05:25:51Z",
+  "updated_at": "2026-06-22T09:57:46Z",
   "external_agents": [
     {
       "name": "claude-code",
@@ -62,6 +62,26 @@
       "type": "review-waiver",
       "path": "review-waiver.md",
       "description": "Run-record-only review waiver."
+    },
+    {
+      "type": "review-output",
+      "path": "reviews/phase6-code-review/claude-review.json",
+      "description": "External Claude Code review output for Phase 6 scheduler watch mode."
+    },
+    {
+      "type": "review-evidence",
+      "path": "reviews/phase6-code-review/claude-review.evidence.json",
+      "description": "Structured external Claude Code review evidence for Phase 6 scheduler watch mode."
+    },
+    {
+      "type": "review-raw-log",
+      "path": "reviews/phase6-code-review/claude-review.raw.log",
+      "description": "Raw external Claude Code review log for Phase 6 scheduler watch mode."
+    },
+    {
+      "type": "review-evidence",
+      "path": "reviews/phase6-code-review/review-decision.json",
+      "description": "Codex triage decision for Phase 6 external review findings."
     }
   ]
 }

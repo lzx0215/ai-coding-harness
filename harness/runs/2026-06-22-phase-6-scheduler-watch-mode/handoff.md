@@ -7,7 +7,7 @@ changed:
   - "Executed the queued job through bounded run-scheduler --watch."
   - "Exercised stop-scheduler after bounded watch execution."
   - "Aggregated terminal async job evidence through aggregate-jobs."
-  - "Indexed agent-job, agent-result, aggregation, verification, review-waiver, and handoff evidence."
+  - "Indexed agent-job, agent-result, aggregation, verification, review-waiver, handoff, and external review evidence."
 verified:
   - "queue-generic-agent printed queued generic-agent: 2026-06-22-phase-6-scheduler-watch-mode/phase6-watch-agent"
   - "run-scheduler --watch printed scheduler-watch: 2026-06-22-phase-6-scheduler-watch-mode iterations=3 executed=1 stop_reason=max_iterations"
@@ -18,6 +18,7 @@ verified:
   - "heartbeat.json ended with stopped status"
   - "events.log includes worker_started and job_completed"
   - "raw.log contains phase6 scheduler watch agent wrote output"
+  - "External Claude Code review completed with no medium, high, or critical findings after follow-up test hardening."
 not_verified:
   - "Multi-worker claim locking."
   - "Automatic stale-running recovery."
@@ -39,6 +40,8 @@ memory_files:
 
 Created a live Phase 6 run whose async job artifacts were produced by the real `queue-generic-agent` plus bounded `run-scheduler --watch` path. The scheduler wrote `worker.json`, `heartbeat.json`, and JSONL `events.log`; Codex then indexed the consumed async evidence and advanced state.
 
+Follow-up review hardening added coverage for `max_seconds` shutdown, failed job handling inside watch mode, direct atomic writes to scheduler control artifacts, and clearer atomic-write failure messages.
+
 ## Evidence
 
 - `jobs/phase6-watch-agent/input.json`
@@ -50,6 +53,10 @@ Created a live Phase 6 run whose async job artifacts were produced by the real `
 - `jobs/scheduler/events.log`
 - `jobs/scheduler/stop.json`
 - `jobs/aggregation.json`
+- `reviews/phase6-code-review/claude-review.json`
+- `reviews/phase6-code-review/claude-review.evidence.json`
+- `reviews/phase6-code-review/claude-review.raw.log`
+- `reviews/phase6-code-review/review-decision.json`
 
 `input.json` is retained as historical runtime input from this worktree execution. Its absolute artifact paths document what the scheduler used for this run; they are not a portable replay interface.
 
@@ -60,3 +67,5 @@ completed
 ## Risks
 
 This run proves bounded local watch execution only. Multi-worker claim locking, automatic stale-running recovery, cloud queue execution, and cross-run queue execution are not implemented. Heartbeat data is observational only, stop requests are cooperative, and double-claim risk remains if multiple workers are launched against the same run.
+
+The external Claude Code review returned `findings` with no medium, high, or critical findings after follow-up commits. `reviews/phase6-code-review/review-decision.json` records `findings-triaged -> reviewed`; remaining low findings are diagnostic/event durability limitations consistent with the Phase 6 non-goals.

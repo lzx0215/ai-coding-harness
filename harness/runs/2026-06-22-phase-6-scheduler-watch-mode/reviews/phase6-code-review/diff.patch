@@ -1,0 +1,4399 @@
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index 4cef0f3..76f2ab4 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -122,3 +122,35 @@ jobs:
+           harness index-evidence "$GITHUB_WORKSPACE/.tmp/package-smoke-run" agent-result jobs/package-smoke-scheduler/output.json --description "Package smoke scheduler result."
+           harness index-evidence "$GITHUB_WORKSPACE/.tmp/package-smoke-run" aggregation jobs/aggregation.json --description "Package smoke job aggregation."
+           harness validate "$GITHUB_WORKSPACE/.tmp/package-smoke-run"
++          cat > "$GITHUB_WORKSPACE/.tmp/package-smoke-watch-agent.py" <<'PY'
++          import json
++          import os
++          from pathlib import Path
++
++          payload = json.loads(Path(os.environ["HARNESS_AGENT_INPUT_FILE"]).read_text(encoding="utf-8"))
++          output = {
++              "run_id": payload["run_id"],
++              "job_id": payload["job_id"],
++              "agent": payload["agent"],
++              "adapter": payload["adapter"],
++              "status": "passed",
++              "summary": "Package smoke watch agent completed.",
++              "findings": [],
++              "evidence": [],
++              "not_tested": [],
++              "residual_risks": [],
++              "generated_at": payload["created_at"],
++          }
++          Path(os.environ["HARNESS_AGENT_OUTPUT_FILE"]).write_text(
++              json.dumps(output, indent=2) + "\n",
++              encoding="utf-8",
++          )
++          print("package-smoke-watch-agent wrote output")
++          PY
++          harness queue-generic-agent "$GITHUB_WORKSPACE/.tmp/package-smoke-run" package-smoke-watch --agent package-smoke-watch-agent --timeout-seconds 30 -- python "$GITHUB_WORKSPACE/.tmp/package-smoke-watch-agent.py"
++          harness run-scheduler "$GITHUB_WORKSPACE/.tmp/package-smoke-run" --watch --poll-interval-seconds 0.1 --max-iterations 3
++          harness index-evidence "$GITHUB_WORKSPACE/.tmp/package-smoke-run" agent-job jobs/package-smoke-watch/job.json --description "Package smoke watch scheduler job."
++          harness index-evidence "$GITHUB_WORKSPACE/.tmp/package-smoke-run" agent-result jobs/package-smoke-watch/output.json --description "Package smoke watch scheduler result."
++          harness aggregate-jobs "$GITHUB_WORKSPACE/.tmp/package-smoke-run"
++          harness index-evidence "$GITHUB_WORKSPACE/.tmp/package-smoke-run" aggregation jobs/aggregation.json --description "Package smoke watch job aggregation."
++          harness validate "$GITHUB_WORKSPACE/.tmp/package-smoke-run"
+diff --git a/README.md b/README.md
+index 5550c5a..2436a43 100644
+--- a/README.md
++++ b/README.md
+@@ -22,6 +22,7 @@
+ - Phase 4 async job substrate：`agent-job`、`agent-result`、`aggregation` schema 和证据校验已经实现。
+ - 真实 Phase 4 `run-generic-agent` smoke run：`harness/runs/2026-06-21-phase-4-live-generic-agent-smoke/`。
+ - Phase 5.2 local scheduler smoke is implemented and exercised by the live run at `harness/runs/2026-06-22-phase-5-live-scheduler-smoke/`.
++- Phase 6 bounded local scheduler watch mode is exercised by the live run at `harness/runs/2026-06-22-phase-6-scheduler-watch-mode/`, including `worker.json`, `heartbeat.json`, JSONL `events.log`, and Codex-indexed async evidence.
+ - 打包入口：`pyproject.toml` 提供 `harness = harness.cli:main` console script，CI 同时覆盖 editable install 和非 editable package smoke。
+ 
+ ## 目录结构
+@@ -99,8 +100,8 @@ python mcp/claude-review/server.py
+ 
+ ## 当前状态
+ 
+-Phase 4 async job substrate 已落地并完成一次真实 `run-generic-agent` smoke：`jobs/phase4-live-generic-agent/` 下的 `input.json`、`job.json`、`output.json`、`raw.log` 由 CLI 实际生成，Codex 再索引 `agent-job`、`agent-result` 和 `aggregation` 证据并完成 run 交接。Phase 5.2 local scheduler smoke is also implemented and exercised by `harness/runs/2026-06-22-phase-5-live-scheduler-smoke/`, covering `queue-generic-agent`, `run-scheduler --once`, and `aggregate-jobs`.
++Phase 4 async job substrate 已落地并完成一次真实 `run-generic-agent` smoke：`jobs/phase4-live-generic-agent/` 下的 `input.json`、`job.json`、`output.json`、`raw.log` 由 CLI 实际生成，Codex 再索引 `agent-job`、`agent-result` 和 `aggregation` 证据并完成 run 交接。Phase 5.2 local scheduler smoke is also implemented and exercised by `harness/runs/2026-06-22-phase-5-live-scheduler-smoke/`, covering `queue-generic-agent`, `run-scheduler --once`, and `aggregate-jobs`. Phase 6 bounded local watch mode is exercised by `harness/runs/2026-06-22-phase-6-scheduler-watch-mode/`, covering `run-scheduler --watch`, scheduler worker/heartbeat/event artifacts, `stop-scheduler`, and Codex-owned evidence indexing.
+ 
+ 当前 CI 目标是团队可重复验证：editable install 跑完整单测和历史 run 校验，非 editable install 验证 packaged console script 在 repo 外 cwd 下仍能解析真实仓库 evidence path，`git diff --check` 按 PR/push 基线检查实际 diff。
+ 
+-仍未实现：scheduler watch mode / background worker / multi-worker concurrency / cloud queue / automatic stale-running recovery。相关流程先沉淀为 `harness/core/run-lifecycle-sop.md`，至少复用两次或用户明确要求后再升级为 Codex skill。
++仍未实现：multi-worker concurrency / automatic stale-running recovery / cloud queue execution / cross-run queue execution。Heartbeat 只是观察信号，stop request 是协作式停止，不会中断正在运行的 job。
+diff --git a/docs/INDEX.md b/docs/INDEX.md
+index cf50649..110d798 100644
+--- a/docs/INDEX.md
++++ b/docs/INDEX.md
+@@ -11,6 +11,7 @@
+ - Phase 4 async job substrate is implemented in the source tree: run-local job, agent-result, and aggregation schemas are available; consumed async job evidence and aggregation evidence are validated; Standard and Strict unavailable-review policy is enforced.
+ - A formal closure run exists at `harness/runs/2026-06-21-phase-4-async-substrate-closure/`; a live `run-generic-agent` smoke run exists at `harness/runs/2026-06-21-phase-4-live-generic-agent-smoke/`.
+ - Phase 5.2 local scheduler smoke is implemented and exercised by `harness/runs/2026-06-22-phase-5-live-scheduler-smoke/`, covering `queue-generic-agent`, `run-scheduler --once`, and `aggregate-jobs`. Residual risks: local single-process scheduler smoke only; watch mode, multi-worker concurrency, cloud queue, and stale-running recovery are unverified; orphaned running jobs are skipped, not recovered.
++- Phase 6 bounded local scheduler watch mode is exercised by `harness/runs/2026-06-22-phase-6-scheduler-watch-mode/`, covering `queue-generic-agent`, bounded `run-scheduler --watch`, scheduler `worker.json` / `heartbeat.json` / JSONL `events.log`, `stop-scheduler`, and `aggregate-jobs`. Residual risks: heartbeat is observational only, stop is cooperative, and double-claim risk remains without multi-worker claim locking.
+ - Team-repeatable validation is now defined by `.github/workflows/ci.yml` and `pyproject.toml` with editable tests, non-editable package smoke, packaged console-script run validation, and merge-base scoped whitespace checks.
+ 
+ ## Specs
+@@ -20,6 +21,7 @@
+ - `docs/superpowers/specs/2026-06-19-phase-1-local-run-closure-design.md` - Phase 1 local run/state closure hardening design.
+ - `docs/superpowers/specs/2026-06-19-phase-4-async-multi-agent-design.md` - Phase 4 async multi-agent job and aggregation design.
+ - `docs/superpowers/specs/2026-06-21-phase-5-live-async-worker-scheduler-design.md` - Phase 5.2 live local async scheduler design.
++- `docs/superpowers/specs/2026-06-22-phase-6-scheduler-background-worker-design.md` - Phase 6 scheduler watch mode and background worker design.
+ - `docs/superpowers/specs/2026-06-20-phase-2-run-definition-evidence-design.md` - Phase 2 run definition, frontmatter, and evidence helper design.
+ - `docs/superpowers/specs/2026-06-20-phase-3-review-decision-memory-design.md` - Phase 3 review decision, handoff, and memory closure design.
+ 
+@@ -29,6 +31,7 @@
+ - `docs/superpowers/plans/2026-06-19-phase-1-local-run-closure-implementation.md` - Implementation plan for Phase 1 local run closure hardening.
+ - `docs/superpowers/plans/2026-06-20-phase-4-async-job-substrate-implementation.md` - Implementation plan for the first Phase 4 async job substrate slice.
+ - `docs/superpowers/plans/2026-06-21-phase-5-live-async-worker-scheduler-implementation.md` - Implementation plan for the Phase 5.2 live local scheduler slice.
++- `docs/superpowers/plans/2026-06-22-phase-6-scheduler-background-worker-implementation.md` - Implementation plan for the Phase 6 scheduler watch/background-worker slice, including Task 7 live run closure.
+ - `docs/superpowers/plans/2026-06-19-v0.2-reviewer-provenance-implementation.md` - Implementation plan for v0.2 reviewer provenance and state schema compatibility.
+ - `docs/superpowers/plans/2026-06-19-v0.2.1-reviewer-provenance-hardening.md` - Follow-up hardening queue for v0.2.1 reviewer provenance cleanup and schema edge cases.
+ - `docs/superpowers/plans/2026-06-20-phase-2-run-definition-evidence-implementation.md` - Implementation plan for Phase 2 run definition, readiness checks, and evidence helper commands.
+diff --git a/docs/superpowers/plans/2026-06-22-phase-6-scheduler-background-worker-implementation.md b/docs/superpowers/plans/2026-06-22-phase-6-scheduler-background-worker-implementation.md
+new file mode 100644
+index 0000000..cefa9af
+--- /dev/null
++++ b/docs/superpowers/plans/2026-06-22-phase-6-scheduler-background-worker-implementation.md
+@@ -0,0 +1,1711 @@
++# Phase 6 Scheduler Background Worker Implementation Plan
++
++> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
++
++**Goal:** Implement Phase 6 scheduler watch mode, local background worker launch, heartbeat/control artifacts, structured scheduler events, and stop semantics while keeping Codex as the only actor that indexes evidence or advances `state.json`.
++
++**Architecture:** Extend the existing Phase 5.2 scheduler functions in `harness/cli.py` instead of adding a service layer. The new watch loop shares `execute_generic_agent_job` with `--once`, writes scheduler artifacts under `jobs/scheduler/`, and keeps `--once` strict while making `--watch` resilient to invalid job artifacts.
++
++**Tech Stack:** Python standard library (`argparse`, `json`, `os`, `subprocess`, `sys`, `time`, `uuid`, `threading` in tests), existing Harness CLI, `unittest`, GitHub Actions package smoke.
++
++---
++
++## File Structure
++
++- Modify `harness/cli.py`
++  - Add `HARNESS_VERSION = "0.2.0"`.
++  - Add scheduler artifact helpers for `worker.json`, `heartbeat.json`, `stop.json`, and JSONL `events.log`.
++  - Add `scheduler_run_watch`, `request_scheduler_stop`, and `start_scheduler`.
++  - Change `run-scheduler` parser to require exactly one of `--once` and `--watch`.
++  - Add `start-scheduler` and `stop-scheduler` subcommands.
++- Modify `tests/test_generic_agent_adapter.py`
++  - Add parser tests, watch loop tests, stop tests, invalid job warning tests, JSONL event validation tests, and detached launch unit tests.
++- Modify `tests/test_static_contracts.py`
++  - Pin CI/package-smoke coverage for `run-scheduler --watch`, `start-scheduler`/`stop-scheduler` parser visibility if command help text is documented in workflow comments, and the `--once` command shape.
++- Modify `.github/workflows/ci.yml`
++  - Keep the existing `run-scheduler --once` package smoke.
++  - Add a bounded `run-scheduler --watch --poll-interval-seconds 0.1 --max-iterations 3` package smoke job from a non-editable install.
++- Modify `tests/test_async_job_artifacts.py`
++  - Add a source-controlled Phase 6 live run regression test.
++- Create `harness/runs/2026-06-22-phase-6-scheduler-watch-mode/`
++  - Record a real bounded watch-mode scheduler run, scheduler artifacts, aggregation, verification, review evidence or waiver, and handoff.
++- Modify `README.md`, `docs/INDEX.md`, and `harness/memory/progress.md`
++  - Update durable status and residual risks after the live run is complete.
++
++## Task 1: Add Scheduler Artifact Helpers
++
++**Files:**
++- Modify: `tests/test_generic_agent_adapter.py`
++- Modify: `harness/cli.py`
++
++- [ ] **Step 1: Add failing helper tests**
++
++Append these tests to `GenericCliAgentOrchestrationTest` in `tests/test_generic_agent_adapter.py`:
++
++```python
++    def test_scheduler_artifacts_split_worker_identity_heartbeat_and_jsonl_events(self):
++        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
++            run_dir = Path(raw)
++            original_state = minimal_state()
++            write_json(run_dir / "state.json", original_state)
++
++            worker = cli.write_scheduler_worker(
++                run_dir,
++                worker_id="worker-test",
++                poll_interval_seconds=0.1,
++                max_iterations=3,
++                max_seconds=None,
++                root=ROOT,
++            )
++            heartbeat = cli.write_scheduler_heartbeat(
++                run_dir,
++                worker_id="worker-test",
++                iteration=1,
++                status="idle",
++                current_job_id=None,
++            )
++            cli.append_scheduler_event(
++                run_dir,
++                "worker_started",
++                {"worker_id": "worker-test"},
++            )
++            cli.append_scheduler_event(
++                run_dir,
++                "poll_completed",
++                {"worker_id": "worker-test", "iteration": 1},
++            )
++
++            scheduler_dir = run_dir / "jobs" / "scheduler"
++            saved_worker = json.loads((scheduler_dir / "worker.json").read_text(encoding="utf-8"))
++            saved_heartbeat = json.loads((scheduler_dir / "heartbeat.json").read_text(encoding="utf-8"))
++            event_lines = (scheduler_dir / "events.log").read_text(encoding="utf-8").splitlines()
++            events = [json.loads(line) for line in event_lines]
++            saved_state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
++
++        self.assertEqual(worker, saved_worker)
++        self.assertEqual(heartbeat, saved_heartbeat)
++        self.assertEqual(saved_state, original_state)
++        self.assertEqual(
++            set(saved_worker),
++            {
++                "worker_id",
++                "pid",
++                "started_at",
++                "run_dir",
++                "poll_interval",
++                "max_iterations",
++                "max_seconds",
++                "cli_version",
++            },
++        )
++        self.assertEqual(
++            set(saved_heartbeat),
++            {
++                "worker_id",
++                "last_seen_at",
++                "iteration",
++                "status",
++                "current_job_id",
++            },
++        )
++        self.assertEqual(saved_worker["worker_id"], "worker-test")
++        self.assertEqual(saved_worker["poll_interval"], 0.1)
++        self.assertEqual(saved_worker["max_iterations"], 3)
++        self.assertEqual(saved_worker["cli_version"], "0.2.0")
++        self.assertIn("pid", saved_worker)
++        self.assertIn("started_at", saved_worker)
++        self.assertNotIn("iteration", saved_worker)
++        self.assertNotIn("status", saved_worker)
++        self.assertEqual(saved_heartbeat["worker_id"], "worker-test")
++        self.assertEqual(saved_heartbeat["iteration"], 1)
++        self.assertEqual(saved_heartbeat["status"], "idle")
++        self.assertIsNone(saved_heartbeat["current_job_id"])
++        self.assertNotIn("pid", saved_heartbeat)
++        self.assertEqual([event["event"] for event in events], ["worker_started", "poll_completed"])
++        for event in events:
++            self.assertIsInstance(event["ts"], str)
++            self.assertIsInstance(event["event"], str)
++            self.assertIsInstance(event["detail"], dict)
++
++    def test_clear_scheduler_stop_request_removes_stale_stop_file(self):
++        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
++            run_dir = Path(raw)
++            original_state = minimal_state()
++            write_json(run_dir / "state.json", original_state)
++            stop = cli.request_scheduler_stop(run_dir, reason="old stop", root=ROOT)
++            stop_path = run_dir / "jobs" / "scheduler" / "stop.json"
++
++            cli.clear_scheduler_stop_request(run_dir)
++            exists_after_clear = stop_path.exists()
++            saved_state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
++
++        self.assertEqual(stop["reason"], "old stop")
++        self.assertEqual(stop["requested_by"], "codex")
++        self.assertEqual(saved_state, original_state)
++        self.assertFalse(exists_after_clear)
++```
++
++- [ ] **Step 2: Run helper tests and verify they fail**
++
++Run:
++
++```powershell
++python -m unittest tests.test_generic_agent_adapter.GenericCliAgentOrchestrationTest.test_scheduler_artifacts_split_worker_identity_heartbeat_and_jsonl_events tests.test_generic_agent_adapter.GenericCliAgentOrchestrationTest.test_clear_scheduler_stop_request_removes_stale_stop_file -v
++```
++
++Expected: fail with `AttributeError` for missing scheduler helper functions.
++
++- [ ] **Step 3: Add helper imports and constants**
++
++In `harness/cli.py`, add imports near the existing imports:
++
++```python
++import time
++import uuid
++```
++
++Add constants near `GENERIC_ADAPTER_VERSION`:
++
++```python
++HARNESS_VERSION = "0.2.0"
++SCHEDULER_DIR_NAME = "scheduler"
++SCHEDULER_STATUSES = frozenset(
++    {
++        "starting",
++        "idle",
++        "running-job",
++        "sleeping",
++        "warning",
++        "stopping",
++        "stopped",
++        "failed",
++    }
++)
++```
++
++Update `init_run` so it uses `HARNESS_VERSION`:
++
++```python
++        "harness_version": HARNESS_VERSION,
++        "state_schema_version": HARNESS_VERSION,
++```
++
++- [ ] **Step 4: Add scheduler artifact helper functions**
++
++Add these functions before `scheduler_run_once` in `harness/cli.py`:
++
++```python
++def scheduler_dir(run_dir: Path | str) -> Path:
++    return Path(run_dir) / "jobs" / SCHEDULER_DIR_NAME
++
++
++def scheduler_worker_path(run_dir: Path | str) -> Path:
++    return scheduler_dir(run_dir) / "worker.json"
++
++
++def scheduler_heartbeat_path(run_dir: Path | str) -> Path:
++    return scheduler_dir(run_dir) / "heartbeat.json"
++
++
++def scheduler_stop_path(run_dir: Path | str) -> Path:
++    return scheduler_dir(run_dir) / "stop.json"
++
++
++def scheduler_events_path(run_dir: Path | str) -> Path:
++    return scheduler_dir(run_dir) / "events.log"
++
++
++def default_worker_id() -> str:
++    return f"scheduler-{uuid.uuid4().hex[:12]}"
++
++
++def append_scheduler_event(
++    run_dir: Path | str,
++    event: str,
++    detail: dict[str, Any],
++) -> dict[str, Any]:
++    payload = {
++        "ts": utc_now(),
++        "event": event,
++        "detail": detail,
++    }
++    path = scheduler_events_path(run_dir)
++    path.parent.mkdir(parents=True, exist_ok=True)
++    with path.open("a", encoding="utf-8", newline="\n") as handle:
++        handle.write(json.dumps(payload, sort_keys=True) + "\n")
++    return payload
++
++
++def write_scheduler_worker(
++    run_dir: Path | str,
++    *,
++    worker_id: str,
++    poll_interval_seconds: float,
++    max_iterations: int | None,
++    max_seconds: float | None,
++    root: Path | str | None = None,
++) -> dict[str, Any]:
++    resolved_run_dir = Path(run_dir)
++    repo_root = resolve_repository_root(resolved_run_dir, root=root)
++    before = validate_run(resolved_run_dir, root=repo_root)
++    if not before.ok:
++        raise HarnessCliError(format_errors(before.errors))
++
++    worker = {
++        "worker_id": worker_id,
++        "pid": os.getpid(),
++        "run_dir": str(resolved_run_dir.resolve(strict=False)),
++        "started_at": utc_now(),
++        "poll_interval": poll_interval_seconds,
++        "max_iterations": max_iterations,
++        "max_seconds": max_seconds,
++        "cli_version": HARNESS_VERSION,
++    }
++    write_json_file(scheduler_worker_path(resolved_run_dir), worker)
++    return worker
++
++
++def write_scheduler_heartbeat(
++    run_dir: Path | str,
++    *,
++    worker_id: str,
++    iteration: int,
++    status: str,
++    current_job_id: str | None,
++) -> dict[str, Any]:
++    if status not in SCHEDULER_STATUSES:
++        raise HarnessCliError(f"invalid scheduler heartbeat status: {status}")
++    heartbeat = {
++        "worker_id": worker_id,
++        "last_seen_at": utc_now(),
++        "iteration": iteration,
++        "status": status,
++        "current_job_id": current_job_id,
++    }
++    write_json_file(scheduler_heartbeat_path(run_dir), heartbeat)
++    return heartbeat
++
++
++def request_scheduler_stop(
++    run_dir: Path | str,
++    *,
++    reason: str | None = None,
++    root: Path | str | None = None,
++) -> dict[str, Any]:
++    resolved_run_dir = Path(run_dir)
++    repo_root = resolve_repository_root(resolved_run_dir, root=root)
++    before = validate_run(resolved_run_dir, root=repo_root)
++    if not before.ok:
++        raise HarnessCliError(format_errors(before.errors))
++    payload = {
++        "requested_at": utc_now(),
++        "requested_by": CODEX_ACTOR,
++        "reason": reason or "operator requested shutdown",
++    }
++    write_json_file(scheduler_stop_path(resolved_run_dir), payload)
++    return payload
++
++
++def clear_scheduler_stop_request(run_dir: Path | str) -> None:
++    path = scheduler_stop_path(run_dir)
++    try:
++        path.unlink()
++    except FileNotFoundError:
++        return
++```
++
++- [ ] **Step 5: Run helper tests and verify they pass**
++
++Run:
++
++```powershell
++python -m unittest tests.test_generic_agent_adapter.GenericCliAgentOrchestrationTest.test_scheduler_artifacts_split_worker_identity_heartbeat_and_jsonl_events tests.test_generic_agent_adapter.GenericCliAgentOrchestrationTest.test_clear_scheduler_stop_request_removes_stale_stop_file -v
++```
++
++Expected: both tests pass.
++
++- [ ] **Step 6: Commit Task 1**
++
++Run:
++
++```powershell
++git add harness/cli.py tests/test_generic_agent_adapter.py
++git commit -m "feat: add scheduler worker artifacts"
++```
++
++## Task 2: Make `run-scheduler` Mode Explicit
++
++**Files:**
++- Modify: `tests/test_generic_agent_adapter.py`
++- Modify: `harness/cli.py`
++
++- [ ] **Step 1: Add failing parser tests**
++
++Append these tests to `GenericCliAgentOrchestrationTest`:
++
++```python
++    def test_run_scheduler_requires_exactly_one_mode(self):
++        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
++            run_dir = Path(raw)
++            write_json(run_dir / "state.json", minimal_state())
++
++            missing = subprocess.run(
++                [sys.executable, "-m", "harness.cli", "run-scheduler", str(run_dir)],
++                cwd=ROOT,
++                text=True,
++                capture_output=True,
++                check=False,
++            )
++            both = subprocess.run(
++                [
++                    sys.executable,
++                    "-m",
++                    "harness.cli",
++                    "run-scheduler",
++                    str(run_dir),
++                    "--once",
++                    "--watch",
++                ],
++                cwd=ROOT,
++                text=True,
++                capture_output=True,
++                check=False,
++            )
++
++        self.assertEqual(missing.returncode, 2)
++        self.assertIn("one of the arguments --once --watch is required", missing.stderr)
++        self.assertEqual(both.returncode, 2)
++        self.assertIn("not allowed with argument", both.stderr)
++```
++
++- [ ] **Step 2: Run parser test and verify it fails**
++
++Run:
++
++```powershell
++python -m unittest tests.test_generic_agent_adapter.GenericCliAgentOrchestrationTest.test_run_scheduler_requires_exactly_one_mode -v
++```
++
++Expected: fail because current parser only accepts required `--once` and has no `--watch`.
++
++- [ ] **Step 3: Update parser mode group**
++
++In `build_parser`, replace:
++
++```python
++    scheduler.add_argument("--once", action="store_true", required=True)
++```
++
++with:
++
++```python
++    scheduler_mode = scheduler.add_mutually_exclusive_group(required=True)
++    scheduler_mode.add_argument("--once", action="store_true")
++    scheduler_mode.add_argument("--watch", action="store_true")
++    scheduler.add_argument("--poll-interval-seconds", type=float, default=5.0)
++    scheduler.add_argument("--max-iterations", type=int)
++    scheduler.add_argument("--max-seconds", type=float)
++    scheduler.add_argument("--worker-id")
++```
++
++- [ ] **Step 4: Keep `--once` main path explicit**
++
++In `main`, replace the `run-scheduler` branch with:
++
++```python
++        if args.command == "run-scheduler":
++            if args.once:
++                summary = scheduler_run_once(args.run_dir)
++                print(
++                    f"scheduler: {summary['run_id']} "
++                    f"executed={len(summary['executed_jobs'])} "
++                    f"skipped={len(summary['skipped_jobs'])}",
++                )
++                return 0
++            summary = scheduler_run_watch(
++                args.run_dir,
++                poll_interval_seconds=args.poll_interval_seconds,
++                max_iterations=args.max_iterations,
++                max_seconds=args.max_seconds,
++                worker_id=args.worker_id,
++            )
++            print(
++                f"scheduler-watch: {summary['run_id']} "
++                f"iterations={summary['iterations']} "
++                f"executed={len(summary['executed_jobs'])} "
++                f"stop_reason={summary['stop_reason']}",
++            )
++            return 0
++```
++
++`scheduler_run_watch` does not exist yet, so only run the parser test in this task.
++
++- [ ] **Step 5: Run parser test and existing `--once` CLI smoke test**
++
++Run:
++
++```powershell
++python -m unittest tests.test_generic_agent_adapter.GenericCliAgentOrchestrationTest.test_run_scheduler_requires_exactly_one_mode tests.test_generic_agent_adapter.GenericCliAgentOrchestrationTest.test_module_entrypoint_queues_runs_scheduler_and_aggregates -v
++```
++
++Expected: parser test passes; existing CLI smoke passes because it uses `run-scheduler --once`.
++
++- [ ] **Step 6: Commit Task 2**
++
++Run:
++
++```powershell
++git add harness/cli.py tests/test_generic_agent_adapter.py
++git commit -m "feat: require explicit scheduler mode"
++```
++
++## Task 3: Implement Foreground Watch Loop
++
++**Files:**
++- Modify: `tests/test_generic_agent_adapter.py`
++- Modify: `harness/cli.py`
++
++- [ ] **Step 1: Add failing bounded watch test**
++
++Append this test to `GenericCliAgentOrchestrationTest`:
++
++```python
++    def test_scheduler_watch_runs_queued_job_writes_artifacts_and_does_not_mutate_state(self):
++        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
++            run_dir = Path(raw)
++            state = minimal_state()
++            write_json(run_dir / "state.json", state)
++            agent_script = run_dir / "watch_agent.py"
++            write_agent_script(
++                agent_script,
++                """
++                import json
++                import os
++                from pathlib import Path
++
++                payload = json.loads(Path(os.environ["HARNESS_AGENT_INPUT_FILE"]).read_text(encoding="utf-8"))
++                output = {
++                    "run_id": payload["run_id"],
++                    "job_id": payload["job_id"],
++                    "agent": payload["agent"],
++                    "adapter": payload["adapter"],
++                    "status": "passed",
++                    "summary": "Watch job completed.",
++                    "findings": [],
++                    "evidence": [],
++                    "not_tested": [],
++                    "residual_risks": [],
++                    "generated_at": payload["created_at"],
++                }
++                Path(os.environ["HARNESS_AGENT_OUTPUT_FILE"]).write_text(
++                    json.dumps(output, indent=2) + "\\n",
++                    encoding="utf-8",
++                )
++                print("watch job wrote output")
++                """,
++            )
++            cli.create_generic_agent_job(
++                run_dir,
++                "watch-job",
++                agent="generic-test-agent",
++                command=[sys.executable, str(agent_script)],
++                timeout_seconds=30,
++                root=ROOT,
++            )
++
++            summary = cli.scheduler_run_watch(
++                run_dir,
++                poll_interval_seconds=0,
++                max_iterations=3,
++                worker_id="watch-worker",
++                root=ROOT,
++                sleep_fn=lambda seconds: None,
++            )
++            saved_state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
++            job = json.loads((run_dir / "jobs" / "watch-job" / "job.json").read_text(encoding="utf-8"))
++            scheduler_dir = run_dir / "jobs" / "scheduler"
++            worker = json.loads((scheduler_dir / "worker.json").read_text(encoding="utf-8"))
++            heartbeat = json.loads((scheduler_dir / "heartbeat.json").read_text(encoding="utf-8"))
++            events = [
++                json.loads(line)
++                for line in (scheduler_dir / "events.log").read_text(encoding="utf-8").splitlines()
++            ]
++
++        self.assertEqual(saved_state, state)
++        self.assertEqual(summary["run_id"], "test-run")
++        self.assertEqual(summary["executed_jobs"], ["watch-job"])
++        self.assertEqual(summary["stop_reason"], "max_iterations")
++        self.assertEqual(job["status"], "succeeded")
++        self.assertEqual(worker["worker_id"], "watch-worker")
++        self.assertEqual(heartbeat["worker_id"], "watch-worker")
++        self.assertEqual(heartbeat["status"], "stopped")
++        self.assertIsNone(heartbeat["current_job_id"])
++        self.assertIn("worker_started", [event["event"] for event in events])
++        self.assertIn("job_started", [event["event"] for event in events])
++        self.assertIn("job_completed", [event["event"] for event in events])
++        self.assertIn("worker_stopped", [event["event"] for event in events])
++        for event in events:
++            self.assertEqual(set(event), {"detail", "event", "ts"})
++            self.assertIsInstance(event["detail"], dict)
++```
++
++- [ ] **Step 2: Run bounded watch test and verify it fails**
++
++Run:
++
++```powershell
++python -m unittest tests.test_generic_agent_adapter.GenericCliAgentOrchestrationTest.test_scheduler_watch_runs_queued_job_writes_artifacts_and_does_not_mutate_state -v
++```
++
++Expected: fail with `AttributeError` for missing `scheduler_run_watch`.
++
++- [ ] **Step 3: Add watch validation helpers**
++
++Add these helpers before `scheduler_run_watch`:
++
++```python
++def validate_scheduler_watch_options(
++    *,
++    poll_interval_seconds: float,
++    max_iterations: int | None,
++    max_seconds: float | None,
++) -> None:
++    if poll_interval_seconds < 0:
++        raise HarnessCliError("poll_interval_seconds must be non-negative")
++    if max_iterations is not None and max_iterations < 1:
++        raise HarnessCliError("max_iterations must be at least 1")
++    if max_seconds is not None and max_seconds <= 0:
++        raise HarnessCliError("max_seconds must be greater than 0")
++
++
++def load_scheduler_jobs_for_watch(
++    run_dir: Path | str,
++    *,
++    root: Path | str,
++) -> tuple[list[dict[str, Any]], list[str]]:
++    try:
++        return load_scheduler_jobs(run_dir, root=root), []
++    except HarnessCliError as exc:
++        return [], str(exc).splitlines()
++
++
++def scheduler_stop_requested(run_dir: Path | str) -> tuple[bool, dict[str, Any] | None, list[str]]:
++    path = scheduler_stop_path(run_dir)
++    if not path.exists():
++        return False, None, []
++    try:
++        payload = load_json(path)
++    except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
++        return False, None, [f"{path}: stop request cannot be read: {exc}"]
++    if not isinstance(payload, dict):
++        return False, None, [f"{path}: stop request must be an object"]
++    return True, payload, []
++```
++
++- [ ] **Step 4: Add `scheduler_run_watch`**
++
++Add this function after `scheduler_run_once`:
++
++```python
++def scheduler_run_watch(
++    run_dir: Path | str,
++    *,
++    poll_interval_seconds: float = 5.0,
++    max_iterations: int | None = None,
++    max_seconds: float | None = None,
++    worker_id: str | None = None,
++    root: Path | str | None = None,
++    sleep_fn: Any = time.sleep,
++    monotonic_fn: Any = time.monotonic,
++) -> dict[str, Any]:
++    validate_scheduler_watch_options(
++        poll_interval_seconds=poll_interval_seconds,
++        max_iterations=max_iterations,
++        max_seconds=max_seconds,
++    )
++    resolved_run_dir = Path(run_dir)
++    repo_root = resolve_repository_root(resolved_run_dir, root=root)
++    before = validate_run(resolved_run_dir, root=repo_root)
++    if not before.ok:
++        raise HarnessCliError(format_errors(before.errors))
++
++    state = load_json(state_path(resolved_run_dir))
++    active_worker_id = worker_id or default_worker_id()
++    write_scheduler_worker(
++        resolved_run_dir,
++        worker_id=active_worker_id,
++        poll_interval_seconds=poll_interval_seconds,
++        max_iterations=max_iterations,
++        max_seconds=max_seconds,
++        root=repo_root,
++    )
++    write_scheduler_heartbeat(
++        resolved_run_dir,
++        worker_id=active_worker_id,
++        iteration=0,
++        status="starting",
++        current_job_id=None,
++    )
++    append_scheduler_event(resolved_run_dir, "worker_started", {"worker_id": active_worker_id})
++
++    started_monotonic = monotonic_fn()
++    iteration = 0
++    executed_jobs: list[str] = []
++    skipped_jobs: list[str] = []
++    stop_reason = "unknown"
++
++    try:
++        while True:
++            if max_iterations is not None and iteration >= max_iterations:
++                stop_reason = "max_iterations"
++                append_scheduler_event(
++                    resolved_run_dir,
++                    "max_iterations_reached",
++                    {"worker_id": active_worker_id, "iteration": iteration},
++                )
++                break
++            if max_seconds is not None and monotonic_fn() - started_monotonic >= max_seconds:
++                stop_reason = "max_seconds"
++                append_scheduler_event(
++                    resolved_run_dir,
++                    "max_seconds_reached",
++                    {"worker_id": active_worker_id, "iteration": iteration},
++                )
++                break
++
++            stop_requested, stop_payload, stop_errors = scheduler_stop_requested(resolved_run_dir)
++            if stop_errors:
++                append_scheduler_event(
++                    resolved_run_dir,
++                    "invalid_stop_request",
++                    {"worker_id": active_worker_id, "errors": stop_errors},
++                )
++            if stop_requested:
++                stop_reason = "stop_requested"
++                write_scheduler_heartbeat(
++                    resolved_run_dir,
++                    worker_id=active_worker_id,
++                    iteration=iteration,
++                    status="stopping",
++                    current_job_id=None,
++                )
++                append_scheduler_event(
++                    resolved_run_dir,
++                    "stop_observed",
++                    {"worker_id": active_worker_id, "stop": stop_payload},
++                )
++                break
++
++            iteration += 1
++            append_scheduler_event(
++                resolved_run_dir,
++                "poll_started",
++                {"worker_id": active_worker_id, "iteration": iteration},
++            )
++            jobs, job_errors = load_scheduler_jobs_for_watch(resolved_run_dir, root=repo_root)
++            if job_errors:
++                write_scheduler_heartbeat(
++                    resolved_run_dir,
++                    worker_id=active_worker_id,
++                    iteration=iteration,
++                    status="warning",
++                    current_job_id=None,
++                )
++                append_scheduler_event(
++                    resolved_run_dir,
++                    "invalid_jobs_observed",
++                    {"worker_id": active_worker_id, "iteration": iteration, "errors": job_errors},
++                )
++                sleep_fn(poll_interval_seconds)
++                continue
++
++            ordered_jobs = sorted(jobs, key=lambda job: (job["created_at"], job["job_id"]))
++            queued_jobs = [job for job in ordered_jobs if job["status"] == "queued"]
++            if not queued_jobs:
++                write_scheduler_heartbeat(
++                    resolved_run_dir,
++                    worker_id=active_worker_id,
++                    iteration=iteration,
++                    status="idle",
++                    current_job_id=None,
++                )
++                append_scheduler_event(
++                    resolved_run_dir,
++                    "poll_completed",
++                    {"worker_id": active_worker_id, "iteration": iteration, "executed_jobs": []},
++                )
++                sleep_fn(poll_interval_seconds)
++                continue
++
++            for job in queued_jobs:
++                job_id = job["job_id"]
++                write_scheduler_heartbeat(
++                    resolved_run_dir,
++                    worker_id=active_worker_id,
++                    iteration=iteration,
++                    status="running-job",
++                    current_job_id=job_id,
++                )
++                append_scheduler_event(
++                    resolved_run_dir,
++                    "job_started",
++                    {"worker_id": active_worker_id, "job_id": job_id},
++                )
++                executed_job = execute_generic_agent_job(resolved_run_dir, job_id, root=repo_root)
++                executed_jobs.append(job_id)
++                append_scheduler_event(
++                    resolved_run_dir,
++                    "job_completed",
++                    {
++                        "worker_id": active_worker_id,
++                        "job_id": job_id,
++                        "status": executed_job["status"],
++                    },
++                )
++                stop_requested, stop_payload, stop_errors = scheduler_stop_requested(resolved_run_dir)
++                if stop_errors:
++                    append_scheduler_event(
++                        resolved_run_dir,
++                        "invalid_stop_request",
++                        {"worker_id": active_worker_id, "errors": stop_errors},
++                    )
++                if stop_requested:
++                    stop_reason = "stop_requested"
++                    write_scheduler_heartbeat(
++                        resolved_run_dir,
++                        worker_id=active_worker_id,
++                        iteration=iteration,
++                        status="stopping",
++                        current_job_id=None,
++                    )
++                    append_scheduler_event(
++                        resolved_run_dir,
++                        "stop_observed",
++                        {"worker_id": active_worker_id, "stop": stop_payload},
++                    )
++                    raise StopIteration
++
++            write_scheduler_heartbeat(
++                resolved_run_dir,
++                worker_id=active_worker_id,
++                iteration=iteration,
++                status="sleeping",
++                current_job_id=None,
++            )
++            append_scheduler_event(
++                resolved_run_dir,
++                "poll_completed",
++                {"worker_id": active_worker_id, "iteration": iteration, "executed_jobs": [job["job_id"] for job in queued_jobs]},
++            )
++            sleep_fn(poll_interval_seconds)
++    except StopIteration:
++        pass
++    except Exception:
++        write_scheduler_heartbeat(
++            resolved_run_dir,
++            worker_id=active_worker_id,
++            iteration=iteration,
++            status="failed",
++            current_job_id=None,
++        )
++        append_scheduler_event(
++            resolved_run_dir,
++            "worker_failed",
++            {"worker_id": active_worker_id, "iteration": iteration},
++        )
++        raise
++
++    write_scheduler_heartbeat(
++        resolved_run_dir,
++        worker_id=active_worker_id,
++        iteration=iteration,
++        status="stopped",
++        current_job_id=None,
++    )
++    append_scheduler_event(
++        resolved_run_dir,
++        "worker_stopped",
++        {"worker_id": active_worker_id, "iteration": iteration, "stop_reason": stop_reason},
++    )
++    return {
++        "run_id": state["run_id"],
++        "worker_id": active_worker_id,
++        "iterations": iteration,
++        "executed_jobs": executed_jobs,
++        "skipped_jobs": skipped_jobs,
++        "stop_reason": stop_reason,
++    }
++```
++
++- [ ] **Step 5: Run bounded watch test and parser tests**
++
++Run:
++
++```powershell
++python -m unittest tests.test_generic_agent_adapter.GenericCliAgentOrchestrationTest.test_scheduler_watch_runs_queued_job_writes_artifacts_and_does_not_mutate_state tests.test_generic_agent_adapter.GenericCliAgentOrchestrationTest.test_run_scheduler_requires_exactly_one_mode -v
++```
++
++Expected: both tests pass.
++
++- [ ] **Step 6: Commit Task 3**
++
++Run:
++
++```powershell
++git add harness/cli.py tests/test_generic_agent_adapter.py
++git commit -m "feat: add scheduler watch loop"
++```
++
++## Task 4: Add Stop Semantics And Invalid Job Watch Warnings
++
++**Files:**
++- Modify: `tests/test_generic_agent_adapter.py`
++- Modify: `harness/cli.py`
++
++- [ ] **Step 1: Add stop and invalid-job tests**
++
++Append these tests:
++
++```python
++    def test_scheduler_watch_stop_waits_for_current_job_and_does_not_claim_next_job(self):
++        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
++            run_dir = Path(raw)
++            write_json(run_dir / "state.json", minimal_state())
++            agent_script = run_dir / "stop_aware_agent.py"
++            write_agent_script(
++                agent_script,
++                """
++                import json
++                import os
++                import time
++                from pathlib import Path
++
++                input_path = Path(os.environ["HARNESS_AGENT_INPUT_FILE"])
++                output_path = Path(os.environ["HARNESS_AGENT_OUTPUT_FILE"])
++                payload = json.loads(input_path.read_text(encoding="utf-8"))
++                stop_path = input_path.parents[1] / "scheduler" / "stop.json"
++                for _ in range(50):
++                    if stop_path.exists():
++                        break
++                    time.sleep(0.05)
++                output = {
++                    "run_id": payload["run_id"],
++                    "job_id": payload["job_id"],
++                    "agent": payload["agent"],
++                    "adapter": payload["adapter"],
++                    "status": "passed",
++                    "summary": "Stop-aware job completed.",
++                    "findings": [],
++                    "evidence": [],
++                    "not_tested": [],
++                    "residual_risks": [],
++                    "generated_at": payload["created_at"],
++                }
++                output_path.write_text(json.dumps(output, indent=2) + "\\n", encoding="utf-8")
++                """,
++            )
++            cli.create_generic_agent_job(
++                run_dir,
++                "001-current",
++                agent="generic-test-agent",
++                command=[sys.executable, str(agent_script)],
++                timeout_seconds=10,
++                root=ROOT,
++            )
++            cli.create_generic_agent_job(
++                run_dir,
++                "002-next",
++                agent="generic-test-agent",
++                command=[sys.executable, "-c", "print('must not run')"],
++                timeout_seconds=10,
++                root=ROOT,
++            )
++
++            def run_worker() -> None:
++                cli.scheduler_run_watch(
++                    run_dir,
++                    poll_interval_seconds=0,
++                    max_iterations=5,
++                    worker_id="stop-worker",
++                    root=ROOT,
++                    sleep_fn=lambda seconds: None,
++                )
++
++            import threading
++            worker_thread = threading.Thread(target=run_worker)
++            worker_thread.start()
++            current_job_path = run_dir / "jobs" / "001-current" / "job.json"
++            for _ in range(100):
++                current_job = json.loads(current_job_path.read_text(encoding="utf-8"))
++                if current_job["status"] == "running":
++                    break
++                time.sleep(0.05)
++            cli.request_scheduler_stop(run_dir, reason="test stop", root=ROOT)
++            worker_thread.join(timeout=10)
++
++            current_job = json.loads(current_job_path.read_text(encoding="utf-8"))
++            next_job = json.loads((run_dir / "jobs" / "002-next" / "job.json").read_text(encoding="utf-8"))
++            heartbeat = json.loads((run_dir / "jobs" / "scheduler" / "heartbeat.json").read_text(encoding="utf-8"))
++
++        self.assertFalse(worker_thread.is_alive())
++        self.assertEqual(current_job["status"], "succeeded")
++        self.assertEqual(next_job["status"], "queued")
++        self.assertEqual(heartbeat["status"], "stopped")
++
++    def test_scheduler_watch_records_invalid_job_warning_and_does_not_claim_valid_jobs(self):
++        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
++            run_dir = Path(raw)
++            write_json(run_dir / "state.json", minimal_state())
++            bad_path = run_dir / "jobs" / "000-bad" / "job.json"
++            bad_path.parent.mkdir(parents=True, exist_ok=True)
++            bad_path.write_text("[]\\n", encoding="utf-8")
++            cli.create_generic_agent_job(
++                run_dir,
++                "001-valid",
++                agent="generic-test-agent",
++                command=[sys.executable, "-c", "print('must not run')"],
++                timeout_seconds=30,
++                root=ROOT,
++            )
++
++            summary = cli.scheduler_run_watch(
++                run_dir,
++                poll_interval_seconds=0,
++                max_iterations=1,
++                worker_id="warning-worker",
++                root=ROOT,
++                sleep_fn=lambda seconds: None,
++            )
++            valid_job = json.loads((run_dir / "jobs" / "001-valid" / "job.json").read_text(encoding="utf-8"))
++            events = [
++                json.loads(line)
++                for line in (run_dir / "jobs" / "scheduler" / "events.log").read_text(encoding="utf-8").splitlines()
++            ]
++
++        self.assertEqual(summary["executed_jobs"], [])
++        self.assertEqual(valid_job["status"], "queued")
++        self.assertIn("invalid_jobs_observed", [event["event"] for event in events])
++```
++
++- [ ] **Step 2: Run stop and invalid-job tests and verify they fail if behavior is missing**
++
++Run:
++
++```powershell
++python -m unittest tests.test_generic_agent_adapter.GenericCliAgentOrchestrationTest.test_scheduler_watch_stop_waits_for_current_job_and_does_not_claim_next_job tests.test_generic_agent_adapter.GenericCliAgentOrchestrationTest.test_scheduler_watch_records_invalid_job_warning_and_does_not_claim_valid_jobs -v
++```
++
++Expected: pass if Task 3 already implemented the stop-after-job and invalid-job skip behavior; otherwise fail with a queued second job being executed or missing `invalid_jobs_observed`.
++
++- [ ] **Step 3: Add missing behavior if tests fail**
++
++If the stop test fails, update `scheduler_run_watch` so it checks `scheduler_stop_requested` immediately after every `execute_generic_agent_job` call and breaks before the next queued job.
++
++If the invalid-job test fails, update `scheduler_run_watch` so any `load_scheduler_jobs_for_watch` error writes heartbeat `status = "warning"`, appends `invalid_jobs_observed`, does not call `execute_generic_agent_job`, and continues to the next iteration.
++
++Use this exact post-job stop block inside the queued-job loop:
++
++```python
++                stop_requested, stop_payload, stop_errors = scheduler_stop_requested(resolved_run_dir)
++                if stop_errors:
++                    append_scheduler_event(
++                        resolved_run_dir,
++                        "invalid_stop_request",
++                        {"worker_id": active_worker_id, "errors": stop_errors},
++                    )
++                if stop_requested:
++                    stop_reason = "stop_requested"
++                    write_scheduler_heartbeat(
++                        resolved_run_dir,
++                        worker_id=active_worker_id,
++                        iteration=iteration,
++                        status="stopping",
++                        current_job_id=None,
++                    )
++                    append_scheduler_event(
++                        resolved_run_dir,
++                        "stop_observed",
++                        {"worker_id": active_worker_id, "stop": stop_payload},
++                    )
++                    raise StopIteration
++```
++
++- [ ] **Step 4: Run watch behavior tests**
++
++Run:
++
++```powershell
++python -m unittest tests.test_generic_agent_adapter.GenericCliAgentOrchestrationTest.test_scheduler_watch_runs_queued_job_writes_artifacts_and_does_not_mutate_state tests.test_generic_agent_adapter.GenericCliAgentOrchestrationTest.test_scheduler_watch_stop_waits_for_current_job_and_does_not_claim_next_job tests.test_generic_agent_adapter.GenericCliAgentOrchestrationTest.test_scheduler_watch_records_invalid_job_warning_and_does_not_claim_valid_jobs -v
++```
++
++Expected: all three tests pass.
++
++- [ ] **Step 5: Commit Task 4**
++
++Run:
++
++```powershell
++git add harness/cli.py tests/test_generic_agent_adapter.py
++git commit -m "feat: add scheduler stop and warning semantics"
++```
++
++## Task 5: Add `start-scheduler` And `stop-scheduler` CLI Commands
++
++**Files:**
++- Modify: `tests/test_generic_agent_adapter.py`
++- Modify: `harness/cli.py`
++
++- [ ] **Step 1: Add failing detached launch and stop CLI tests**
++
++Append these tests:
++
++```python
++    def test_start_scheduler_launches_detached_watch_process(self):
++        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
++            run_dir = Path(raw)
++            write_json(run_dir / "state.json", minimal_state())
++            popen_calls = []
++
++            class FakeProcess:
++                pid = 43210
++
++            def fake_popen(command, **kwargs):
++                popen_calls.append((command, kwargs))
++                return FakeProcess()
++
++            with mock.patch("harness.cli.subprocess.Popen", side_effect=fake_popen):
++                result = cli.start_scheduler(
++                    run_dir,
++                    poll_interval_seconds=0.1,
++                    max_iterations=3,
++                    max_seconds=None,
++                    worker_id="detached-worker",
++                    root=ROOT,
++                )
++
++        command, kwargs = popen_calls[0]
++        self.assertEqual(result["worker_id"], "detached-worker")
++        self.assertIn(sys.executable, command[0])
++        self.assertEqual(command[1:4], ["-m", "harness.cli", "run-scheduler"])
++        self.assertIn("--watch", command)
++        self.assertIn("--worker-id", command)
++        self.assertIs(kwargs["stdin"], subprocess.DEVNULL)
++        self.assertIs(kwargs["stdout"], subprocess.DEVNULL)
++        self.assertIs(kwargs["stderr"], subprocess.DEVNULL)
++
++    def test_stop_scheduler_cli_writes_stop_without_mutating_state(self):
++        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
++            run_dir = Path(raw)
++            state = minimal_state()
++            write_json(run_dir / "state.json", state)
++
++            result = subprocess.run(
++                [
++                    sys.executable,
++                    "-m",
++                    "harness.cli",
++                    "stop-scheduler",
++                    str(run_dir),
++                    "--reason",
++                    "cli stop",
++                ],
++                cwd=ROOT,
++                text=True,
++                capture_output=True,
++                check=False,
++            )
++            saved_state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
++            stop = json.loads((run_dir / "jobs" / "scheduler" / "stop.json").read_text(encoding="utf-8"))
++
++        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
++        self.assertIn("stop requested: test-run", result.stdout)
++        self.assertEqual(saved_state, state)
++        self.assertEqual(stop["reason"], "cli stop")
++```
++
++- [ ] **Step 2: Run command tests and verify they fail**
++
++Run:
++
++```powershell
++python -m unittest tests.test_generic_agent_adapter.GenericCliAgentOrchestrationTest.test_start_scheduler_launches_detached_watch_process tests.test_generic_agent_adapter.GenericCliAgentOrchestrationTest.test_stop_scheduler_cli_writes_stop_without_mutating_state -v
++```
++
++Expected: fail because `start_scheduler` and `stop-scheduler` are not implemented.
++
++- [ ] **Step 3: Add detached launch helper**
++
++Add this function before `run_agent_subprocess`:
++
++```python
++def start_scheduler(
++    run_dir: Path | str,
++    *,
++    poll_interval_seconds: float = 5.0,
++    max_iterations: int | None = None,
++    max_seconds: float | None = None,
++    worker_id: str | None = None,
++    root: Path | str | None = None,
++) -> dict[str, Any]:
++    validate_scheduler_watch_options(
++        poll_interval_seconds=poll_interval_seconds,
++        max_iterations=max_iterations,
++        max_seconds=max_seconds,
++    )
++    resolved_run_dir = Path(run_dir)
++    repo_root = resolve_repository_root(resolved_run_dir, root=root)
++    before = validate_run(resolved_run_dir, root=repo_root)
++    if not before.ok:
++        raise HarnessCliError(format_errors(before.errors))
++
++    active_worker_id = worker_id or default_worker_id()
++    clear_scheduler_stop_request(resolved_run_dir)
++    command = [
++        sys.executable,
++        "-m",
++        "harness.cli",
++        "run-scheduler",
++        str(resolved_run_dir),
++        "--watch",
++        "--poll-interval-seconds",
++        str(poll_interval_seconds),
++        "--worker-id",
++        active_worker_id,
++    ]
++    if max_iterations is not None:
++        command.extend(["--max-iterations", str(max_iterations)])
++    if max_seconds is not None:
++        command.extend(["--max-seconds", str(max_seconds)])
++
++    creationflags = 0
++    if os.name == "nt":
++        creationflags = subprocess.CREATE_NEW_PROCESS_GROUP
++        creationflags |= getattr(subprocess, "DETACHED_PROCESS", 0)
++    process = subprocess.Popen(
++        command,
++        cwd=repo_root,
++        stdin=subprocess.DEVNULL,
++        stdout=subprocess.DEVNULL,
++        stderr=subprocess.DEVNULL,
++        creationflags=creationflags,
++        start_new_session=os.name != "nt",
++    )
++    return {
++        "run_id": load_json(state_path(resolved_run_dir))["run_id"],
++        "worker_id": active_worker_id,
++        "pid": process.pid,
++        "command": command,
++    }
++```
++
++- [ ] **Step 4: Register `start-scheduler` and `stop-scheduler`**
++
++In `build_parser`, add:
++
++```python
++    start_scheduler_parser = subparsers.add_parser(
++        "start-scheduler",
++        help="Start a detached local scheduler worker for a Harness run.",
++    )
++    start_scheduler_parser.add_argument("run_dir")
++    start_scheduler_parser.add_argument("--poll-interval-seconds", type=float, default=5.0)
++    start_scheduler_parser.add_argument("--max-iterations", type=int)
++    start_scheduler_parser.add_argument("--max-seconds", type=float)
++    start_scheduler_parser.add_argument("--worker-id")
++
++    stop_scheduler_parser = subparsers.add_parser(
++        "stop-scheduler",
++        help="Request graceful stop for a scheduler worker.",
++    )
++    stop_scheduler_parser.add_argument("run_dir")
++    stop_scheduler_parser.add_argument("--reason")
++```
++
++In `main`, add before `run-generic-agent`:
++
++```python
++        if args.command == "start-scheduler":
++            result = start_scheduler(
++                args.run_dir,
++                poll_interval_seconds=args.poll_interval_seconds,
++                max_iterations=args.max_iterations,
++                max_seconds=args.max_seconds,
++                worker_id=args.worker_id,
++            )
++            print(
++                f"started scheduler: {result['run_id']} "
++                f"worker_id={result['worker_id']} pid={result['pid']}",
++            )
++            return 0
++
++        if args.command == "stop-scheduler":
++            stop = request_scheduler_stop(args.run_dir, reason=args.reason)
++            print(f"stop requested: {load_json(state_path(Path(args.run_dir)))['run_id']} {stop['reason']}")
++            return 0
++```
++
++- [ ] **Step 5: Run command tests**
++
++Run:
++
++```powershell
++python -m unittest tests.test_generic_agent_adapter.GenericCliAgentOrchestrationTest.test_start_scheduler_launches_detached_watch_process tests.test_generic_agent_adapter.GenericCliAgentOrchestrationTest.test_stop_scheduler_cli_writes_stop_without_mutating_state -v
++```
++
++Expected: both tests pass.
++
++- [ ] **Step 6: Commit Task 5**
++
++Run:
++
++```powershell
++git add harness/cli.py tests/test_generic_agent_adapter.py
++git commit -m "feat: add scheduler worker controls"
++```
++
++## Task 6: Update CI Package Smoke And Static Contracts
++
++**Files:**
++- Modify: `.github/workflows/ci.yml`
++- Modify: `tests/test_static_contracts.py`
++
++- [ ] **Step 1: Add failing static contract checks**
++
++In `tests/test_static_contracts.py`, extend `test_ci_workflow_runs_core_validation_steps` with:
++
++```python
++            "harness run-scheduler \"$GITHUB_WORKSPACE/.tmp/package-smoke-run\" --watch --poll-interval-seconds 0.1 --max-iterations 3",
++            "package-smoke-watch-agent",
++```
++
++- [ ] **Step 2: Run static contract test and verify it fails**
++
++Run:
++
++```powershell
++python -m unittest tests.test_static_contracts.StaticContractsTest.test_ci_workflow_runs_core_validation_steps -v
++```
++
++Expected: fail because CI does not yet include the bounded watch package smoke.
++
++- [ ] **Step 3: Add package-smoke watch job to CI**
++
++In `.github/workflows/ci.yml`, after the existing package-smoke scheduler validation, add:
++
++```bash
++          cat > "$GITHUB_WORKSPACE/.tmp/package-smoke-watch-agent.py" <<'PY'
++          import json
++          import os
++          from pathlib import Path
++
++          payload = json.loads(Path(os.environ["HARNESS_AGENT_INPUT_FILE"]).read_text(encoding="utf-8"))
++          output = {
++              "run_id": payload["run_id"],
++              "job_id": payload["job_id"],
++              "agent": payload["agent"],
++              "adapter": payload["adapter"],
++              "status": "passed",
++              "summary": "Package smoke watch agent completed.",
++              "findings": [],
++              "evidence": [],
++              "not_tested": [],
++              "residual_risks": [],
++              "generated_at": payload["created_at"],
++          }
++          Path(os.environ["HARNESS_AGENT_OUTPUT_FILE"]).write_text(
++              json.dumps(output, indent=2) + "\n",
++              encoding="utf-8",
++          )
++          print("package-smoke-watch-agent wrote output")
++          PY
++          harness queue-generic-agent "$GITHUB_WORKSPACE/.tmp/package-smoke-run" package-smoke-watch --agent package-smoke-agent --timeout-seconds 30 -- python "$GITHUB_WORKSPACE/.tmp/package-smoke-watch-agent.py"
++          harness run-scheduler "$GITHUB_WORKSPACE/.tmp/package-smoke-run" --watch --poll-interval-seconds 0.1 --max-iterations 3
++          harness aggregate-jobs "$GITHUB_WORKSPACE/.tmp/package-smoke-run"
++          harness validate "$GITHUB_WORKSPACE/.tmp/package-smoke-run"
++```
++
++Keep the existing `harness run-scheduler "$GITHUB_WORKSPACE/.tmp/package-smoke-run" --once` command unchanged for backward compatibility coverage.
++
++- [ ] **Step 4: Run static contract test**
++
++Run:
++
++```powershell
++python -m unittest tests.test_static_contracts.StaticContractsTest.test_ci_workflow_runs_core_validation_steps -v
++```
++
++Expected: test passes.
++
++- [ ] **Step 5: Commit Task 6**
++
++Run:
++
++```powershell
++git add .github/workflows/ci.yml tests/test_static_contracts.py
++git commit -m "ci: smoke test scheduler watch mode"
++```
++
++## Task 7: Add Live Phase 6 Run And Durable Docs
++
++**Files:**
++- Create: `harness/runs/2026-06-22-phase-6-scheduler-watch-mode/**`
++- Modify: `tests/test_async_job_artifacts.py`
++- Modify: `README.md`
++- Modify: `docs/INDEX.md`
++- Modify: `harness/memory/progress.md`
++
++- [ ] **Step 1: Create and advance the live run**
++
++Run:
++
++```powershell
++python -m harness.cli init-run harness/runs/2026-06-22-phase-6-scheduler-watch-mode --run-id 2026-06-22-phase-6-scheduler-watch-mode --track Standard --workflow standard-agent-adapter-change --base-commit HEAD
++python -m harness.cli advance harness/runs/2026-06-22-phase-6-scheduler-watch-mode triaged
++python -m harness.cli advance harness/runs/2026-06-22-phase-6-scheduler-watch-mode planned
++python -m harness.cli advance harness/runs/2026-06-22-phase-6-scheduler-watch-mode in_progress
++```
++
++Expected: each command exits 0 and prints the new state.
++
++- [ ] **Step 2: Create run task, triage, and plan documents**
++
++Create these files with concrete content:
++
++```text
++harness/runs/2026-06-22-phase-6-scheduler-watch-mode/task.md
++harness/runs/2026-06-22-phase-6-scheduler-watch-mode/triage.md
++harness/runs/2026-06-22-phase-6-scheduler-watch-mode/plan.md
++```
++
++Each document must state:
++
++- the run proves bounded local watch mode
++- scheduler writes `worker.json`, `heartbeat.json`, and JSONL `events.log`
++- scheduler does not mutate `state.json`
++- Codex remains responsible for indexing evidence and advancing state
++- stale-running recovery and multi-worker locking are not implemented
++
++- [ ] **Step 3: Add live watch smoke script**
++
++Create:
++
++```text
++harness/runs/2026-06-22-phase-6-scheduler-watch-mode/scripts/watch-smoke.py
++```
++
++Use:
++
++```python
++import json
++import os
++from pathlib import Path
++
++
++def main() -> int:
++    input_path = Path(os.environ["HARNESS_AGENT_INPUT_FILE"])
++    output_path = Path(os.environ["HARNESS_AGENT_OUTPUT_FILE"])
++    payload = json.loads(input_path.read_text(encoding="utf-8"))
++    output = {
++        "run_id": payload["run_id"],
++        "job_id": payload["job_id"],
++        "agent": payload["agent"],
++        "adapter": payload["adapter"],
++        "status": "passed",
++        "summary": "Phase 6 scheduler watch smoke completed.",
++        "findings": [],
++        "evidence": [
++            {
++                "path": "raw.log",
++                "description": "raw.log captures deterministic Phase 6 watch smoke stdout.",
++            }
++        ],
++        "not_tested": [
++            "Multi-worker claim locking.",
++            "Automatic stale-running recovery.",
++            "Cloud queue execution.",
++            "Cross-run queue execution.",
++        ],
++        "residual_risks": [
++            "Heartbeat is observational only.",
++            "Stop requests are cooperative and do not interrupt running jobs.",
++            "Double-claim risk remains if multiple workers are launched against the same run.",
++        ],
++        "generated_at": payload["created_at"],
++    }
++    output_path.write_text(json.dumps(output, indent=2) + "\n", encoding="utf-8")
++    print("phase6 scheduler watch agent wrote output")
++    return 0
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
++```
++
++- [ ] **Step 4: Queue, watch, stop, and aggregate**
++
++Run:
++
++```powershell
++python -m harness.cli queue-generic-agent harness/runs/2026-06-22-phase-6-scheduler-watch-mode phase6-watch-agent --agent generic-cli-agent --timeout-seconds 30 -- python ..\..\scripts\watch-smoke.py
++python -m harness.cli run-scheduler harness/runs/2026-06-22-phase-6-scheduler-watch-mode --watch --poll-interval-seconds 0.1 --max-iterations 3 --worker-id phase6-live-watch
++python -m harness.cli stop-scheduler harness/runs/2026-06-22-phase-6-scheduler-watch-mode --reason "live run stop command exercised after bounded watch"
++python -m harness.cli aggregate-jobs harness/runs/2026-06-22-phase-6-scheduler-watch-mode
++```
++
++Expected:
++
++- queue prints `queued generic-agent: 2026-06-22-phase-6-scheduler-watch-mode/phase6-watch-agent`
++- watch prints `scheduler-watch: 2026-06-22-phase-6-scheduler-watch-mode iterations=3 executed=1 stop_reason=max_iterations`
++- stop prints `stop requested: 2026-06-22-phase-6-scheduler-watch-mode live run stop command exercised after bounded watch`
++- aggregate prints `aggregated jobs: 2026-06-22-phase-6-scheduler-watch-mode consumed=1 incomplete=0`
++
++- [ ] **Step 5: Index consumed evidence and closure artifacts**
++
++Run:
++
++```powershell
++python -m harness.cli index-evidence harness/runs/2026-06-22-phase-6-scheduler-watch-mode agent-job jobs/phase6-watch-agent/job.json --description "Terminal watch-executed async job consumed by Codex."
++python -m harness.cli index-evidence harness/runs/2026-06-22-phase-6-scheduler-watch-mode agent-result jobs/phase6-watch-agent/output.json --description "Structured watch-executed agent result consumed by Codex."
++python -m harness.cli index-evidence harness/runs/2026-06-22-phase-6-scheduler-watch-mode aggregation jobs/aggregation.json --description "Codex fan-in aggregation generated after watch execution."
++```
++
++Expected: each command exits 0.
++
++- [ ] **Step 6: Write verification, review, and handoff**
++
++Create:
++
++```text
++harness/runs/2026-06-22-phase-6-scheduler-watch-mode/verification.md
++harness/runs/2026-06-22-phase-6-scheduler-watch-mode/review-waiver.md
++harness/runs/2026-06-22-phase-6-scheduler-watch-mode/handoff.md
++```
++
++`handoff.md` frontmatter must include these exact risk statements:
++
++```yaml
++not_verified:
++  - "Multi-worker claim locking."
++  - "Automatic stale-running recovery."
++  - "Cloud queue execution."
++  - "Cross-run queue execution."
++residual_risks:
++  - "Heartbeat is observational only."
++  - "Stop requests are cooperative and do not interrupt running jobs."
++  - "Double-claim risk remains if multiple workers are launched against the same run."
++```
++
++- [ ] **Step 7: Complete and validate live run**
++
++Run:
++
++```powershell
++python -m harness.cli advance harness/runs/2026-06-22-phase-6-scheduler-watch-mode implemented
++python -m harness.cli index-evidence harness/runs/2026-06-22-phase-6-scheduler-watch-mode verification verification.md --description "Verification record."
++python -m harness.cli index-evidence harness/runs/2026-06-22-phase-6-scheduler-watch-mode review-waiver review-waiver.md --description "Scoped run-record review waiver."
++python -m harness.cli index-evidence harness/runs/2026-06-22-phase-6-scheduler-watch-mode handoff handoff.md --description "Completion handoff."
++python -m harness.cli advance harness/runs/2026-06-22-phase-6-scheduler-watch-mode verified
++python -m harness.cli advance harness/runs/2026-06-22-phase-6-scheduler-watch-mode reviewed
++python -m harness.cli advance harness/runs/2026-06-22-phase-6-scheduler-watch-mode completed
++python -m harness.cli validate harness/runs/2026-06-22-phase-6-scheduler-watch-mode
++```
++
++Expected: final validation exits 0 and prints `valid: harness\runs\2026-06-22-phase-6-scheduler-watch-mode`.
++
++- [ ] **Step 8: Add live run regression test**
++
++In `tests/test_async_job_artifacts.py`, add:
++
++```python
++PHASE6_WATCH_RUN = ROOT / "harness" / "runs" / "2026-06-22-phase-6-scheduler-watch-mode"
++```
++
++Add this test to `Phase4ClosureRunTest`:
++
++```python
++    def test_phase6_watch_run_was_produced_by_watch_scheduler_path(self):
++        result = cli.validate_run(PHASE6_WATCH_RUN, root=ROOT)
++        state = json.loads((PHASE6_WATCH_RUN / "state.json").read_text(encoding="utf-8"))
++        evidence_types = {item["type"] for item in state["evidence"]}
++        scheduler_dir = PHASE6_WATCH_RUN / "jobs" / "scheduler"
++        worker = json.loads((scheduler_dir / "worker.json").read_text(encoding="utf-8"))
++        heartbeat = json.loads((scheduler_dir / "heartbeat.json").read_text(encoding="utf-8"))
++        events = [
++            json.loads(line)
++            for line in (scheduler_dir / "events.log").read_text(encoding="utf-8").splitlines()
++        ]
++        aggregation = json.loads(
++            PHASE6_WATCH_RUN.joinpath("jobs", "aggregation.json").read_text(encoding="utf-8")
++        )
++
++        self.assertEqual(result.errors, [])
++        self.assertEqual(state["status"], "completed")
++        self.assertIn("agent-job", evidence_types)
++        self.assertIn("agent-result", evidence_types)
++        self.assertIn("aggregation", evidence_types)
++        self.assertEqual(worker["worker_id"], "phase6-live-watch")
++        self.assertEqual(heartbeat["status"], "stopped")
++        self.assertIn("worker_started", [event["event"] for event in events])
++        self.assertIn("job_completed", [event["event"] for event in events])
++        self.assertEqual(aggregation["consumed_jobs"], ["phase6-watch-agent"])
++        self.assertEqual(aggregation["incomplete_jobs"], [])
++```
++
++- [ ] **Step 9: Update durable docs**
++
++Update:
++
++- `README.md`: add Phase 6 scheduler watch mode to current capabilities and keep multi-worker/stale recovery listed as not implemented.
++- `docs/INDEX.md`: add the Phase 6 design, plan, and live run to the current status/index.
++- `harness/memory/progress.md`: record Phase 6 outcome, heartbeat semantics, stop semantics, double-claim residual risk, and verification baseline.
++
++- [ ] **Step 10: Run live run tests and commit**
++
++Run:
++
++```powershell
++python -m unittest tests.test_async_job_artifacts.Phase4ClosureRunTest.test_phase6_watch_run_was_produced_by_watch_scheduler_path -v
++python -m harness.cli validate harness/runs/2026-06-22-phase-6-scheduler-watch-mode
++```
++
++Expected: both commands exit 0.
++
++Commit:
++
++```powershell
++git add harness/runs/2026-06-22-phase-6-scheduler-watch-mode tests/test_async_job_artifacts.py README.md docs/INDEX.md harness/memory/progress.md
++git commit -m "feat: add Phase 6 scheduler watch smoke run"
++```
++
++## Task 8: Full Verification And Review
++
++**Files:**
++- Verify all changed files.
++- Add review artifacts if external review is available.
++
++- [ ] **Step 1: Run full unit suite**
++
++Run:
++
++```powershell
++python -m unittest discover -s tests
++```
++
++Expected: all tests pass, with only documented environment-gated skips.
++
++- [ ] **Step 2: Validate every source-controlled run**
++
++First verify the current shell used by the execution environment. In local PowerShell, run:
++
++```powershell
++Get-ChildItem -Directory harness/runs | ForEach-Object { python -m harness.cli validate $_.FullName }
++```
++
++Expected: every run prints `valid:`.
++
++If running in bash, use:
++
++```bash
++for run_dir in harness/runs/*; do
++  if [ -d "$run_dir" ]; then
++    python -m harness.cli validate "$run_dir"
++  fi
++done
++```
++
++Expected: every run prints `valid:`.
++
++- [ ] **Step 3: Run package install smoke locally**
++
++Run:
++
++```powershell
++$venv = Join-Path $env:TEMP "harness-phase6-package-smoke"
++if (Test-Path $venv) { Remove-Item -Recurse -Force $venv }
++python -m venv $venv
++& "$venv\Scripts\python.exe" -m pip install --upgrade pip
++& "$venv\Scripts\python.exe" -m pip install .
++Push-Location $env:TEMP
++& "$venv\Scripts\harness.exe" validate "C:\ai\ai-coding-harness\harness\runs\example-fast-doc-change"
++Pop-Location
++Remove-Item -Recurse -Force $venv
++```
++
++Expected: packaged `harness.exe` validates the example run from outside the repository.
++
++- [ ] **Step 4: Run diff hygiene**
++
++Run:
++
++```powershell
++git diff --check
++```
++
++Expected: exit 0. CRLF warnings are acceptable when there are no whitespace errors.
++
++- [ ] **Step 5: Inspect final diff**
++
++Run:
++
++```powershell
++git diff --stat
++git status --short --branch
++```
++
++Expected changed areas are limited to:
++
++- `harness/cli.py`
++- scheduler/generic agent tests
++- CI workflow and static CI contract tests
++- Phase 6 live run
++- README/docs/memory status updates
++
++- [ ] **Step 6: Run external review or record unavailability**
++
++This implementation touches CLI orchestration, scheduler lifecycle behavior, CI, tests, and run evidence. It qualifies for external review under `harness/core/delegation.md`.
++
++If the Claude review adapter is available, run it against:
++
++- Phase 6 design spec
++- this implementation plan
++- `git diff "$(git merge-base origin/master HEAD)" HEAD`
++- verification outputs
++
++Acceptable outcomes:
++
++- `passed`
++- `findings` with no high or critical findings after triage
++
++If the adapter is unavailable, record a scoped review waiver in the Phase 6 run or final handoff. Do not claim external review passed without a concrete artifact.
++
++- [ ] **Step 7: Final commit if review or verification artifacts changed**
++
++If Step 6 changes source-controlled artifacts, commit them:
++
++```powershell
++git add harness/runs/2026-06-22-phase-6-scheduler-watch-mode README.md docs/INDEX.md harness/memory/progress.md
++git commit -m "docs: record Phase 6 scheduler review outcome"
++```
++
++## Acceptance Checklist
++
++- [ ] `run-scheduler` requires exactly one of `--once` or `--watch`.
++- [ ] `run-scheduler --once` remains strict on invalid job records.
++- [ ] `run-scheduler --watch` writes `worker.json`, `heartbeat.json`, and JSONL `events.log`.
++- [ ] `worker.json` stores identity/configuration only.
++- [ ] `heartbeat.json` stores volatile state only.
++- [ ] `events.log` lines are valid JSON objects with `ts`, `event`, and `detail`.
++- [ ] A pre-existing `stop.json` is cleared at watch startup.
++- [ ] `stop-scheduler` writes stop request artifacts without mutating `state.json`.
++- [ ] Stop requests do not interrupt a running job.
++- [ ] Watch mode does not claim later queued jobs after observing stop.
++- [ ] Watch mode records invalid job records as warnings and does not partially execute other queued jobs in a corrupt job set.
++- [ ] `start-scheduler` launches a detached child using the same watch loop and redirects stdio away from the caller.
++- [ ] Scheduler commands never index evidence.
++- [ ] Scheduler commands never advance `state.json`.
++- [ ] No lockfile or stale-running recovery is introduced.
++- [ ] CI package smoke covers both `--once` and bounded `--watch`.
++- [ ] A live Phase 6 scheduler watch run exists and validates.
++- [ ] Full unit tests pass.
++- [ ] Every source-controlled run validates.
++- [ ] `git diff --check` reports no whitespace errors.
+diff --git a/docs/superpowers/specs/2026-06-22-phase-6-scheduler-background-worker-design.md b/docs/superpowers/specs/2026-06-22-phase-6-scheduler-background-worker-design.md
+new file mode 100644
+index 0000000..ff91f09
+--- /dev/null
++++ b/docs/superpowers/specs/2026-06-22-phase-6-scheduler-background-worker-design.md
+@@ -0,0 +1,398 @@
++# Phase 6 Scheduler Background Worker Design
++
++## Summary
++
++Phase 6 turns the Phase 5.2 one-shot local scheduler into an observable run-scoped worker loop. The worker can run in the foreground through `run-scheduler --watch` or be launched as a detached local background process through `start-scheduler`. `stop-scheduler` requests graceful shutdown by writing a scheduler stop artifact.
++
++The scheduler remains below the Harness lifecycle authority boundary. It writes scheduler artifacts and job artifacts only. It never indexes evidence into `state.json`, never advances Harness state, and never treats a job artifact as completion evidence. Codex must still explicitly consume artifacts, index evidence, run validation, and advance state through the existing CLI lifecycle commands.
++
++## Goals
++
++- Add a foreground watch loop with heartbeat, polling interval, bounded test controls, graceful stop handling, and structured scheduler events.
++- Add a local detached worker launcher that reuses the same watch-loop implementation.
++- Add a stop command that requests shutdown through a run-local artifact.
++- Keep `run-scheduler --once` behavior compatible, but change the CLI shape so `--once` and `--watch` are a mutually exclusive required group.
++- Keep invalid job handling strict for `--once`, while making watch mode resilient: invalid job records write structured warnings and skip the current polling iteration instead of aborting the whole worker.
++- Preserve Phase 5.2 authority boundaries: scheduler artifacts are not evidence until Codex explicitly indexes them, and scheduler execution never mutates `state.json`.
++
++## Non-Goals
++
++- No multi-worker claim locking.
++- No stale-running automatic recovery.
++- No cloud queue.
++- No cross-run queue.
++- No automatic evidence indexing.
++- No automatic Harness state transition.
++- No permission sandbox beyond the current local subprocess behavior.
++- No automatic interruption of a running job when a stop request appears.
++- No log rotation or long-term scheduler log retention policy.
++
++## Existing Constraints
++
++The current Phase 5.2 scheduler already provides these constraints and extension points:
++
++- `state.json` is the lifecycle authority. Scheduler logic returns artifacts only.
++- `queue-generic-agent` creates queued jobs without starting subprocesses.
++- `run-scheduler --once` validates the run, loads scheduler jobs, claims queued jobs, and executes them sequentially.
++- `aggregate-jobs` writes `jobs/aggregation.json` without mutating `state.json`.
++- Agent stdout and stderr are captured in each job's `raw.log`.
++- `write_json_atomic` is available and should be used for `worker.json`, `heartbeat.json`, `stop.json`, and job status updates.
++- Phase 5.2 does not implement stale-running recovery, multi-worker locking, daemon behavior, or cloud execution. Phase 6 moves watch mode into scope but keeps the other boundaries intact.
++
++## Considered Approaches
++
++| Approach | Trade-off | Decision |
++| --- | --- | --- |
++| A. Foreground-only bounded watch loop | Easiest to test and sufficient for CI, but does not satisfy the requested background worker mode. | Use as the core implementation and test surface. |
++| B. OS service or platform-specific daemon | More production-like, but introduces Windows service, Unix daemon, lifecycle, permissions, and install complexity too early. | Rejected for Phase 6. |
++| C. Detached local Python child process using the same watch loop | Provides real background behavior while keeping implementation local, testable, and package-friendly. | Chosen. |
++
++## Proposed CLI Surface
++
++```powershell
++harness run-scheduler <run-dir> (--once | --watch) `
++  [--poll-interval-seconds 5] `
++  [--max-iterations N] `
++  [--max-seconds N] `
++  [--worker-id <id>]
++
++harness start-scheduler <run-dir> `
++  [--poll-interval-seconds 5] `
++  [--max-iterations N] `
++  [--max-seconds N] `
++  [--worker-id <id>]
++
++harness stop-scheduler <run-dir> [--reason <text>]
++```
++
++The PowerShell line continuations are for readability only. CI/package-smoke commands should be verified against the current workflow shell and may use single-line equivalents.
++
++`run-scheduler --once` keeps the Phase 5.2 strict behavior: invalid job records fail the command before execution.
++
++`run-scheduler --watch` runs in the current process. It validates startup state, writes scheduler identity and heartbeat artifacts, then loops until a stop condition is reached. If a valid `jobs/scheduler/stop.json` already exists when the worker starts polling, the worker treats it as an active stop request.
++
++`start-scheduler` validates arguments, clears any stale `jobs/scheduler/stop.json`, then starts a detached Python child process that runs `python -m harness.cli run-scheduler <run-dir> --watch ...`. It returns after launch and prints the worker id. It does not claim that the worker successfully executed jobs; the heartbeat and events artifacts are the observable worker state. The detached launch mechanism is platform-specific and finalized at implementation; the watch loop itself is platform-independent. The detached child must not depend on the caller console staying open: child stdin/stdout/stderr should be redirected away from the caller, and intentional scheduler diagnostics belong in `events.log` and `heartbeat.json`.
++
++`stop-scheduler` writes `jobs/scheduler/stop.json` atomically. The worker observes it between polling iterations or after the current job completes.
++
++## Scheduler Artifact Layout
++
++Phase 6 adds a singleton run-local scheduler directory:
++
++```text
++<run-dir>/jobs/scheduler/
++  worker.json
++  heartbeat.json
++  stop.json
++  events.log
++```
++
++This directory is not evidence by itself. Codex may later decide to index selected scheduler artifacts only if the evidence contract is extended deliberately.
++
++### `worker.json`
++
++`worker.json` is written once at worker startup. It records identity and static configuration:
++
++```json
++{
++  "worker_id": "scheduler-20260622-abc123",
++  "pid": 12345,
++  "run_dir": "C:/ai/ai-coding-harness/harness/runs/...",
++  "started_at": "2026-06-22T03:00:00Z",
++  "poll_interval": 5.0,
++  "max_iterations": null,
++  "max_seconds": null,
++  "cli_version": "0.2.0"
++}
++```
++
++If a later worker is started for the same run, it writes a new `worker.json`. `worker.json` is a current-worker snapshot, not append-only history. Worker start/stop history is retained in `events.log` through `worker_started`, `worker_stopped`, and failure events. Phase 6 does not add lockfiles or stale-worker takeover semantics, so operators remain responsible for not launching overlapping workers.
++
++### `heartbeat.json`
++
++`heartbeat.json` is overwritten every polling iteration and at worker shutdown. It records volatile state only:
++
++```json
++{
++  "worker_id": "scheduler-20260622-abc123",
++  "last_seen_at": "2026-06-22T03:00:05Z",
++  "iteration": 2,
++  "status": "running-job",
++  "current_job_id": "phase6-job"
++}
++```
++
++Allowed statuses:
++
++- `starting`
++- `idle`
++- `running-job`
++- `sleeping`
++- `warning`
++- `stopping`
++- `stopped`
++- `failed`
++
++Heartbeat is an observation signal only. Phase 6 does not use heartbeat age to recover stale `running` jobs, steal ownership, or mutate existing job artifacts.
++
++### `events.log`
++
++`events.log` is newline-delimited JSON. Each line is one JSON object with this shape:
++
++```json
++{"ts":"2026-06-22T03:00:05Z","event":"job_completed","detail":{"worker_id":"scheduler-20260622-abc123","job_id":"phase6-job","status":"succeeded"}}
++```
++
++Required fields:
++
++- `ts`: UTC timestamp.
++- `event`: stable event name.
++- `detail`: JSON object with event-specific structured details.
++
++The scheduler event log is for scheduler lifecycle events only. Agent stdout and stderr remain isolated in each job's `raw.log`; the scheduler must not copy agent output into `events.log`.
++
++Initial event vocabulary:
++
++- `worker_started`
++- `heartbeat_written`
++- `poll_started`
++- `poll_completed`
++- `job_started`
++- `job_completed`
++- `invalid_jobs_observed`
++- `stop_requested`
++- `stop_observed`
++- `max_iterations_reached`
++- `max_seconds_reached`
++- `worker_stopped`
++- `startup_failed`
++- `worker_failed`
++
++## Watch Loop Semantics
++
++The watch loop performs these steps:
++
++1. Validate startup state.
++2. Write `worker.json`.
++3. Write `heartbeat.json` with `status = "starting"`.
++4. Append `worker_started` to `events.log`.
++5. Repeat until a stop condition:
++   - check for `stop.json`
++   - write heartbeat for the current iteration
++   - scan jobs
++   - if invalid job records are present, append `invalid_jobs_observed`, set heartbeat `status = "warning"`, skip this polling iteration, and sleep
++   - execute queued jobs sequentially using the existing generic agent execution path
++   - after each job completes, check `stop.json` before claiming another job
++   - sleep for `poll_interval_seconds`
++6. Write final heartbeat with `status = "stopped"` or `status = "failed"`.
++7. Append `worker_stopped` or `worker_failed`.
++
++Jobs queued while an iteration is executing are picked up in a later polling iteration.
++
++## Stop Semantics
++
++`stop-scheduler` writes:
++
++```json
++{
++  "requested_at": "2026-06-22T03:01:00Z",
++  "requested_by": "codex",
++  "reason": "operator requested shutdown"
++}
++```
++
++Stop requests are cooperative:
++
++- `start-scheduler` removes a pre-existing `stop.json` before spawning the child, treating it as a stale one-shot signal from a previous worker session.
++- `run-scheduler --watch` does not remove `stop.json` at worker startup. If a stop request is present before the first polling iteration, the worker observes it and exits cleanly.
++- If the worker is sleeping or between jobs, it exits before claiming another job.
++- If the worker is executing a job, it waits for the current job to reach a terminal state, writes job artifacts, observes `stop.json`, and exits without claiming a later queued job.
++- Stop requests do not kill subprocesses.
++- Stop requests do not mark jobs cancelled.
++- Stop requests do not mutate `state.json`.
++
++## Startup Failure Definition
++
++Startup failure is a scheduler command failure before the worker has entered its polling loop. Examples:
++
++- invalid CLI arguments
++- missing run directory
++- invalid or unreadable `state.json`
++- failure to validate the run before startup
++- failure to create or write `jobs/scheduler/worker.json`
++- invalid polling configuration
++
++Startup failure is not a job failure. It must not mark any job `failed`, `timeout`, or `cancelled`. If the scheduler directory can be written, startup failure may append a `startup_failed` event and write heartbeat `status = "failed"`.
++
++Job failure only applies after a queued job has been claimed and the generic agent execution path produces a terminal job status.
++
++## Invalid Job Handling
++
++`run-scheduler --once` remains strict and fails on invalid job records before any job is claimed.
++
++`run-scheduler --watch` is resilient:
++
++- invalid job records do not terminate the worker
++- the worker appends an `invalid_jobs_observed` JSONL event with paths and validation errors
++- the worker sets heartbeat `status = "warning"`
++- the worker skips the current polling iteration without claiming otherwise valid queued jobs
++- the next polling iteration retries from disk
++
++This prevents a long-running worker from dying because a partially written or manually edited job artifact appears, while still making the problem visible and avoiding mixed execution under a corrupt job set.
++
++The all-or-nothing skip is intentional. When any corrupt job record exists, watch mode does not partially execute other queued jobs in the same run. Operators must fix or remove the invalid job artifact before normal watch execution resumes.
++
++## Claim And Concurrency Semantics
++
++Phase 6 inherits the Phase 5.2 claim model: queued jobs are claimed by atomically rewriting `job.json` from `queued` to `running`. This is not a compare-and-swap lock and does not make multiple workers safe.
++
++Phase 6 explicitly does not introduce:
++
++- lockfiles
++- stale heartbeat takeover
++- process liveness checks that reclassify jobs
++- double-claim prevention beyond the current sequential single-worker discipline
++
++If two workers are launched against the same run, double-claim risk remains. That risk must be recorded in the implementation handoff and progress memory.
++
++## Data Flow
++
++Foreground watch:
++
++```text
++operator -> run-scheduler --watch
++         -> jobs/scheduler/worker.json
++         -> jobs/scheduler/heartbeat.json
++         -> jobs/scheduler/events.log
++         -> jobs/<job-id>/job.json running
++         -> agent subprocess
++         -> jobs/<job-id>/raw.log
++         -> jobs/<job-id>/output.json
++         -> jobs/<job-id>/job.json terminal
++```
++
++Background worker:
++
++```text
++operator -> start-scheduler
++         -> detached python -m harness.cli run-scheduler --watch
++         -> same scheduler and job artifacts as foreground watch
++```
++
++Stop:
++
++```text
++operator -> stop-scheduler
++         -> jobs/scheduler/stop.json
++         -> worker observes stop between jobs or after current job
++         -> heartbeat.json stopped
++         -> events.log worker_stopped
++```
++
++Consume:
++
++```text
++Codex -> aggregate-jobs
++      -> index-evidence agent-job
++      -> index-evidence agent-result
++      -> index-evidence aggregation
++      -> validate
++      -> advance state when Harness rules allow
++```
++
++## Error Handling
++
++- Invalid CLI arguments exit non-zero and do not create job artifacts.
++- Startup validation failure exits non-zero and does not mark jobs failed.
++- Failure to write scheduler artifacts exits non-zero before job execution.
++- Invalid job records in `--once` fail the command before execution.
++- Invalid job records in `--watch` produce structured warning events and skip the current iteration.
++- Generic agent subprocess failure, missing output, invalid output, and timeout keep using the existing terminal job status rules.
++- `stop.json` parse errors are treated like invalid scheduler control artifacts: append a structured warning and continue running until a valid stop request is present or another stop condition is reached.
++
++## Tests
++
++Unit and integration tests should cover:
++
++- CLI parser requires exactly one of `--once` or `--watch`.
++- Existing package smoke and CI continue to use `run-scheduler --once`.
++- `run-scheduler --watch --poll-interval-seconds 0.1 --max-iterations 3` runs a real queued job, writes `worker.json`, `heartbeat.json`, and JSONL `events.log`, then exits without mutating `state.json`.
++- A watch loop that receives `stop.json` exits gracefully and leaves terminal job artifacts consumable by `aggregate-jobs`.
++- A worker that receives `stop.json` while a job is executing waits for that job to finish, writes terminal job artifacts, and exits without claiming a later queued job.
++- Watch mode records invalid job records as `invalid_jobs_observed`, skips the polling iteration, and keeps the worker alive.
++- Foreground watch and detached background worker share the same watch-loop implementation.
++- `start-scheduler` launches the expected child command without claiming that jobs completed.
++- `stop-scheduler` writes `jobs/scheduler/stop.json` atomically and does not mutate `state.json`.
++- `events.log` is valid newline-delimited JSON with `ts`, `event`, and object-shaped `detail` on every line.
++- `worker.json` contains static identity/configuration fields and `heartbeat.json` contains only volatile fields.
++- `aggregate-jobs` correctly classifies terminal and incomplete jobs after watch execution.
++- Scheduler artifacts are not automatically indexed as evidence.
++- Scheduler execution never advances Harness state.
++
++Full verification should include:
++
++```powershell
++python -m unittest discover -s tests
++Get-ChildItem -Directory harness/runs | ForEach-Object { python -m harness.cli validate $_.FullName }
++git diff --check
++```
++
++Package smoke should add a bounded foreground watch invocation so CI proves the packaged console script can execute watch mode from outside the repository. Detached background launch should be covered by unit tests and, if stable on Windows and GitHub-hosted runners, an optional local smoke.
++
++Before implementation reuses the verification commands above, validate them against the current GitHub Actions shell and local Windows shell. If the current workflow shell is not PowerShell, use the equivalent shell-native loop for validating every source-controlled run.
++
++## Live Phase 6 Run
++
++Implementation should produce a source-controlled run:
++
++```text
++harness/runs/2026-06-22-phase-6-scheduler-watch-mode/
++```
++
++The run should prove:
++
++- the run was created through `init-run`
++- a queued job was created through `queue-generic-agent`
++- the job was executed through bounded `run-scheduler --watch`
++- scheduler artifacts were written under `jobs/scheduler/`
++- `events.log` is structured JSONL
++- `stop-scheduler` was exercised or an equivalent `stop.json` was written by the CLI
++- `aggregate-jobs` produced `jobs/aggregation.json`
++- Codex explicitly indexed `agent-job`, `agent-result`, `aggregation`, `verification`, review evidence or review waiver, and `handoff`
++- the run completed through normal Harness state transitions
++
++The handoff must explicitly record:
++
++- watch mode is local and run-scoped
++- heartbeat is observational only
++- stop requests are cooperative and do not interrupt running jobs
++- invalid job records in watch mode are warnings, not worker-fatal errors
++- no multi-worker locking or stale-running recovery was implemented
++- scheduler artifacts are not evidence unless Codex indexes them through an evidence type
++
++## Acceptance Criteria
++
++- `run-scheduler` requires exactly one of `--once` or `--watch`.
++- `run-scheduler --once` remains backward compatible and strict on invalid job records.
++- `run-scheduler --watch` writes worker identity, heartbeat, and JSONL event artifacts.
++- `start-scheduler` launches a detached worker that uses the same watch implementation.
++- `stop-scheduler` writes a stop request artifact without mutating `state.json`.
++- Watch mode respects poll interval and bounded stop controls.
++- Watch mode exits on valid `stop.json`, `max_iterations`, or `max_seconds`.
++- Stop requests do not interrupt an already running job.
++- Watch mode does not abort permanently on invalid job records.
++- `events.log` contains scheduler events only, not agent stdout or stderr.
++- `worker.json` stores stable identity/configuration and `heartbeat.json` stores volatile runtime state.
++- Scheduler and stop commands never index evidence and never advance `state.json`.
++- Double-claim risk is unchanged and documented; no lockfile is introduced.
++- CI and package smoke are updated for the mutually exclusive `--once` / `--watch` CLI shape.
++- A live Phase 6 scheduler watch run exists and validates.
++
++## Residual Risks
++
++- Multiple workers on the same run remain unsafe.
++- A crashed worker can still leave a job `running`; Phase 6 observes but does not recover it.
++- Detached background process behavior may vary by OS shell and terminal environment.
++- `events.log` can grow without rotation.
++- Local subprocess execution inherits the same permission and environment risks as the existing generic adapter.
++- Stop requests are cooperative and may be delayed by long-running jobs.
+diff --git a/harness/cli.py b/harness/cli.py
+index 8bfaad8..c3b6b40 100644
+--- a/harness/cli.py
++++ b/harness/cli.py
+@@ -2,12 +2,15 @@ from __future__ import annotations
+ 
+ import argparse
+ import json
++import math
+ import os
+ import signal
+ import shutil
+ import subprocess
+ import sys
+ import tempfile
++import time
++import uuid
+ from dataclasses import dataclass
+ from datetime import datetime, timezone
+ from pathlib import Path
+@@ -23,7 +26,23 @@ ROOT = PACKAGE_DIR.parent
+ SCHEMA_DIR = PACKAGE_DIR / "schemas"
+ STATE_SCHEMA = SCHEMA_DIR / "state.schema.json"
+ CODEX_ACTOR = "codex"
++HARNESS_VERSION = "0.2.0"
+ GENERIC_ADAPTER_VERSION = "0.1.0"
++SCHEDULER_DIR_NAME = "scheduler"
++SCHEDULER_STATUSES = frozenset(
++    {
++        "starting",
++        "idle",
++        "running-job",
++        "sleeping",
++        "warning",
++        "stopping",
++        "stopped",
++        "failed",
++    }
++)
++ATOMIC_REPLACE_ATTEMPTS = 5
++ATOMIC_REPLACE_RETRY_SECONDS = 0.01
+ EVIDENCE_TYPES = frozenset(
+     {
+         "task",
+@@ -1401,8 +1420,8 @@ def init_run(
+     created_at = utc_now()
+     state = {
+         "run_id": run_id,
+-        "harness_version": "0.2.0",
+-        "state_schema_version": "0.2.0",
++        "harness_version": HARNESS_VERSION,
++        "state_schema_version": HARNESS_VERSION,
+         "status": "draft",
+         "track": track,
+         "current_workflow": workflow,
+@@ -1825,6 +1844,176 @@ def load_scheduler_jobs(run_dir: Path, *, root: Path) -> list[dict[str, Any]]:
+     return jobs
+ 
+ 
++def scheduler_dir(run_dir: Path | str) -> Path:
++    return Path(run_dir) / "jobs" / SCHEDULER_DIR_NAME
++
++
++def scheduler_worker_path(run_dir: Path | str) -> Path:
++    return scheduler_dir(run_dir) / "worker.json"
++
++
++def scheduler_heartbeat_path(run_dir: Path | str) -> Path:
++    return scheduler_dir(run_dir) / "heartbeat.json"
++
++
++def scheduler_stop_path(run_dir: Path | str) -> Path:
++    return scheduler_dir(run_dir) / "stop.json"
++
++
++def scheduler_events_path(run_dir: Path | str) -> Path:
++    return scheduler_dir(run_dir) / "events.log"
++
++
++def default_worker_id() -> str:
++    return f"scheduler-{uuid.uuid4().hex[:12]}"
++
++
++def append_scheduler_event(
++    run_dir: Path | str,
++    event: str,
++    detail: dict[str, Any],
++) -> dict[str, Any]:
++    payload = {
++        "ts": utc_now(),
++        "event": event,
++        "detail": detail,
++    }
++    path = scheduler_events_path(run_dir)
++    path.parent.mkdir(parents=True, exist_ok=True)
++    with path.open("a", encoding="utf-8", newline="\n") as handle:
++        handle.write(json.dumps(payload, sort_keys=True) + "\n")
++    return payload
++
++
++def write_scheduler_worker(
++    run_dir: Path | str,
++    *,
++    worker_id: str,
++    poll_interval_seconds: float,
++    max_iterations: int | None,
++    max_seconds: float | None,
++    root: Path | str | None = None,
++) -> dict[str, Any]:
++    resolved_run_dir = Path(run_dir)
++    repo_root = resolve_repository_root(resolved_run_dir, root=root)
++    before = validate_run(resolved_run_dir, root=repo_root)
++    if not before.ok:
++        raise HarnessCliError(format_errors(before.errors))
++
++    worker = {
++        "worker_id": worker_id,
++        "pid": os.getpid(),
++        "started_at": utc_now(),
++        "run_dir": str(resolved_run_dir.resolve(strict=False)),
++        "poll_interval": poll_interval_seconds,
++        "max_iterations": max_iterations,
++        "max_seconds": max_seconds,
++        "cli_version": HARNESS_VERSION,
++    }
++    write_json_atomic(scheduler_worker_path(resolved_run_dir), worker)
++    return worker
++
++
++def write_scheduler_heartbeat(
++    run_dir: Path | str,
++    *,
++    worker_id: str,
++    iteration: int,
++    status: str,
++    current_job_id: str | None,
++) -> dict[str, Any]:
++    if status not in SCHEDULER_STATUSES:
++        raise HarnessCliError(f"invalid scheduler heartbeat status: {status}")
++
++    heartbeat = {
++        "worker_id": worker_id,
++        "last_seen_at": utc_now(),
++        "iteration": iteration,
++        "status": status,
++        "current_job_id": current_job_id,
++    }
++    write_json_atomic(scheduler_heartbeat_path(run_dir), heartbeat)
++    return heartbeat
++
++
++def request_scheduler_stop(
++    run_dir: Path | str,
++    *,
++    reason: str | None = None,
++    root: Path | str | None = None,
++) -> dict[str, Any]:
++    resolved_run_dir = Path(run_dir)
++    repo_root = resolve_repository_root(resolved_run_dir, root=root)
++    before = validate_run(resolved_run_dir, root=repo_root)
++    if not before.ok:
++        raise HarnessCliError(format_errors(before.errors))
++
++    payload = {
++        "requested_at": utc_now(),
++        "requested_by": CODEX_ACTOR,
++        "reason": reason or "operator requested shutdown",
++    }
++    write_json_atomic(scheduler_stop_path(resolved_run_dir), payload)
++    return payload
++
++
++def clear_scheduler_stop_request(run_dir: Path | str) -> None:
++    path = scheduler_stop_path(run_dir)
++    try:
++        path.unlink()
++    except FileNotFoundError:
++        return
++
++
++def validate_scheduler_watch_options(
++    *,
++    poll_interval_seconds: float,
++    max_iterations: int | None,
++    max_seconds: float | None,
++) -> None:
++    if not math.isfinite(poll_interval_seconds):
++        raise HarnessCliError("poll_interval_seconds must be finite")
++    if poll_interval_seconds < 0:
++        raise HarnessCliError("poll_interval_seconds must be non-negative")
++    if poll_interval_seconds == 0 and max_iterations is None and max_seconds is None:
++        raise HarnessCliError(
++            "poll_interval_seconds can be zero only with max_iterations or max_seconds",
++        )
++    if max_iterations is not None and max_iterations < 1:
++        raise HarnessCliError("max_iterations must be at least 1")
++    if max_seconds is not None:
++        if not math.isfinite(max_seconds):
++            raise HarnessCliError("max_seconds must be finite")
++        if max_seconds <= 0:
++            raise HarnessCliError("max_seconds must be greater than 0")
++
++
++def load_scheduler_jobs_for_watch(
++    run_dir: Path | str,
++    *,
++    root: Path | str,
++) -> tuple[list[dict[str, Any]], list[str]]:
++    try:
++        return load_scheduler_jobs(Path(run_dir), root=root), []
++    except HarnessCliError as exc:
++        return [], str(exc).splitlines()
++
++
++def scheduler_stop_requested(
++    run_dir: Path | str,
++) -> tuple[bool, dict[str, Any] | None, list[str]]:
++    path = scheduler_stop_path(run_dir)
++    if not path.exists():
++        return False, None, []
++    try:
++        payload = load_json(path)
++    except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
++        return False, None, [f"{path}: stop request cannot be read: {exc}"]
++    if not isinstance(payload, dict):
++        return False, None, [f"{path}: stop request must be an object"]
++    return True, payload, []
++
++
+ def scheduler_run_once(
+     run_dir: Path | str,
+     *,
+@@ -1868,6 +2057,281 @@ def scheduler_run_once(
+     }
+ 
+ 
++def scheduler_run_watch(
++    run_dir: Path | str,
++    *,
++    poll_interval_seconds: float = 5.0,
++    max_iterations: int | None = None,
++    max_seconds: float | None = None,
++    worker_id: str | None = None,
++    root: Path | str | None = None,
++    sleep_fn: Any = time.sleep,
++    monotonic_fn: Any = time.monotonic,
++) -> dict[str, Any]:
++    validate_scheduler_watch_options(
++        poll_interval_seconds=poll_interval_seconds,
++        max_iterations=max_iterations,
++        max_seconds=max_seconds,
++    )
++    resolved_run_dir = Path(run_dir)
++    repo_root = resolve_repository_root(resolved_run_dir, root=root)
++    before = validate_run(resolved_run_dir, root=repo_root)
++    if not before.ok:
++        raise HarnessCliError(format_errors(before.errors))
++
++    state = load_json(state_path(resolved_run_dir))
++    active_worker_id = worker_id or default_worker_id()
++    write_scheduler_worker(
++        resolved_run_dir,
++        worker_id=active_worker_id,
++        poll_interval_seconds=poll_interval_seconds,
++        max_iterations=max_iterations,
++        max_seconds=max_seconds,
++        root=repo_root,
++    )
++    write_scheduler_heartbeat(
++        resolved_run_dir,
++        worker_id=active_worker_id,
++        iteration=0,
++        status="starting",
++        current_job_id=None,
++    )
++    append_scheduler_event(
++        resolved_run_dir,
++        "worker_started",
++        {"worker_id": active_worker_id},
++    )
++
++    started_monotonic = monotonic_fn()
++    iteration = 0
++    executed_jobs: list[str] = []
++    skipped_jobs: list[str] = []
++    seen_skipped_jobs: set[str] = set()
++    stop_reason = "unknown"
++
++    try:
++        stop_loop = False
++        while not stop_loop:
++            if max_iterations is not None and iteration >= max_iterations:
++                stop_reason = "max_iterations"
++                append_scheduler_event(
++                    resolved_run_dir,
++                    "max_iterations_reached",
++                    {"worker_id": active_worker_id, "iteration": iteration},
++                )
++                break
++            if max_seconds is not None and monotonic_fn() - started_monotonic >= max_seconds:
++                stop_reason = "max_seconds"
++                append_scheduler_event(
++                    resolved_run_dir,
++                    "max_seconds_reached",
++                    {"worker_id": active_worker_id, "iteration": iteration},
++                )
++                break
++
++            stop_requested, stop_payload, stop_errors = scheduler_stop_requested(
++                resolved_run_dir,
++            )
++            if stop_errors:
++                append_scheduler_event(
++                    resolved_run_dir,
++                    "invalid_stop_request",
++                    {"worker_id": active_worker_id, "errors": stop_errors},
++                )
++            if stop_requested:
++                stop_reason = "stop_requested"
++                write_scheduler_heartbeat(
++                    resolved_run_dir,
++                    worker_id=active_worker_id,
++                    iteration=iteration,
++                    status="stopping",
++                    current_job_id=None,
++                )
++                append_scheduler_event(
++                    resolved_run_dir,
++                    "stop_observed",
++                    {"worker_id": active_worker_id, "stop": stop_payload},
++                )
++                break
++
++            iteration += 1
++            append_scheduler_event(
++                resolved_run_dir,
++                "poll_started",
++                {"worker_id": active_worker_id, "iteration": iteration},
++            )
++            jobs, job_errors = load_scheduler_jobs_for_watch(
++                resolved_run_dir,
++                root=repo_root,
++            )
++            if job_errors:
++                write_scheduler_heartbeat(
++                    resolved_run_dir,
++                    worker_id=active_worker_id,
++                    iteration=iteration,
++                    status="warning",
++                    current_job_id=None,
++                )
++                append_scheduler_event(
++                    resolved_run_dir,
++                    "invalid_jobs_observed",
++                    {
++                        "worker_id": active_worker_id,
++                        "iteration": iteration,
++                        "errors": job_errors,
++                    },
++                )
++                sleep_fn(poll_interval_seconds)
++                continue
++
++            ordered_jobs = sorted(jobs, key=lambda job: (job["created_at"], job["job_id"]))
++            queued_jobs = [job for job in ordered_jobs if job["status"] == "queued"]
++            for job in ordered_jobs:
++                job_id = job["job_id"]
++                status = job["status"]
++                if (
++                    status == "running" or status in TERMINAL_JOB_STATUSES
++                ) and job_id not in seen_skipped_jobs and job_id not in executed_jobs:
++                    skipped_jobs.append(job_id)
++                    seen_skipped_jobs.add(job_id)
++            if not queued_jobs:
++                write_scheduler_heartbeat(
++                    resolved_run_dir,
++                    worker_id=active_worker_id,
++                    iteration=iteration,
++                    status="idle",
++                    current_job_id=None,
++                )
++                append_scheduler_event(
++                    resolved_run_dir,
++                    "poll_completed",
++                    {
++                        "worker_id": active_worker_id,
++                        "iteration": iteration,
++                        "executed_jobs": [],
++                    },
++                )
++                sleep_fn(poll_interval_seconds)
++                continue
++
++            executed_this_iteration: list[str] = []
++            for job in queued_jobs:
++                job_id = job["job_id"]
++                write_scheduler_heartbeat(
++                    resolved_run_dir,
++                    worker_id=active_worker_id,
++                    iteration=iteration,
++                    status="running-job",
++                    current_job_id=job_id,
++                )
++                append_scheduler_event(
++                    resolved_run_dir,
++                    "job_started",
++                    {"worker_id": active_worker_id, "job_id": job_id},
++                )
++                executed_job = execute_generic_agent_job(
++                    resolved_run_dir,
++                    job_id,
++                    root=repo_root,
++                )
++                executed_jobs.append(job_id)
++                executed_this_iteration.append(job_id)
++                append_scheduler_event(
++                    resolved_run_dir,
++                    "job_completed",
++                    {
++                        "worker_id": active_worker_id,
++                        "job_id": job_id,
++                        "status": executed_job["status"],
++                    },
++                )
++                stop_requested, stop_payload, stop_errors = scheduler_stop_requested(
++                    resolved_run_dir,
++                )
++                if stop_errors:
++                    append_scheduler_event(
++                        resolved_run_dir,
++                        "invalid_stop_request",
++                        {"worker_id": active_worker_id, "errors": stop_errors},
++                    )
++                if stop_requested:
++                    stop_reason = "stop_requested"
++                    write_scheduler_heartbeat(
++                        resolved_run_dir,
++                        worker_id=active_worker_id,
++                        iteration=iteration,
++                        status="stopping",
++                        current_job_id=None,
++                    )
++                    append_scheduler_event(
++                        resolved_run_dir,
++                        "stop_observed",
++                        {"worker_id": active_worker_id, "stop": stop_payload},
++                    )
++                    stop_loop = True
++                    break
++
++            if stop_loop:
++                continue
++
++            write_scheduler_heartbeat(
++                resolved_run_dir,
++                worker_id=active_worker_id,
++                iteration=iteration,
++                status="sleeping",
++                current_job_id=None,
++            )
++            append_scheduler_event(
++                resolved_run_dir,
++                "poll_completed",
++                {
++                    "worker_id": active_worker_id,
++                    "iteration": iteration,
++                    "executed_jobs": executed_this_iteration,
++                },
++            )
++            sleep_fn(poll_interval_seconds)
++    except Exception:
++        write_scheduler_heartbeat(
++            resolved_run_dir,
++            worker_id=active_worker_id,
++            iteration=iteration,
++            status="failed",
++            current_job_id=None,
++        )
++        append_scheduler_event(
++            resolved_run_dir,
++            "worker_failed",
++            {"worker_id": active_worker_id, "iteration": iteration},
++        )
++        raise
++
++    write_scheduler_heartbeat(
++        resolved_run_dir,
++        worker_id=active_worker_id,
++        iteration=iteration,
++        status="stopped",
++        current_job_id=None,
++    )
++    append_scheduler_event(
++        resolved_run_dir,
++        "worker_stopped",
++        {
++            "worker_id": active_worker_id,
++            "iteration": iteration,
++            "stop_reason": stop_reason,
++        },
++    )
++    return {
++        "run_id": state["run_id"],
++        "worker_id": active_worker_id,
++        "iterations": iteration,
++        "executed_jobs": executed_jobs,
++        "skipped_jobs": skipped_jobs,
++        "stop_reason": stop_reason,
++    }
++
++
+ def aggregate_jobs(
+     run_dir: Path | str,
+     *,
+@@ -2001,6 +2465,66 @@ def run_generic_agent(
+     return execute_generic_agent_job(run_dir, job_id, root=root)
+ 
+ 
++def start_scheduler(
++    run_dir: Path | str,
++    *,
++    poll_interval_seconds: float = 5.0,
++    max_iterations: int | None = None,
++    max_seconds: float | None = None,
++    worker_id: str | None = None,
++    root: Path | str | None = None,
++) -> dict[str, Any]:
++    validate_scheduler_watch_options(
++        poll_interval_seconds=poll_interval_seconds,
++        max_iterations=max_iterations,
++        max_seconds=max_seconds,
++    )
++    resolved_run_dir = Path(run_dir)
++    repo_root = resolve_repository_root(resolved_run_dir, root=root)
++    before = validate_run(resolved_run_dir, root=repo_root)
++    if not before.ok:
++        raise HarnessCliError(format_errors(before.errors))
++
++    active_worker_id = worker_id or default_worker_id()
++    clear_scheduler_stop_request(resolved_run_dir)
++    command = [
++        sys.executable,
++        "-m",
++        "harness.cli",
++        "run-scheduler",
++        str(resolved_run_dir.resolve(strict=False)),
++        "--watch",
++        "--poll-interval-seconds",
++        str(poll_interval_seconds),
++        "--worker-id",
++        active_worker_id,
++    ]
++    if max_iterations is not None:
++        command.extend(["--max-iterations", str(max_iterations)])
++    if max_seconds is not None:
++        command.extend(["--max-seconds", str(max_seconds)])
++
++    creationflags = 0
++    if os.name == "nt":
++        creationflags = subprocess.CREATE_NEW_PROCESS_GROUP
++        creationflags |= getattr(subprocess, "DETACHED_PROCESS", 0)
++    process = subprocess.Popen(
++        command,
++        cwd=repo_root,
++        stdin=subprocess.DEVNULL,
++        stdout=subprocess.DEVNULL,
++        stderr=subprocess.DEVNULL,
++        creationflags=creationflags,
++        start_new_session=os.name != "nt",
++    )
++    return {
++        "run_id": load_json(state_path(resolved_run_dir))["run_id"],
++        "worker_id": active_worker_id,
++        "pid": process.pid,
++        "command": command,
++    }
++
++
+ def run_agent_subprocess(
+     command: list[str],
+     *,
+@@ -2108,6 +2632,7 @@ def write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
+     temp_path: Path | None = None
+     replaced = False
+     try:
++        path.parent.mkdir(parents=True, exist_ok=True)
+         with tempfile.NamedTemporaryFile(
+             "w",
+             dir=path.parent,
+@@ -2121,10 +2646,19 @@ def write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
+             temp_file.flush()
+             os.fsync(temp_file.fileno())
+ 
+-        temp_path.replace(path)
++        retry_seconds = ATOMIC_REPLACE_RETRY_SECONDS
++        for attempt in range(ATOMIC_REPLACE_ATTEMPTS):
++            try:
++                temp_path.replace(path)
++                break
++            except PermissionError:
++                if attempt + 1 == ATOMIC_REPLACE_ATTEMPTS:
++                    raise
++                time.sleep(retry_seconds)
++                retry_seconds *= 2
+         replaced = True
+     except OSError as exc:
+-        raise HarnessCliError(f"failed to write state atomically: {exc}") from exc
++        raise HarnessCliError(f"failed to write {path} atomically: {exc}") from exc
+     finally:
+         if temp_path is not None:
+             try:
+@@ -2198,7 +2732,30 @@ def build_parser() -> argparse.ArgumentParser:
+         help="Run the local async scheduler for queued jobs.",
+     )
+     scheduler.add_argument("run_dir")
+-    scheduler.add_argument("--once", action="store_true", required=True)
++    scheduler_mode = scheduler.add_mutually_exclusive_group(required=True)
++    scheduler_mode.add_argument("--once", action="store_true")
++    scheduler_mode.add_argument("--watch", action="store_true")
++    scheduler.add_argument("--poll-interval-seconds", type=float, default=5.0)
++    scheduler.add_argument("--max-iterations", type=int)
++    scheduler.add_argument("--max-seconds", type=float)
++    scheduler.add_argument("--worker-id")
++
++    start_scheduler_parser = subparsers.add_parser(
++        "start-scheduler",
++        help="Start a detached local scheduler worker for a Harness run.",
++    )
++    start_scheduler_parser.add_argument("run_dir")
++    start_scheduler_parser.add_argument("--poll-interval-seconds", type=float, default=5.0)
++    start_scheduler_parser.add_argument("--max-iterations", type=int)
++    start_scheduler_parser.add_argument("--max-seconds", type=float)
++    start_scheduler_parser.add_argument("--worker-id")
++
++    stop_scheduler_parser = subparsers.add_parser(
++        "stop-scheduler",
++        help="Request graceful stop for a scheduler worker.",
++    )
++    stop_scheduler_parser.add_argument("run_dir")
++    stop_scheduler_parser.add_argument("--reason")
+ 
+     aggregate = subparsers.add_parser(
+         "aggregate-jobs",
+@@ -2324,11 +2881,49 @@ def main(argv: list[str] | None = None) -> int:
+             return 0
+ 
+         if args.command == "run-scheduler":
+-            summary = scheduler_run_once(args.run_dir)
++            if args.once:
++                summary = scheduler_run_once(args.run_dir)
++                print(
++                    f"scheduler: {summary['run_id']} "
++                    f"executed={len(summary['executed_jobs'])} "
++                    f"skipped={len(summary['skipped_jobs'])}",
++                )
++                return 0
++            summary = scheduler_run_watch(
++                args.run_dir,
++                poll_interval_seconds=args.poll_interval_seconds,
++                max_iterations=args.max_iterations,
++                max_seconds=args.max_seconds,
++                worker_id=args.worker_id,
++            )
+             print(
+-                f"scheduler: {summary['run_id']} "
++                f"scheduler-watch: {summary['run_id']} "
++                f"iterations={summary['iterations']} "
+                 f"executed={len(summary['executed_jobs'])} "
+-                f"skipped={len(summary['skipped_jobs'])}",
++                f"stop_reason={summary['stop_reason']}",
++            )
++            return 0
++
++        if args.command == "start-scheduler":
++            result = start_scheduler(
++                args.run_dir,
++                poll_interval_seconds=args.poll_interval_seconds,
++                max_iterations=args.max_iterations,
++                max_seconds=args.max_seconds,
++                worker_id=args.worker_id,
++            )
++            print(
++                f"started scheduler: {result['run_id']} "
++                f"worker_id={result['worker_id']} pid={result['pid']}",
++            )
++            return 0
++
++        if args.command == "stop-scheduler":
++            stop = request_scheduler_stop(args.run_dir, reason=args.reason)
++            print(
++                f"stop requested: "
++                f"{load_json(state_path(Path(args.run_dir)))['run_id']} "
++                f"{stop['reason']}",
+             )
+             return 0
+ 
+diff --git a/harness/memory/progress.md b/harness/memory/progress.md
+index 03d5597..3bd4b08 100644
+--- a/harness/memory/progress.md
++++ b/harness/memory/progress.md
+@@ -20,6 +20,8 @@ Phase 4 async job substrate is implemented in the current source tree. It added
+ 
+ Phase 5.2 local scheduler smoke is implemented in `harness/runs/2026-06-22-phase-5-live-scheduler-smoke`. The live run queued `phase5-live-scheduler-agent` with `queue-generic-agent`, executed it with `run-scheduler --once` (`executed=1 skipped=0`), and wrote `jobs/aggregation.json` with `aggregate-jobs` (`consumed=1 incomplete=0`). The scheduler did not mutate `state.json`; Codex indexed `agent-job`, `agent-result`, and `aggregation` evidence explicitly before completing the run. Residual risks: watch mode, multi-worker concurrency, cloud queue behavior, and automatic stale-running recovery remain unverified; this proves local single-process scheduler execution only; orphaned running jobs are skipped, not recovered.
+ 
++Phase 6 bounded local scheduler watch mode is implemented in `harness/runs/2026-06-22-phase-6-scheduler-watch-mode`. The live run queued `phase6-watch-agent`, executed it with `run-scheduler --watch --poll-interval-seconds 0.1 --max-iterations 3 --worker-id phase6-live-watch`, exercised `stop-scheduler`, and aggregated `jobs/aggregation.json` with `consumed=1 incomplete=0`. The scheduler wrote `jobs/scheduler/worker.json`, `jobs/scheduler/heartbeat.json`, and JSONL `jobs/scheduler/events.log`; the heartbeat ended with `status=stopped`, events included `worker_started` and `job_completed`, and the scheduler did not mutate `state.json`. Codex indexed `agent-job`, `agent-result`, and `aggregation` evidence explicitly before completing the run. Residual risks: heartbeat is observational only, stop requests are cooperative and do not interrupt running jobs, and double-claim risk remains if multiple workers are launched against the same run. Multi-worker claim locking, automatic stale-running recovery, cloud queue execution, and cross-run queue execution are not implemented.
++
+ The Phase 5.2 `master` baseline also adds team-repeatable validation entrypoints and packaged CLI hardening:
+ 
+ - `harness.cli` now separates package resources (`harness/schemas`, `harness/templates`) from repository root discovery used for evidence paths. Packaged console-script execution can validate absolute run directories from outside the repository.
+@@ -33,14 +35,13 @@ The pre-merge local verification baseline for the Phase 5.2 scheduler work is:
+ - all 12 source-controlled `harness/runs/*` directories validated successfully, including `2026-06-22-phase-5-live-scheduler-smoke`
+ - local non-editable package smoke passed from outside the repository cwd: packaged `harness.exe` validated every source-controlled run, queued a scheduler smoke job, ran `run-scheduler --once`, generated aggregation, indexed `agent-job` / `agent-result` / `aggregation`, and validated the temporary package-smoke run
+ - `git diff --check` passed locally with no whitespace errors
++- Phase 6 Task 7 verification baseline is `python -m unittest tests.test_async_job_artifacts.Phase4ClosureRunTest.test_phase6_watch_run_was_produced_by_watch_scheduler_path -v`, `python -m harness.cli validate harness/runs/2026-06-22-phase-6-scheduler-watch-mode`, and `git diff --check`.
+ - real Claude Code review adapter output is indexed under the Phase 3 run and under the Phase 5.2 live scheduler smoke run; the Phase 5.2 review returned `findings` with no medium, high, or critical findings, and `reviews/phase5-code-review/review-decision.json` records `findings-triaged -> reviewed`
+ 
+ Follow-up Phase 3 provenance hardening now rejects empty `source_evidence` for review-result decisions, duplicate indexed `review-decision.json` artifacts, and mismatched `severity_counts` when linked review findings can be computed. Historical runs still validate because none indexed a pre-existing `review-decision.json` except the updated Phase 3 run.
+ 
+ ## Next Step
+ 
+-Phase 5.2 release closure is complete. The Phase 5.2 implementation baseline was pushed to `master` at `b314474f3abbcc933d4a0154050e19ecc43a7621` (`fix: clarify aggregation classification error`), and GitHub Actions CI run `27924953687` / `CI #9` for that `master` push completed with `conclusion=success` on `2026-06-22T02:00:38Z`.
+-
+-No Phase 5.2 release tag is recorded; GitHub currently has no repository tags. The remote branch `codex/phase5-live-scheduler` points at the same SHA as `master`, and `codex/phase4-run-ci-package` is an older merged branch. They are cleanup candidates only and do not block the durable release state.
++Phase 6 Task 7 live watch run closure is complete locally. The current remote branch status supplied by the controller was verified with `git ls-remote --heads origin master codex/phase5-live-scheduler codex/phase4-run-ci-package`: `refs/heads/master` and `refs/heads/codex/phase5-live-scheduler` both point at `fca6ae36aaf68c6927ae931afea2df70ecbecb08`, while `refs/heads/codex/phase4-run-ci-package` points at `c15fea2c6f897fd2a7b8decc5da28d4c054fa22e`. The old concern that `codex/phase5-live-scheduler` was stale relative to `master` is no longer current; the branch is a cleanup candidate but is not stale relative to `master` per that verified command.
+ 
+-Next implementation choice: design the next scheduler slice: watch mode, stale-running detection, or multi-worker claim locking.
++Next implementation choice: implement multi-worker claim locking or automatic stale-running recovery before claiming concurrent scheduler safety.
+diff --git a/harness/runs/2026-06-22-phase-6-scheduler-watch-mode/handoff.md b/harness/runs/2026-06-22-phase-6-scheduler-watch-mode/handoff.md
+new file mode 100644
+index 0000000..9a6b3c3
+--- /dev/null
++++ b/harness/runs/2026-06-22-phase-6-scheduler-watch-mode/handoff.md
+@@ -0,0 +1,62 @@
++---
++run_id: 2026-06-22-phase-6-scheduler-watch-mode
++schema_version: 0.1.0
++changed:
++  - "Created a source-controlled Phase 6 live scheduler watch smoke run."
++  - "Queued phase6-watch-agent through queue-generic-agent."
++  - "Executed the queued job through bounded run-scheduler --watch."
++  - "Exercised stop-scheduler after bounded watch execution."
++  - "Aggregated terminal async job evidence through aggregate-jobs."
++  - "Indexed agent-job, agent-result, aggregation, verification, review-waiver, and handoff evidence."
++verified:
++  - "queue-generic-agent printed queued generic-agent: 2026-06-22-phase-6-scheduler-watch-mode/phase6-watch-agent"
++  - "run-scheduler --watch printed scheduler-watch: 2026-06-22-phase-6-scheduler-watch-mode iterations=3 executed=1 stop_reason=max_iterations"
++  - "stop-scheduler printed stop requested: 2026-06-22-phase-6-scheduler-watch-mode live run stop command exercised after bounded watch"
++  - "aggregate-jobs printed aggregated jobs: 2026-06-22-phase-6-scheduler-watch-mode consumed=1 incomplete=0"
++  - "state.json SHA256 was unchanged by run-scheduler --watch"
++  - "worker.json and heartbeat.json identify phase6-live-watch"
++  - "heartbeat.json ended with stopped status"
++  - "events.log includes worker_started and job_completed"
++  - "raw.log contains phase6 scheduler watch agent wrote output"
++not_verified:
++  - "Multi-worker claim locking."
++  - "Automatic stale-running recovery."
++  - "Cloud queue execution."
++  - "Cross-run queue execution."
++residual_risks:
++  - "Heartbeat is observational only."
++  - "Stop requests are cooperative and do not interrupt running jobs."
++  - "Double-claim risk remains if multiple workers are launched against the same run."
++next_step: "Use this bounded local watch smoke as the Phase 6 baseline before implementing multi-worker claim locking or stale-running recovery."
++memory_update: updated
++memory_files:
++  - "harness/memory/progress.md"
++---
++
++# Handoff
++
++## What Changed
++
++Created a live Phase 6 run whose async job artifacts were produced by the real `queue-generic-agent` plus bounded `run-scheduler --watch` path. The scheduler wrote `worker.json`, `heartbeat.json`, and JSONL `events.log`; Codex then indexed the consumed async evidence and advanced state.
++
++## Evidence
++
++- `jobs/phase6-watch-agent/input.json`
++- `jobs/phase6-watch-agent/job.json`
++- `jobs/phase6-watch-agent/output.json`
++- `jobs/phase6-watch-agent/raw.log`
++- `jobs/scheduler/worker.json`
++- `jobs/scheduler/heartbeat.json`
++- `jobs/scheduler/events.log`
++- `jobs/scheduler/stop.json`
++- `jobs/aggregation.json`
++
++`input.json` is retained as historical runtime input from this worktree execution. Its absolute artifact paths document what the scheduler used for this run; they are not a portable replay interface.
++
++## State
++
++completed
++
++## Risks
++
++This run proves bounded local watch execution only. Multi-worker claim locking, automatic stale-running recovery, cloud queue execution, and cross-run queue execution are not implemented. Heartbeat data is observational only, stop requests are cooperative, and double-claim risk remains if multiple workers are launched against the same run.
+diff --git a/harness/runs/2026-06-22-phase-6-scheduler-watch-mode/jobs/aggregation.json b/harness/runs/2026-06-22-phase-6-scheduler-watch-mode/jobs/aggregation.json
+new file mode 100644
+index 0000000..18f2f29
+--- /dev/null
++++ b/harness/runs/2026-06-22-phase-6-scheduler-watch-mode/jobs/aggregation.json
+@@ -0,0 +1,22 @@
++{
++  "run_id": "2026-06-22-phase-6-scheduler-watch-mode",
++  "generated_at": "2026-06-22T05:23:27Z",
++  "consumed_jobs": [
++    "phase6-watch-agent"
++  ],
++  "succeeded_jobs": [
++    "phase6-watch-agent"
++  ],
++  "failed_jobs": [],
++  "timeout_jobs": [],
++  "cancelled_jobs": [],
++  "incomplete_jobs": [],
++  "findings": [],
++  "conflicts": [],
++  "recommended_transition": null,
++  "residual_risks": [
++    "Heartbeat observational only",
++    "Stop cooperative and does not interrupt running jobs",
++    "Double-claim risk remains"
++  ]
++}
+diff --git a/harness/runs/2026-06-22-phase-6-scheduler-watch-mode/jobs/phase6-watch-agent/input.json b/harness/runs/2026-06-22-phase-6-scheduler-watch-mode/jobs/phase6-watch-agent/input.json
+new file mode 100644
+index 0000000..8102bb9
+--- /dev/null
++++ b/harness/runs/2026-06-22-phase-6-scheduler-watch-mode/jobs/phase6-watch-agent/input.json
+@@ -0,0 +1,15 @@
++{
++  "run_id": "2026-06-22-phase-6-scheduler-watch-mode",
++  "job_id": "phase6-watch-agent",
++  "agent": "generic-cli-agent",
++  "adapter": "generic-cli-agent",
++  "command": [
++    "python",
++    "..\\..\\scripts\\watch-smoke.py"
++  ],
++  "created_at": "2026-06-22T05:22:40Z",
++  "timeout_seconds": 30,
++  "input_file": "C:\\ai\\ai-coding-harness\\harness\\runs\\2026-06-22-phase-6-scheduler-watch-mode\\jobs\\phase6-watch-agent\\input.json",
++  "output_file": "C:\\ai\\ai-coding-harness\\harness\\runs\\2026-06-22-phase-6-scheduler-watch-mode\\jobs\\phase6-watch-agent\\output.json",
++  "raw_log_file": "C:\\ai\\ai-coding-harness\\harness\\runs\\2026-06-22-phase-6-scheduler-watch-mode\\jobs\\phase6-watch-agent\\raw.log"
++}
+diff --git a/harness/runs/2026-06-22-phase-6-scheduler-watch-mode/jobs/phase6-watch-agent/job.json b/harness/runs/2026-06-22-phase-6-scheduler-watch-mode/jobs/phase6-watch-agent/job.json
+new file mode 100644
+index 0000000..ae7481f
+--- /dev/null
++++ b/harness/runs/2026-06-22-phase-6-scheduler-watch-mode/jobs/phase6-watch-agent/job.json
+@@ -0,0 +1,20 @@
++{
++  "job_id": "phase6-watch-agent",
++  "run_id": "2026-06-22-phase-6-scheduler-watch-mode",
++  "agent": "generic-cli-agent",
++  "adapter": "generic-cli-agent",
++  "status": "succeeded",
++  "input_file": "input.json",
++  "output_file": "output.json",
++  "raw_log_file": "raw.log",
++  "created_at": "2026-06-22T05:22:40Z",
++  "started_at": "2026-06-22T05:22:55Z",
++  "completed_at": "2026-06-22T05:22:55Z",
++  "timeout_seconds": 30,
++  "error_reason": null,
++  "provenance": {
++    "agent": "generic-cli-agent",
++    "adapter_version": "0.1.0",
++    "runtime": "local-cli"
++  }
++}
+diff --git a/harness/runs/2026-06-22-phase-6-scheduler-watch-mode/jobs/phase6-watch-agent/output.json b/harness/runs/2026-06-22-phase-6-scheduler-watch-mode/jobs/phase6-watch-agent/output.json
+new file mode 100644
+index 0000000..407172d
+--- /dev/null
++++ b/harness/runs/2026-06-22-phase-6-scheduler-watch-mode/jobs/phase6-watch-agent/output.json
+@@ -0,0 +1,27 @@
++{
++  "run_id": "2026-06-22-phase-6-scheduler-watch-mode",
++  "job_id": "phase6-watch-agent",
++  "agent": "generic-cli-agent",
++  "adapter": "generic-cli-agent",
++  "status": "passed",
++  "summary": "Phase 6 scheduler watch smoke completed.",
++  "findings": [],
++  "evidence": [
++    {
++      "path": "jobs/phase6-watch-agent/raw.log",
++      "description": "Raw stdout and stderr captured from the watch-executed smoke agent."
++    }
++  ],
++  "not_tested": [
++    "Multi-worker claim locking",
++    "Automatic stale-running recovery",
++    "Cloud queue execution",
++    "Cross-run queue execution"
++  ],
++  "residual_risks": [
++    "Heartbeat observational only",
++    "Stop cooperative and does not interrupt running jobs",
++    "Double-claim risk remains"
++  ],
++  "generated_at": "2026-06-22T05:22:55Z"
++}
+diff --git a/harness/runs/2026-06-22-phase-6-scheduler-watch-mode/jobs/phase6-watch-agent/raw.log b/harness/runs/2026-06-22-phase-6-scheduler-watch-mode/jobs/phase6-watch-agent/raw.log
+new file mode 100644
+index 0000000..cb47028
+--- /dev/null
++++ b/harness/runs/2026-06-22-phase-6-scheduler-watch-mode/jobs/phase6-watch-agent/raw.log
+@@ -0,0 +1,8 @@
++command: ["python", "..\\..\\scripts\\watch-smoke.py"]
++returncode: 0
++
++stdout:
++phase6 scheduler watch agent wrote output
++
++
++stderr:
+diff --git a/harness/runs/2026-06-22-phase-6-scheduler-watch-mode/jobs/scheduler/events.log b/harness/runs/2026-06-22-phase-6-scheduler-watch-mode/jobs/scheduler/events.log
+new file mode 100644
+index 0000000..ac84fa8
+--- /dev/null
++++ b/harness/runs/2026-06-22-phase-6-scheduler-watch-mode/jobs/scheduler/events.log
+@@ -0,0 +1,11 @@
++{"detail": {"worker_id": "phase6-live-watch"}, "event": "worker_started", "ts": "2026-06-22T05:22:55Z"}
++{"detail": {"iteration": 1, "worker_id": "phase6-live-watch"}, "event": "poll_started", "ts": "2026-06-22T05:22:55Z"}
++{"detail": {"job_id": "phase6-watch-agent", "worker_id": "phase6-live-watch"}, "event": "job_started", "ts": "2026-06-22T05:22:55Z"}
++{"detail": {"job_id": "phase6-watch-agent", "status": "succeeded", "worker_id": "phase6-live-watch"}, "event": "job_completed", "ts": "2026-06-22T05:22:55Z"}
++{"detail": {"executed_jobs": ["phase6-watch-agent"], "iteration": 1, "worker_id": "phase6-live-watch"}, "event": "poll_completed", "ts": "2026-06-22T05:22:55Z"}
++{"detail": {"iteration": 2, "worker_id": "phase6-live-watch"}, "event": "poll_started", "ts": "2026-06-22T05:22:56Z"}
++{"detail": {"executed_jobs": [], "iteration": 2, "worker_id": "phase6-live-watch"}, "event": "poll_completed", "ts": "2026-06-22T05:22:56Z"}
++{"detail": {"iteration": 3, "worker_id": "phase6-live-watch"}, "event": "poll_started", "ts": "2026-06-22T05:22:56Z"}
++{"detail": {"executed_jobs": [], "iteration": 3, "worker_id": "phase6-live-watch"}, "event": "poll_completed", "ts": "2026-06-22T05:22:56Z"}
++{"detail": {"iteration": 3, "worker_id": "phase6-live-watch"}, "event": "max_iterations_reached", "ts": "2026-06-22T05:22:56Z"}
++{"detail": {"iteration": 3, "stop_reason": "max_iterations", "worker_id": "phase6-live-watch"}, "event": "worker_stopped", "ts": "2026-06-22T05:22:56Z"}
+diff --git a/harness/runs/2026-06-22-phase-6-scheduler-watch-mode/jobs/scheduler/heartbeat.json b/harness/runs/2026-06-22-phase-6-scheduler-watch-mode/jobs/scheduler/heartbeat.json
+new file mode 100644
+index 0000000..611e3de
+--- /dev/null
++++ b/harness/runs/2026-06-22-phase-6-scheduler-watch-mode/jobs/scheduler/heartbeat.json
+@@ -0,0 +1,7 @@
++{
++  "worker_id": "phase6-live-watch",
++  "last_seen_at": "2026-06-22T05:22:56Z",
++  "iteration": 3,
++  "status": "stopped",
++  "current_job_id": null
++}
+diff --git a/harness/runs/2026-06-22-phase-6-scheduler-watch-mode/jobs/scheduler/stop.json b/harness/runs/2026-06-22-phase-6-scheduler-watch-mode/jobs/scheduler/stop.json
+new file mode 100644
+index 0000000..5b6dadc
+--- /dev/null
++++ b/harness/runs/2026-06-22-phase-6-scheduler-watch-mode/jobs/scheduler/stop.json
+@@ -0,0 +1,5 @@
++{
++  "requested_at": "2026-06-22T05:23:17Z",
++  "requested_by": "codex",
++  "reason": "live run stop command exercised after bounded watch"
++}
+diff --git a/harness/runs/2026-06-22-phase-6-scheduler-watch-mode/jobs/scheduler/worker.json b/harness/runs/2026-06-22-phase-6-scheduler-watch-mode/jobs/scheduler/worker.json
+new file mode 100644
+index 0000000..957b4c8
+--- /dev/null
++++ b/harness/runs/2026-06-22-phase-6-scheduler-watch-mode/jobs/scheduler/worker.json
+@@ -0,0 +1,10 @@
++{
++  "worker_id": "phase6-live-watch",
++  "pid": 8708,
++  "started_at": "2026-06-22T05:22:55Z",
++  "run_dir": "C:\\ai\\ai-coding-harness\\harness\\runs\\2026-06-22-phase-6-scheduler-watch-mode",
++  "poll_interval": 0.1,
++  "max_iterations": 3,
++  "max_seconds": null,
++  "cli_version": "0.2.0"
++}
+diff --git a/harness/runs/2026-06-22-phase-6-scheduler-watch-mode/plan.md b/harness/runs/2026-06-22-phase-6-scheduler-watch-mode/plan.md
+new file mode 100644
+index 0000000..54f2b99
+--- /dev/null
++++ b/harness/runs/2026-06-22-phase-6-scheduler-watch-mode/plan.md
+@@ -0,0 +1,66 @@
++---
++run_id: 2026-06-22-phase-6-scheduler-watch-mode
++schema_version: 0.1.0
++workflow: standard-agent-adapter-change
++acceptance:
++  - "queue-generic-agent writes a queued job under jobs/phase6-watch-agent."
++  - "run-scheduler --watch executes the queued job and records scheduler metadata."
++  - "worker.json, heartbeat.json, and JSONL events.log identify worker phase6-live-watch."
++  - "heartbeat.json records stopped status when bounded watch exits."
++  - "events.log records worker_started and job_completed."
++  - "The scheduler does not mutate state.json."
++  - "aggregate-jobs writes jobs/aggregation.json and reports consumed=1 incomplete=0."
++  - "Codex indexes agent-job, agent-result, and aggregation evidence in order."
++  - "The run reaches completed with verification, review waiver, and handoff evidence."
++verification:
++  - "python -m unittest tests.test_async_job_artifacts.Phase4ClosureRunTest.test_phase6_watch_run_was_produced_by_watch_scheduler_path -v"
++  - "python -m harness.cli validate harness/runs/2026-06-22-phase-6-scheduler-watch-mode"
++  - "git diff --check"
++review_plan:
++  - "Use review-waiver.md scoped to this run record only; do not waive review for harness/cli.py, CI, tests, or scheduler implementation code."
++constraints:
++  - "External agent must read HARNESS_AGENT_INPUT_FILE."
++  - "External agent must write HARNESS_AGENT_OUTPUT_FILE."
++  - "External agent stdout must be exactly phase6 scheduler watch agent wrote output."
++  - "Scheduler and external agent must not edit state.json."
++recovery_strategy: "Remove this new run directory, the targeted test assertion, and durable doc additions if the live watch scheduler smoke cannot be made valid."
++residual_risk_owner: codex
++---
++
++# Plan
++
++## Goal
++
++Produce a source-controlled Phase 6 run whose async artifacts and scheduler metadata are created by the real local watch scheduler path.
++
++## Files
++
++- `scripts/watch-smoke.py`
++- `jobs/phase6-watch-agent/*`
++- `jobs/scheduler/worker.json`
++- `jobs/scheduler/heartbeat.json`
++- `jobs/scheduler/events.log`
++- `jobs/scheduler/stop.json`
++- `jobs/aggregation.json`
++- `verification.md`
++- `review-waiver.md`
++- `handoff.md`
++- `state.json`
++
++## Steps
++
++1. Initialize this run with `harness.cli init-run`.
++2. Advance the run through `triaged`, `planned`, and `in_progress`.
++3. Fill `task.md`, `triage.md`, and `plan.md`.
++4. Add `scripts/watch-smoke.py`.
++5. Queue `phase6-watch-agent` through `queue-generic-agent`.
++6. Execute the queued job through bounded `run-scheduler --watch`.
++7. Exercise `stop-scheduler` after bounded watch execution.
++8. Aggregate terminal jobs through `aggregate-jobs`.
++9. Index `agent-job`, `agent-result`, and `aggregation` evidence in that order.
++10. Advance to `implemented`, write and index verification, review waiver, and handoff evidence.
++11. Advance through `verified`, `reviewed`, and `completed`, then validate the run.
++
++## Out of Scope
++
++Multi-worker claim locking, automatic stale-running recovery, cloud queue execution, and cross-run queue execution are not implemented.
+diff --git a/harness/runs/2026-06-22-phase-6-scheduler-watch-mode/review-waiver.md b/harness/runs/2026-06-22-phase-6-scheduler-watch-mode/review-waiver.md
+new file mode 100644
+index 0000000..fa1a187
+--- /dev/null
++++ b/harness/runs/2026-06-22-phase-6-scheduler-watch-mode/review-waiver.md
+@@ -0,0 +1,47 @@
++---
++run_id: 2026-06-22-phase-6-scheduler-watch-mode
++schema_version: 0.1.0
++waiver_scope: "Run-record-only live scheduler watch smoke artifacts."
++waiver_reason: "No runtime implementation changed; this run documents an already-implemented bounded watch scheduler path."
++not_waived:
++  - "harness/cli.py runtime implementation changes."
++  - "State schema changes."
++  - "Evidence validation changes."
++  - "CI or packaging changes."
++  - "tests/test_async_job_artifacts.py."
++  - "README.md."
++  - "docs/INDEX.md."
++  - "harness/memory/progress.md."
++residual_risks:
++  - "Heartbeat is observational only."
++  - "Stop requests are cooperative and do not interrupt running jobs."
++  - "Double-claim risk remains if multiple workers are launched against the same run."
++owner: codex
++---
++
++# Review Waiver
++
++## Decision
++
++External review is waived only for run-record artifacts under `harness/runs/2026-06-22-phase-6-scheduler-watch-mode/`. The task does not change scheduler runtime implementation, schemas, or adapter execution behavior.
++
++## Scope
++
++This waiver covers only:
++
++- `harness/runs/2026-06-22-phase-6-scheduler-watch-mode/`
++
++## Not Waived
++
++Runtime scheduler changes, state schema changes, evidence validation behavior, CI changes, packaging changes, durable documentation updates, and tests still require normal review handling.
++
++Spec and quality review on the implementation branch cover the related non-run-record files:
++
++- `tests/test_async_job_artifacts.py`
++- `README.md`
++- `docs/INDEX.md`
++- `harness/memory/progress.md`
++
++## Residual Risks
++
++Heartbeat metadata is observational only. Stop requests are cooperative and do not interrupt running jobs. Double-claim risk remains if multiple workers are launched against the same run.
+diff --git a/harness/runs/2026-06-22-phase-6-scheduler-watch-mode/scripts/watch-smoke.py b/harness/runs/2026-06-22-phase-6-scheduler-watch-mode/scripts/watch-smoke.py
+new file mode 100644
+index 0000000..2064dd4
+--- /dev/null
++++ b/harness/runs/2026-06-22-phase-6-scheduler-watch-mode/scripts/watch-smoke.py
+@@ -0,0 +1,49 @@
++import json
++import os
++from datetime import datetime, timezone
++
++
++def main() -> None:
++    input_file = os.environ["HARNESS_AGENT_INPUT_FILE"]
++    output_file = os.environ["HARNESS_AGENT_OUTPUT_FILE"]
++
++    with open(input_file, "r", encoding="utf-8") as handle:
++        job_input = json.load(handle)
++
++    output = {
++        "run_id": job_input["run_id"],
++        "job_id": job_input["job_id"],
++        "agent": job_input["agent"],
++        "adapter": job_input["adapter"],
++        "status": "passed",
++        "summary": "Phase 6 scheduler watch smoke completed.",
++        "findings": [],
++        "evidence": [
++            {
++                "path": "jobs/phase6-watch-agent/raw.log",
++                "description": "Raw stdout and stderr captured from the watch-executed smoke agent.",
++            }
++        ],
++        "not_tested": [
++            "Multi-worker claim locking",
++            "Automatic stale-running recovery",
++            "Cloud queue execution",
++            "Cross-run queue execution",
++        ],
++        "residual_risks": [
++            "Heartbeat observational only",
++            "Stop cooperative and does not interrupt running jobs",
++            "Double-claim risk remains",
++        ],
++        "generated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
++    }
++
++    with open(output_file, "w", encoding="utf-8") as handle:
++        json.dump(output, handle, indent=2)
++        handle.write("\n")
++
++    print("phase6 scheduler watch agent wrote output")
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/harness/runs/2026-06-22-phase-6-scheduler-watch-mode/state.json b/harness/runs/2026-06-22-phase-6-scheduler-watch-mode/state.json
+new file mode 100644
+index 0000000..8500ba1
+--- /dev/null
++++ b/harness/runs/2026-06-22-phase-6-scheduler-watch-mode/state.json
+@@ -0,0 +1,67 @@
++{
++  "run_id": "2026-06-22-phase-6-scheduler-watch-mode",
++  "harness_version": "0.2.0",
++  "state_schema_version": "0.2.0",
++  "status": "completed",
++  "track": "Standard",
++  "current_workflow": "standard-agent-adapter-change",
++  "owner": "codex",
++  "base_commit": "HEAD",
++  "created_at": "2026-06-22T05:21:18Z",
++  "updated_at": "2026-06-22T05:25:51Z",
++  "external_agents": [
++    {
++      "name": "claude-code",
++      "role": "reviewer",
++      "state_access": "none",
++      "status": "not_requested"
++    }
++  ],
++  "evidence": [
++    {
++      "type": "task",
++      "path": "task.md",
++      "description": "Task definition."
++    },
++    {
++      "type": "triage",
++      "path": "triage.md",
++      "description": "Task triage."
++    },
++    {
++      "type": "plan",
++      "path": "plan.md",
++      "description": "Implementation plan."
++    },
++    {
++      "type": "agent-job",
++      "path": "jobs/phase6-watch-agent/job.json",
++      "description": "Terminal watch-executed async job consumed by Codex."
++    },
++    {
++      "type": "agent-result",
++      "path": "jobs/phase6-watch-agent/output.json",
++      "description": "Structured watch-executed agent result consumed by Codex."
++    },
++    {
++      "type": "aggregation",
++      "path": "jobs/aggregation.json",
++      "description": "Aggregation proving the watch-executed job was consumed."
++    },
++    {
++      "type": "verification",
++      "path": "verification.md",
++      "description": "Verification record for the Phase 6 scheduler watch smoke run."
++    },
++    {
++      "type": "handoff",
++      "path": "handoff.md",
++      "description": "Closure handoff for the Phase 6 scheduler watch smoke run."
++    },
++    {
++      "type": "review-waiver",
++      "path": "review-waiver.md",
++      "description": "Run-record-only review waiver."
++    }
++  ]
++}
+diff --git a/harness/runs/2026-06-22-phase-6-scheduler-watch-mode/task.md b/harness/runs/2026-06-22-phase-6-scheduler-watch-mode/task.md
+new file mode 100644
+index 0000000..2ef7d5b
+--- /dev/null
++++ b/harness/runs/2026-06-22-phase-6-scheduler-watch-mode/task.md
+@@ -0,0 +1,57 @@
++---
++run_id: 2026-06-22-phase-6-scheduler-watch-mode
++schema_version: 0.1.0
++track: Standard
++workflow: standard-agent-adapter-change
++owner: codex
++requested_outcome: "Prove bounded local scheduler watch mode with source-controlled run evidence."
++scope:
++  - "Create a source-controlled Phase 6 live scheduler watch run."
++  - "Queue a generic CLI job through harness.cli queue-generic-agent."
++  - "Execute the queued job through harness.cli run-scheduler --watch."
++  - "Exercise harness.cli stop-scheduler after bounded watch execution."
++  - "Aggregate completed jobs through harness.cli aggregate-jobs."
++  - "Index agent-job, agent-result, and aggregation evidence explicitly."
++non_goals:
++  - "Multi-worker claim locking."
++  - "Automatic stale-running recovery."
++  - "Cloud queue execution."
++  - "Cross-run queue execution."
++constraints:
++  - "The scheduler must write worker.json, heartbeat.json, and JSONL events.log."
++  - "The scheduler must not mutate state.json."
++  - "Codex indexes consumed evidence and advances state."
++  - "External agent output must be structured JSON."
++---
++
++# Task
++
++## Goal
++
++Create a real Phase 6 run proving bounded local scheduler watch mode: `queue-generic-agent` creates a queued job, `run-scheduler --watch` executes it, scheduler metadata is written under `jobs/scheduler/`, `stop-scheduler` records a cooperative stop request, and `aggregate-jobs` consumes the terminal job into `jobs/aggregation.json`.
++
++## Track
++
++Standard.
++
++## Workflow
++
++`standard-agent-adapter-change`.
++
++## Acceptance Criteria
++
++- `queue-generic-agent` prints `queued generic-agent: 2026-06-22-phase-6-scheduler-watch-mode/phase6-watch-agent`.
++- `run-scheduler --watch --poll-interval-seconds 0.1 --max-iterations 3 --worker-id phase6-live-watch` runs the queued job.
++- Scheduler writes `jobs/scheduler/worker.json`, `jobs/scheduler/heartbeat.json`, and JSONL `jobs/scheduler/events.log`.
++- `worker.json` and `heartbeat.json` identify `phase6-live-watch`.
++- `heartbeat.json` ends with status `stopped`.
++- `events.log` includes `worker_started` and `job_completed`.
++- Scheduler and external agent execution do not mutate `state.json`; Codex lifecycle and evidence-indexing commands own state changes.
++- `jobs/phase6-watch-agent/job.json` is terminal and indexed as `agent-job`.
++- `jobs/phase6-watch-agent/output.json` validates and is indexed as `agent-result`.
++- `jobs/aggregation.json` records `consumed_jobs` as `["phase6-watch-agent"]` and `incomplete_jobs` as `[]`.
++- `state.json` reaches `completed`.
++
++## Out of Scope
++
++Multi-worker claim locking, automatic stale-running recovery, cloud queue execution, and cross-run queue execution are not implemented by this run.
+diff --git a/harness/runs/2026-06-22-phase-6-scheduler-watch-mode/triage.md b/harness/runs/2026-06-22-phase-6-scheduler-watch-mode/triage.md
+new file mode 100644
+index 0000000..3f1d90a
+--- /dev/null
++++ b/harness/runs/2026-06-22-phase-6-scheduler-watch-mode/triage.md
+@@ -0,0 +1,51 @@
++---
++run_id: 2026-06-22-phase-6-scheduler-watch-mode
++schema_version: 0.1.0
++track: Standard
++workflow: standard-agent-adapter-change
++review_required: true
++strict_triggers: []
++risk_reasons:
++  - "Records live scheduler watch evidence for an agent adapter workflow."
++  - "Incorrect async evidence indexing would weaken the Harness audit trail."
++  - "Scheduler metadata is observational and must not replace Codex-owned state transitions."
++verification_required:
++  - "Run-local queue plus watch scheduler execution must produce real job artifacts."
++  - "The scheduler must write worker.json, heartbeat.json, and JSONL events.log."
++  - "The scheduler must not mutate state.json."
++  - "aggregate-jobs must write jobs/aggregation.json."
++  - "The completed run must validate."
++---
++
++# Triage
++
++## Track Decision
++
++Standard. This task creates run-record artifacts, durable docs, and a focused regression test for bounded local scheduler watch mode. It does not touch secrets, production state, destructive operations, auth, permissions, database, payments, or privacy-sensitive code.
++
++## Workflow
++
++`standard-agent-adapter-change`.
++
++## Risk Reasons
++
++- The run is source-controlled evidence for Phase 6 scheduler watch behavior.
++- Scheduler evidence is only valid if Codex explicitly indexes the consumed async artifacts.
++- `state.json` authority remains with Codex lifecycle commands; scheduler and external agent output must not mutate it.
++- `worker.json`, `heartbeat.json`, and `events.log` are observational runtime metadata, not state authority.
++
++## Review Requirement
++
++Review handling is required before completion. A review waiver may be used only for the run record artifacts created by this smoke run and must not waive review for `harness/cli.py`, CI, tests, or scheduler implementation code.
++
++## Verification Required
++
++- Prove `queue-generic-agent`, `run-scheduler --watch`, `stop-scheduler`, and `aggregate-jobs` stdout.
++- Validate this run with `harness.cli`.
++- Run the targeted Phase 6 watch scheduler regression test.
++- Confirm scheduler metadata exists and records `phase6-live-watch`.
++- Confirm `aggregation.json` records one consumed job and zero incomplete jobs.
++
++## Out of Scope
++
++Multi-worker claim locking, automatic stale-running recovery, cloud queue execution, and cross-run queue execution are not implemented.
+diff --git a/harness/runs/2026-06-22-phase-6-scheduler-watch-mode/verification.md b/harness/runs/2026-06-22-phase-6-scheduler-watch-mode/verification.md
+new file mode 100644
+index 0000000..dc8e3a9
+--- /dev/null
++++ b/harness/runs/2026-06-22-phase-6-scheduler-watch-mode/verification.md
+@@ -0,0 +1,63 @@
++# Verification
++
++## Commands Run
++
++```powershell
++python -m harness.cli init-run harness/runs/2026-06-22-phase-6-scheduler-watch-mode --run-id 2026-06-22-phase-6-scheduler-watch-mode --track Standard --workflow standard-agent-adapter-change --base-commit HEAD
++python -m harness.cli advance harness/runs/2026-06-22-phase-6-scheduler-watch-mode triaged
++python -m harness.cli advance harness/runs/2026-06-22-phase-6-scheduler-watch-mode planned
++python -m harness.cli advance harness/runs/2026-06-22-phase-6-scheduler-watch-mode in_progress
++python -m harness.cli queue-generic-agent harness/runs/2026-06-22-phase-6-scheduler-watch-mode phase6-watch-agent --agent generic-cli-agent --timeout-seconds 30 -- python ..\..\scripts\watch-smoke.py
++Get-FileHash harness\runs\2026-06-22-phase-6-scheduler-watch-mode\state.json -Algorithm SHA256
++python -m harness.cli run-scheduler harness/runs/2026-06-22-phase-6-scheduler-watch-mode --watch --poll-interval-seconds 0.1 --max-iterations 3 --worker-id phase6-live-watch
++Get-FileHash harness\runs\2026-06-22-phase-6-scheduler-watch-mode\state.json -Algorithm SHA256
++python -m harness.cli stop-scheduler harness/runs/2026-06-22-phase-6-scheduler-watch-mode --reason "live run stop command exercised after bounded watch"
++python -m harness.cli aggregate-jobs harness/runs/2026-06-22-phase-6-scheduler-watch-mode
++python -m harness.cli index-evidence harness/runs/2026-06-22-phase-6-scheduler-watch-mode agent-job jobs/phase6-watch-agent/job.json --description "Terminal watch-executed async job consumed by Codex."
++python -m harness.cli index-evidence harness/runs/2026-06-22-phase-6-scheduler-watch-mode agent-result jobs/phase6-watch-agent/output.json --description "Structured watch-executed agent result consumed by Codex."
++python -m harness.cli index-evidence harness/runs/2026-06-22-phase-6-scheduler-watch-mode aggregation jobs/aggregation.json --description "Aggregation proving the watch-executed job was consumed."
++python -m harness.cli index-evidence harness/runs/2026-06-22-phase-6-scheduler-watch-mode verification verification.md --description "Verification record for the Phase 6 scheduler watch smoke run."
++python -m harness.cli index-evidence harness/runs/2026-06-22-phase-6-scheduler-watch-mode review-waiver review-waiver.md --description "Run-record-only review waiver."
++python -m harness.cli index-evidence harness/runs/2026-06-22-phase-6-scheduler-watch-mode handoff handoff.md --description "Closure handoff for the Phase 6 scheduler watch smoke run."
++python -m harness.cli advance harness/runs/2026-06-22-phase-6-scheduler-watch-mode implemented
++python -m harness.cli advance harness/runs/2026-06-22-phase-6-scheduler-watch-mode verified
++python -m harness.cli advance harness/runs/2026-06-22-phase-6-scheduler-watch-mode reviewed
++python -m harness.cli advance harness/runs/2026-06-22-phase-6-scheduler-watch-mode completed
++python -m unittest tests.test_async_job_artifacts.Phase4ClosureRunTest.test_phase6_watch_run_was_produced_by_watch_scheduler_path -v
++python -m harness.cli validate harness/runs/2026-06-22-phase-6-scheduler-watch-mode
++git diff --check
++git diff --check 68e1929^ 9999bcd0dc3ad52fa6e413decf8d01589674a18b
++```
++
++## Results
++
++- `init-run` exited 0 and printed `initialized run: 2026-06-22-phase-6-scheduler-watch-mode -> draft`.
++- Lifecycle advances to `triaged`, `planned`, and `in_progress` exited 0.
++- `queue-generic-agent` exited 0 and printed `queued generic-agent: 2026-06-22-phase-6-scheduler-watch-mode/phase6-watch-agent`.
++- `run-scheduler --watch` exited 0 and printed `scheduler-watch: 2026-06-22-phase-6-scheduler-watch-mode iterations=3 executed=1 stop_reason=max_iterations`.
++- `state.json` SHA256 was `C194E60395E818864FA2D3998F77EA7E3255341B33A2092A7397E266EE0CD796` immediately before and immediately after `run-scheduler --watch`. This was a point-in-time scheduler-step check; later lifecycle and evidence commands intentionally updated `state.json`.
++- `stop-scheduler` exited 0 and printed `stop requested: 2026-06-22-phase-6-scheduler-watch-mode live run stop command exercised after bounded watch`.
++- `aggregate-jobs` exited 0 and printed `aggregated jobs: 2026-06-22-phase-6-scheduler-watch-mode consumed=1 incomplete=0`.
++- `jobs/phase6-watch-agent/raw.log` contains `phase6 scheduler watch agent wrote output`.
++- `jobs/scheduler/worker.json` records `worker_id` as `phase6-live-watch`.
++- `jobs/scheduler/heartbeat.json` records `worker_id` as `phase6-live-watch` and `status` as `stopped`.
++- `jobs/scheduler/events.log` is JSONL and includes `worker_started` and `job_completed`.
++- `jobs/aggregation.json` contains `consumed_jobs` as `["phase6-watch-agent"]` and `incomplete_jobs` as `[]`.
++- Closure evidence indexing and lifecycle advances through `implemented`, `verified`, `reviewed`, and `completed` exited 0.
++- The targeted Phase 6 watch scheduler regression test exited 0 and passed 1 test.
++- `validate` exited 0 and printed `valid: harness\runs\2026-06-22-phase-6-scheduler-watch-mode`.
++- Pre-commit `git diff --check` exited 0. It printed CRLF replacement warnings for touched text files, but no whitespace errors.
++- `git diff --check 68e1929^ 9999bcd0dc3ad52fa6e413decf8d01589674a18b` exited 0 for the committed Task 7 range through the first follow-up commit. Later follow-up commits must be checked with their exact final commit SHA.
++
++## Not Verified
++
++- Multi-worker claim locking.
++- Automatic stale-running recovery.
++- Cloud queue execution.
++- Cross-run queue execution.
++
++## Residual Risks
++
++- Heartbeat is observational only.
++- Stop requests are cooperative and do not interrupt running jobs.
++- Double-claim risk remains if multiple workers are launched against the same run.
+diff --git a/tests/test_async_job_artifacts.py b/tests/test_async_job_artifacts.py
+index 307856c..fbfb357 100644
+--- a/tests/test_async_job_artifacts.py
++++ b/tests/test_async_job_artifacts.py
+@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
+ PHASE4_RUN = ROOT / "harness" / "runs" / "2026-06-21-phase-4-async-substrate-closure"
+ PHASE4_LIVE_RUN = ROOT / "harness" / "runs" / "2026-06-21-phase-4-live-generic-agent-smoke"
+ PHASE5_LIVE_RUN = ROOT / "harness" / "runs" / "2026-06-22-phase-5-live-scheduler-smoke"
++PHASE6_WATCH_RUN = ROOT / "harness" / "runs" / "2026-06-22-phase-6-scheduler-watch-mode"
+ JOB_SCHEMA = ROOT / "harness" / "schemas" / "job.schema.json"
+ AGGREGATION_SCHEMA = ROOT / "harness" / "schemas" / "aggregation.schema.json"
+ AGENT_RESULT_SCHEMA = ROOT / "harness" / "schemas" / "agent-result.schema.json"
+@@ -96,6 +97,43 @@ class Phase4ClosureRunTest(unittest.TestCase):
+         self.assertEqual(aggregation["consumed_jobs"], ["phase5-live-scheduler-agent"])
+         self.assertEqual(aggregation["incomplete_jobs"], [])
+ 
++    def test_phase6_watch_run_was_produced_by_watch_scheduler_path(self):
++        result = cli.validate_run(PHASE6_WATCH_RUN, root=ROOT)
++        state = json.loads((PHASE6_WATCH_RUN / "state.json").read_text(encoding="utf-8"))
++        evidence_types = {item["type"] for item in state["evidence"]}
++        evidence_paths = {item["path"] for item in state["evidence"]}
++        scheduler_dir = PHASE6_WATCH_RUN / "jobs" / "scheduler"
++        worker = json.loads((scheduler_dir / "worker.json").read_text(encoding="utf-8"))
++        heartbeat = json.loads((scheduler_dir / "heartbeat.json").read_text(encoding="utf-8"))
++        events = [
++            json.loads(line)
++            for line in (scheduler_dir / "events.log").read_text(encoding="utf-8").splitlines()
++        ]
++        aggregation = json.loads(
++            PHASE6_WATCH_RUN.joinpath("jobs", "aggregation.json").read_text(encoding="utf-8")
++        )
++
++        self.assertEqual(result.errors, [])
++        self.assertEqual(state["status"], "completed")
++        self.assertIn("agent-job", evidence_types)
++        self.assertIn("agent-result", evidence_types)
++        self.assertIn("aggregation", evidence_types)
++        self.assertIn("verification", evidence_types)
++        self.assertIn("review-waiver", evidence_types)
++        self.assertIn("handoff", evidence_types)
++        self.assertIn("verification.md", evidence_paths)
++        self.assertIn("review-waiver.md", evidence_paths)
++        self.assertIn("handoff.md", evidence_paths)
++        self.assertEqual(worker["worker_id"], "phase6-live-watch")
++        self.assertEqual(heartbeat["worker_id"], "phase6-live-watch")
++        self.assertEqual(heartbeat["status"], "stopped")
++        self.assertTrue(events)
++        self.assertTrue(all({"ts", "event", "detail"} <= set(event) for event in events))
++        self.assertIn("worker_started", {event["event"] for event in events})
++        self.assertIn("job_completed", {event["event"] for event in events})
++        self.assertEqual(aggregation["consumed_jobs"], ["phase6-watch-agent"])
++        self.assertEqual(aggregation["incomplete_jobs"], [])
++
+ 
+ def minimal_job(status: str = "succeeded") -> dict:
+     return {
+diff --git a/tests/test_generic_agent_adapter.py b/tests/test_generic_agent_adapter.py
+index 6ced149..2232bc0 100644
+--- a/tests/test_generic_agent_adapter.py
++++ b/tests/test_generic_agent_adapter.py
+@@ -1,4 +1,5 @@
+ import json
++import os
+ import subprocess
+ import sys
+ import tempfile
+@@ -819,7 +820,8 @@ class GenericCliAgentOrchestrationTest(unittest.TestCase):
+     def test_scheduler_run_once_aborts_on_semantically_invalid_job_before_executing_any_job(self):
+         with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+             run_dir = Path(raw)
+-            write_json(run_dir / "state.json", minimal_state())
++            original_state = minimal_state()
++            write_json(run_dir / "state.json", original_state)
+             cli.create_generic_agent_job(
+                 run_dir,
+                 "bad-running",
+@@ -856,6 +858,647 @@ class GenericCliAgentOrchestrationTest(unittest.TestCase):
+         self.assertIn("running job requires started_at", str(raised.exception))
+         self.assertEqual(valid_job["status"], "queued")
+ 
++    def test_scheduler_artifacts_split_worker_identity_heartbeat_and_jsonl_events(self):
++        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
++            run_dir = Path(raw)
++            original_state = minimal_state()
++            write_json(run_dir / "state.json", original_state)
++
++            worker = cli.write_scheduler_worker(
++                run_dir,
++                worker_id="worker-test",
++                poll_interval_seconds=0.1,
++                max_iterations=3,
++                max_seconds=None,
++                root=ROOT,
++            )
++            heartbeat = cli.write_scheduler_heartbeat(
++                run_dir,
++                worker_id="worker-test",
++                iteration=1,
++                status="idle",
++                current_job_id=None,
++            )
++            cli.append_scheduler_event(
++                run_dir,
++                "worker_started",
++                {"worker_id": "worker-test"},
++            )
++            cli.append_scheduler_event(
++                run_dir,
++                "poll_completed",
++                {"worker_id": "worker-test", "iteration": 1},
++            )
++
++            scheduler_dir = run_dir / "jobs" / "scheduler"
++            saved_worker = json.loads((scheduler_dir / "worker.json").read_text(encoding="utf-8"))
++            saved_heartbeat = json.loads((scheduler_dir / "heartbeat.json").read_text(encoding="utf-8"))
++            event_lines = (scheduler_dir / "events.log").read_text(encoding="utf-8").splitlines()
++            events = [json.loads(line) for line in event_lines]
++            saved_state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
++
++        self.assertEqual(worker, saved_worker)
++        self.assertEqual(heartbeat, saved_heartbeat)
++        self.assertEqual(saved_state, original_state)
++        self.assertEqual(
++            set(saved_worker),
++            {
++                "worker_id",
++                "pid",
++                "started_at",
++                "run_dir",
++                "poll_interval",
++                "max_iterations",
++                "max_seconds",
++                "cli_version",
++            },
++        )
++        self.assertEqual(
++            set(saved_heartbeat),
++            {
++                "worker_id",
++                "last_seen_at",
++                "iteration",
++                "status",
++                "current_job_id",
++            },
++        )
++        self.assertEqual(saved_worker["worker_id"], "worker-test")
++        self.assertEqual(saved_worker["poll_interval"], 0.1)
++        self.assertEqual(saved_worker["max_iterations"], 3)
++        self.assertEqual(saved_worker["cli_version"], "0.2.0")
++        self.assertIn("pid", saved_worker)
++        self.assertIn("started_at", saved_worker)
++        self.assertNotIn("iteration", saved_worker)
++        self.assertNotIn("status", saved_worker)
++        self.assertEqual(saved_heartbeat["worker_id"], "worker-test")
++        self.assertEqual(saved_heartbeat["iteration"], 1)
++        self.assertEqual(saved_heartbeat["status"], "idle")
++        self.assertIsNone(saved_heartbeat["current_job_id"])
++        self.assertNotIn("pid", saved_heartbeat)
++        self.assertEqual([event["event"] for event in events], ["worker_started", "poll_completed"])
++        for event in events:
++            self.assertIsInstance(event["ts"], str)
++            self.assertIsInstance(event["event"], str)
++            self.assertIsInstance(event["detail"], dict)
++
++    def test_clear_scheduler_stop_request_removes_stale_stop_file(self):
++        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
++            run_dir = Path(raw)
++            original_state = minimal_state()
++            write_json(run_dir / "state.json", original_state)
++            stop = cli.request_scheduler_stop(run_dir, reason="old stop", root=ROOT)
++            stop_path = run_dir / "jobs" / "scheduler" / "stop.json"
++
++            cli.clear_scheduler_stop_request(run_dir)
++            exists_after_clear = stop_path.exists()
++            saved_state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
++
++        self.assertEqual(stop["reason"], "old stop")
++        self.assertEqual(stop["requested_by"], "codex")
++        self.assertEqual(saved_state, original_state)
++        self.assertFalse(exists_after_clear)
++
++    def test_run_scheduler_requires_exactly_one_mode(self):
++        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
++            run_dir = Path(raw)
++            write_json(run_dir / "state.json", minimal_state())
++
++            missing = subprocess.run(
++                [sys.executable, "-m", "harness.cli", "run-scheduler", str(run_dir)],
++                cwd=ROOT,
++                text=True,
++                capture_output=True,
++                check=False,
++            )
++            both = subprocess.run(
++                [
++                    sys.executable,
++                    "-m",
++                    "harness.cli",
++                    "run-scheduler",
++                    str(run_dir),
++                    "--once",
++                    "--watch",
++                ],
++                cwd=ROOT,
++                text=True,
++                capture_output=True,
++                check=False,
++            )
++
++        self.assertEqual(missing.returncode, 2)
++        self.assertIn("one of the arguments --once --watch is required", missing.stderr)
++        self.assertEqual(both.returncode, 2)
++        self.assertIn("not allowed with argument", both.stderr)
++
++    def test_scheduler_watch_runs_queued_job_writes_artifacts_and_does_not_mutate_state(self):
++        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
++            run_dir = Path(raw)
++            state = minimal_state()
++            write_json(run_dir / "state.json", state)
++            agent_script = run_dir / "watch_agent.py"
++            write_agent_script(
++                agent_script,
++                """
++                import json
++                import os
++                from pathlib import Path
++
++                payload = json.loads(Path(os.environ["HARNESS_AGENT_INPUT_FILE"]).read_text(encoding="utf-8"))
++                output = {
++                    "run_id": payload["run_id"],
++                    "job_id": payload["job_id"],
++                    "agent": payload["agent"],
++                    "adapter": payload["adapter"],
++                    "status": "passed",
++                    "summary": "Watch job completed.",
++                    "findings": [],
++                    "evidence": [],
++                    "not_tested": [],
++                    "residual_risks": [],
++                    "generated_at": payload["created_at"],
++                }
++                Path(os.environ["HARNESS_AGENT_OUTPUT_FILE"]).write_text(
++                    json.dumps(output, indent=2) + "\\n",
++                    encoding="utf-8",
++                )
++                print("watch job wrote output")
++                """,
++            )
++            cli.create_generic_agent_job(
++                run_dir,
++                "watch-job",
++                agent="generic-test-agent",
++                command=[sys.executable, str(agent_script)],
++                timeout_seconds=30,
++                root=ROOT,
++            )
++
++            summary = cli.scheduler_run_watch(
++                run_dir,
++                poll_interval_seconds=0,
++                max_iterations=3,
++                worker_id="watch-worker",
++                root=ROOT,
++                sleep_fn=lambda seconds: None,
++            )
++            saved_state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
++            job = json.loads((run_dir / "jobs" / "watch-job" / "job.json").read_text(encoding="utf-8"))
++            scheduler_dir = run_dir / "jobs" / "scheduler"
++            worker = json.loads((scheduler_dir / "worker.json").read_text(encoding="utf-8"))
++            heartbeat = json.loads((scheduler_dir / "heartbeat.json").read_text(encoding="utf-8"))
++            events = [
++                json.loads(line)
++                for line in (scheduler_dir / "events.log").read_text(encoding="utf-8").splitlines()
++            ]
++
++        self.assertEqual(saved_state, state)
++        self.assertEqual(summary["run_id"], "test-run")
++        self.assertEqual(summary["executed_jobs"], ["watch-job"])
++        self.assertEqual(summary["skipped_jobs"], [])
++        self.assertEqual(summary["stop_reason"], "max_iterations")
++        self.assertEqual(job["status"], "succeeded")
++        self.assertEqual(worker["worker_id"], "watch-worker")
++        self.assertEqual(heartbeat["worker_id"], "watch-worker")
++        self.assertEqual(heartbeat["status"], "stopped")
++        self.assertIsNone(heartbeat["current_job_id"])
++        self.assertIn("worker_started", [event["event"] for event in events])
++        self.assertIn("job_started", [event["event"] for event in events])
++        self.assertIn("job_completed", [event["event"] for event in events])
++        self.assertIn("worker_stopped", [event["event"] for event in events])
++        for event in events:
++            self.assertEqual(set(event), {"detail", "event", "ts"})
++            self.assertIsInstance(event["detail"], dict)
++
++    def test_scheduler_watch_rejects_unbounded_zero_interval_and_non_finite_options_before_artifacts(self):
++        cases = [
++            (
++                {
++                    "poll_interval_seconds": float("nan"),
++                    "max_iterations": 1,
++                },
++                "poll_interval_seconds must be finite",
++            ),
++            (
++                {
++                    "poll_interval_seconds": float("inf"),
++                    "max_iterations": 1,
++                },
++                "poll_interval_seconds must be finite",
++            ),
++            (
++                {
++                    "poll_interval_seconds": 0,
++                },
++                "poll_interval_seconds can be zero only with max_iterations or max_seconds",
++            ),
++            (
++                {
++                    "poll_interval_seconds": 1,
++                    "max_seconds": float("nan"),
++                },
++                "max_seconds must be finite",
++            ),
++        ]
++        for kwargs, expected_error in cases:
++            with self.subTest(expected_error=expected_error):
++                with tempfile.TemporaryDirectory(dir=ROOT) as raw:
++                    run_dir = Path(raw)
++                    write_json(run_dir / "state.json", minimal_state())
++
++                    with self.assertRaises(cli.HarnessCliError) as raised:
++                        cli.scheduler_run_watch(run_dir, root=ROOT, **kwargs)
++
++                    self.assertIn(expected_error, str(raised.exception))
++                    self.assertFalse((run_dir / "jobs" / "scheduler").exists())
++
++    def test_scheduler_watch_stops_when_max_seconds_elapsed(self):
++        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
++            run_dir = Path(raw)
++            state = minimal_state()
++            write_json(run_dir / "state.json", state)
++            monotonic_values = iter([10.0, 10.6])
++
++            summary = cli.scheduler_run_watch(
++                run_dir,
++                poll_interval_seconds=0,
++                max_seconds=0.5,
++                worker_id="max-seconds-worker",
++                root=ROOT,
++                sleep_fn=lambda seconds: None,
++                monotonic_fn=lambda: next(monotonic_values),
++            )
++            saved_state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
++            heartbeat = json.loads(
++                (run_dir / "jobs" / "scheduler" / "heartbeat.json").read_text(
++                    encoding="utf-8",
++                ),
++            )
++            events = [
++                json.loads(line)
++                for line in (run_dir / "jobs" / "scheduler" / "events.log").read_text(
++                    encoding="utf-8",
++                ).splitlines()
++            ]
++
++        self.assertEqual(saved_state, state)
++        self.assertEqual(summary["iterations"], 0)
++        self.assertEqual(summary["executed_jobs"], [])
++        self.assertEqual(summary["stop_reason"], "max_seconds")
++        self.assertEqual(heartbeat["status"], "stopped")
++        self.assertIn("max_seconds_reached", [event["event"] for event in events])
++
++    def test_scheduler_watch_records_failed_job_and_continues(self):
++        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
++            run_dir = Path(raw)
++            write_json(run_dir / "state.json", minimal_state())
++            success_script = run_dir / "success_agent.py"
++            write_agent_script(
++                success_script,
++                """
++                import json
++                import os
++                from pathlib import Path
++
++                payload = json.loads(Path(os.environ["HARNESS_AGENT_INPUT_FILE"]).read_text(encoding="utf-8"))
++                output = {
++                    "run_id": payload["run_id"],
++                    "job_id": payload["job_id"],
++                    "agent": payload["agent"],
++                    "adapter": payload["adapter"],
++                    "status": "passed",
++                    "summary": "Follow-up job completed.",
++                    "findings": [],
++                    "evidence": [],
++                    "not_tested": [],
++                    "residual_risks": [],
++                    "generated_at": payload["created_at"],
++                }
++                Path(os.environ["HARNESS_AGENT_OUTPUT_FILE"]).write_text(
++                    json.dumps(output, indent=2) + "\\n",
++                    encoding="utf-8",
++                )
++                """,
++            )
++            cli.create_generic_agent_job(
++                run_dir,
++                "001-fails",
++                agent="generic-test-agent",
++                command=[sys.executable, "-c", "import sys; sys.exit(7)"],
++                timeout_seconds=10,
++                root=ROOT,
++            )
++            cli.create_generic_agent_job(
++                run_dir,
++                "002-succeeds",
++                agent="generic-test-agent",
++                command=[sys.executable, str(success_script)],
++                timeout_seconds=10,
++                root=ROOT,
++            )
++
++            summary = cli.scheduler_run_watch(
++                run_dir,
++                poll_interval_seconds=0,
++                max_iterations=1,
++                worker_id="failed-job-worker",
++                root=ROOT,
++                sleep_fn=lambda seconds: None,
++            )
++            failed_job = json.loads(
++                (run_dir / "jobs" / "001-fails" / "job.json").read_text(encoding="utf-8"),
++            )
++            succeeded_job = json.loads(
++                (run_dir / "jobs" / "002-succeeds" / "job.json").read_text(
++                    encoding="utf-8",
++                ),
++            )
++            heartbeat = json.loads(
++                (run_dir / "jobs" / "scheduler" / "heartbeat.json").read_text(
++                    encoding="utf-8",
++                ),
++            )
++            events = [
++                json.loads(line)
++                for line in (run_dir / "jobs" / "scheduler" / "events.log").read_text(
++                    encoding="utf-8",
++                ).splitlines()
++            ]
++
++        completed_statuses = [
++            event["detail"].get("status")
++            for event in events
++            if event["event"] == "job_completed"
++        ]
++        self.assertEqual(summary["executed_jobs"], ["001-fails", "002-succeeds"])
++        self.assertEqual(summary["stop_reason"], "max_iterations")
++        self.assertEqual(failed_job["status"], "failed")
++        self.assertEqual(succeeded_job["status"], "succeeded")
++        self.assertEqual(heartbeat["status"], "stopped")
++        self.assertEqual(completed_statuses, ["failed", "succeeded"])
++        self.assertNotIn("worker_failed", [event["event"] for event in events])
++
++    def test_scheduler_watch_stop_waits_for_current_job_and_does_not_claim_next_job(self):
++        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
++            run_dir = Path(raw)
++            write_json(run_dir / "state.json", minimal_state())
++            agent_script = run_dir / "stop_aware_agent.py"
++            write_agent_script(
++                agent_script,
++                """
++                import json
++                import os
++                import time
++                from pathlib import Path
++
++                input_path = Path(os.environ["HARNESS_AGENT_INPUT_FILE"])
++                output_path = Path(os.environ["HARNESS_AGENT_OUTPUT_FILE"])
++                payload = json.loads(input_path.read_text(encoding="utf-8"))
++                stop_path = input_path.parents[1] / "scheduler" / "stop.json"
++                for _ in range(50):
++                    if stop_path.exists():
++                        break
++                    time.sleep(0.05)
++                output = {
++                    "run_id": payload["run_id"],
++                    "job_id": payload["job_id"],
++                    "agent": payload["agent"],
++                    "adapter": payload["adapter"],
++                    "status": "passed",
++                    "summary": "Stop-aware job completed.",
++                    "findings": [],
++                    "evidence": [],
++                    "not_tested": [],
++                    "residual_risks": [],
++                    "generated_at": payload["created_at"],
++                }
++                output_path.write_text(json.dumps(output, indent=2) + "\\n", encoding="utf-8")
++                """,
++            )
++            cli.create_generic_agent_job(
++                run_dir,
++                "001-current",
++                agent="generic-test-agent",
++                command=[sys.executable, str(agent_script)],
++                timeout_seconds=10,
++                root=ROOT,
++            )
++            cli.create_generic_agent_job(
++                run_dir,
++                "002-next",
++                agent="generic-test-agent",
++                command=[sys.executable, "-c", "print('must not run')"],
++                timeout_seconds=10,
++                root=ROOT,
++            )
++            result: dict[str, object] = {}
++            errors: list[BaseException] = []
++
++            def run_worker() -> None:
++                try:
++                    result["summary"] = cli.scheduler_run_watch(
++                        run_dir,
++                        poll_interval_seconds=0,
++                        max_iterations=5,
++                        worker_id="stop-worker",
++                        root=ROOT,
++                        sleep_fn=lambda seconds: None,
++                    )
++                except BaseException as exc:
++                    errors.append(exc)
++
++            import threading
++
++            worker_thread = threading.Thread(target=run_worker)
++            worker_thread.start()
++            current_job_path = run_dir / "jobs" / "001-current" / "job.json"
++            for _ in range(100):
++                current_job = json.loads(current_job_path.read_text(encoding="utf-8"))
++                if current_job["status"] == "running":
++                    break
++                time.sleep(0.05)
++            cli.request_scheduler_stop(run_dir, reason="test stop", root=ROOT)
++            worker_thread.join(timeout=10)
++
++            if errors:
++                raise errors[0]
++            current_job = json.loads(current_job_path.read_text(encoding="utf-8"))
++            next_job = json.loads(
++                (run_dir / "jobs" / "002-next" / "job.json").read_text(encoding="utf-8"),
++            )
++            heartbeat = json.loads(
++                (run_dir / "jobs" / "scheduler" / "heartbeat.json").read_text(encoding="utf-8"),
++            )
++            events = [
++                json.loads(line)
++                for line in (run_dir / "jobs" / "scheduler" / "events.log").read_text(
++                    encoding="utf-8",
++                ).splitlines()
++            ]
++
++        self.assertFalse(worker_thread.is_alive())
++        self.assertEqual(current_job["status"], "succeeded")
++        self.assertEqual(next_job["status"], "queued")
++        self.assertEqual(heartbeat["status"], "stopped")
++        self.assertEqual(result["summary"]["stop_reason"], "stop_requested")
++        self.assertIn("stop_observed", [event["event"] for event in events])
++
++    def test_scheduler_watch_records_invalid_job_warning_and_does_not_claim_valid_jobs(self):
++        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
++            run_dir = Path(raw)
++            state = minimal_state()
++            write_json(run_dir / "state.json", state)
++            bad_path = run_dir / "jobs" / "000-bad" / "job.json"
++            bad_path.parent.mkdir(parents=True, exist_ok=True)
++            bad_path.write_text("[]\n", encoding="utf-8")
++            cli.create_generic_agent_job(
++                run_dir,
++                "001-valid",
++                agent="generic-test-agent",
++                command=[sys.executable, "-c", "print('must not run')"],
++                timeout_seconds=30,
++                root=ROOT,
++            )
++
++            summary = cli.scheduler_run_watch(
++                run_dir,
++                poll_interval_seconds=0,
++                max_iterations=1,
++                worker_id="warning-worker",
++                root=ROOT,
++                sleep_fn=lambda seconds: None,
++            )
++            saved_state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
++            valid_job = json.loads(
++                (run_dir / "jobs" / "001-valid" / "job.json").read_text(encoding="utf-8"),
++            )
++            events = [
++                json.loads(line)
++                for line in (run_dir / "jobs" / "scheduler" / "events.log").read_text(
++                    encoding="utf-8",
++                ).splitlines()
++            ]
++
++        self.assertEqual(saved_state, state)
++        self.assertEqual(summary["executed_jobs"], [])
++        self.assertEqual(summary["stop_reason"], "max_iterations")
++        self.assertEqual(valid_job["status"], "queued")
++        self.assertIn("invalid_jobs_observed", [event["event"] for event in events])
++
++    def test_scheduler_watch_observes_existing_stop_before_first_poll(self):
++        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
++            run_dir = Path(raw)
++            state = minimal_state()
++            write_json(run_dir / "state.json", state)
++            cli.request_scheduler_stop(run_dir, reason="pre-start stop", root=ROOT)
++
++            summary = cli.scheduler_run_watch(
++                run_dir,
++                poll_interval_seconds=0,
++                max_iterations=3,
++                worker_id="prestop-worker",
++                root=ROOT,
++                sleep_fn=lambda seconds: None,
++            )
++            saved_state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
++            stop_exists = (run_dir / "jobs" / "scheduler" / "stop.json").exists()
++            heartbeat = json.loads(
++                (run_dir / "jobs" / "scheduler" / "heartbeat.json").read_text(encoding="utf-8"),
++            )
++            events = [
++                json.loads(line)
++                for line in (run_dir / "jobs" / "scheduler" / "events.log").read_text(
++                    encoding="utf-8",
++                ).splitlines()
++            ]
++
++        self.assertEqual(saved_state, state)
++        self.assertTrue(stop_exists)
++        self.assertEqual(summary["iterations"], 0)
++        self.assertEqual(summary["executed_jobs"], [])
++        self.assertEqual(summary["stop_reason"], "stop_requested")
++        self.assertEqual(heartbeat["status"], "stopped")
++        self.assertIn("stop_observed", [event["event"] for event in events])
++
++    def test_start_scheduler_launches_detached_watch_process(self):
++        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
++            run_dir = Path(raw)
++            write_json(run_dir / "state.json", minimal_state())
++            cli.request_scheduler_stop(run_dir, reason="stale stop", root=ROOT)
++            popen_calls = []
++
++            class FakeProcess:
++                pid = 43210
++
++            def fake_popen(command, **kwargs):
++                popen_calls.append((command, kwargs))
++                return FakeProcess()
++
++            with mock.patch("harness.cli.subprocess.Popen", side_effect=fake_popen):
++                result = cli.start_scheduler(
++                    run_dir,
++                    poll_interval_seconds=0.1,
++                    max_iterations=3,
++                    max_seconds=None,
++                    worker_id="detached-worker",
++                    root=ROOT,
++                )
++
++        command, kwargs = popen_calls[0]
++        self.assertEqual(result["worker_id"], "detached-worker")
++        self.assertIn(sys.executable, command[0])
++        self.assertEqual(command[1:4], ["-m", "harness.cli", "run-scheduler"])
++        self.assertEqual(Path(command[4]), run_dir.resolve(strict=False))
++        self.assertIn("--watch", command)
++        self.assertIn("--worker-id", command)
++        self.assertEqual(kwargs["cwd"], ROOT.resolve(strict=False))
++        self.assertIs(kwargs["stdin"], subprocess.DEVNULL)
++        self.assertIs(kwargs["stdout"], subprocess.DEVNULL)
++        self.assertIs(kwargs["stderr"], subprocess.DEVNULL)
++        self.assertFalse((run_dir / "jobs" / "scheduler" / "stop.json").exists())
++        if os.name == "nt":
++            expected_creationflags = subprocess.CREATE_NEW_PROCESS_GROUP
++            expected_creationflags |= getattr(subprocess, "DETACHED_PROCESS", 0)
++            self.assertEqual(kwargs["creationflags"], expected_creationflags)
++            self.assertFalse(kwargs["start_new_session"])
++        else:
++            self.assertEqual(kwargs["creationflags"], 0)
++            self.assertTrue(kwargs["start_new_session"])
++
++    def test_stop_scheduler_cli_writes_stop_without_mutating_state(self):
++        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
++            run_dir = Path(raw)
++            state = minimal_state()
++            write_json(run_dir / "state.json", state)
++
++            result = subprocess.run(
++                [
++                    sys.executable,
++                    "-m",
++                    "harness.cli",
++                    "stop-scheduler",
++                    str(run_dir),
++                    "--reason",
++                    "cli stop",
++                ],
++                cwd=ROOT,
++                text=True,
++                capture_output=True,
++                check=False,
++            )
++            saved_state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
++            stop = json.loads(
++                (run_dir / "jobs" / "scheduler" / "stop.json").read_text(
++                    encoding="utf-8",
++                )
++            )
++
++        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
++        self.assertIn("stop requested: test-run", result.stdout)
++        self.assertEqual(saved_state, state)
++        self.assertEqual(stop["reason"], "cli stop")
++
+     def test_aggregate_jobs_classifies_terminal_and_incomplete_jobs_without_mutating_state(self):
+         with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+             run_dir = Path(raw)
+diff --git a/tests/test_harness_cli.py b/tests/test_harness_cli.py
+index b6ebfc6..41d42e3 100644
+--- a/tests/test_harness_cli.py
++++ b/tests/test_harness_cli.py
+@@ -472,6 +472,29 @@ class HarnessCliTest(unittest.TestCase):
+ 
+         self.assertEqual(temp_files, [])
+ 
++    def test_atomic_write_retries_transient_permission_error_on_replace(self):
++        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
++            run_dir = Path(raw)
++            run_dir.mkdir(parents=True, exist_ok=True)
++            state_file = run_dir / "state.json"
++            replace_calls = 0
++            original_replace = Path.replace
++
++            def flaky_replace(path: Path, target: Path) -> Path:
++                nonlocal replace_calls
++                replace_calls += 1
++                if replace_calls == 1:
++                    raise PermissionError("temporary file lock")
++                return original_replace(path, target)
++
++            with mock.patch.object(Path, "replace", autospec=True, side_effect=flaky_replace):
++                cli.write_json_atomic(state_file, minimal_state(status="draft"))
++
++            saved = json.loads(state_file.read_text(encoding="utf-8"))
++
++        self.assertEqual(replace_calls, 2)
++        self.assertEqual(saved["status"], "draft")
++
+     def test_advance_rejects_invalid_transition(self):
+         with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+             run_dir = Path(raw)
+diff --git a/tests/test_static_contracts.py b/tests/test_static_contracts.py
+index a841d72..84013a1 100644
+--- a/tests/test_static_contracts.py
++++ b/tests/test_static_contracts.py
+@@ -135,6 +135,8 @@ class StaticContractsTest(unittest.TestCase):
+             "harness index-evidence \"$GITHUB_WORKSPACE/.tmp/package-smoke-run\" agent-result jobs/package-smoke-scheduler/output.json",
+             "harness index-evidence \"$GITHUB_WORKSPACE/.tmp/package-smoke-run\" aggregation jobs/aggregation.json",
+             "package-smoke-scheduler-agent",
++            "harness run-scheduler \"$GITHUB_WORKSPACE/.tmp/package-smoke-run\" --watch --poll-interval-seconds 0.1 --max-iterations 3",
++            "package-smoke-watch-agent",
+             "github.event.before",
+             "github.base_ref",
+             "git merge-base HEAD origin/master",
