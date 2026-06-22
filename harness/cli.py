@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -23,7 +24,21 @@ ROOT = PACKAGE_DIR.parent
 SCHEMA_DIR = PACKAGE_DIR / "schemas"
 STATE_SCHEMA = SCHEMA_DIR / "state.schema.json"
 CODEX_ACTOR = "codex"
+HARNESS_VERSION = "0.2.0"
 GENERIC_ADAPTER_VERSION = "0.1.0"
+SCHEDULER_DIR_NAME = "scheduler"
+SCHEDULER_STATUSES = frozenset(
+    {
+        "starting",
+        "idle",
+        "running-job",
+        "sleeping",
+        "warning",
+        "stopping",
+        "stopped",
+        "failed",
+    }
+)
 EVIDENCE_TYPES = frozenset(
     {
         "task",
@@ -1401,8 +1416,8 @@ def init_run(
     created_at = utc_now()
     state = {
         "run_id": run_id,
-        "harness_version": "0.2.0",
-        "state_schema_version": "0.2.0",
+        "harness_version": HARNESS_VERSION,
+        "state_schema_version": HARNESS_VERSION,
         "status": "draft",
         "track": track,
         "current_workflow": workflow,
@@ -1823,6 +1838,127 @@ def load_scheduler_jobs(run_dir: Path, *, root: Path) -> list[dict[str, Any]]:
     if errors:
         raise HarnessCliError(format_errors(errors))
     return jobs
+
+
+def scheduler_dir(run_dir: Path | str) -> Path:
+    return Path(run_dir) / "jobs" / SCHEDULER_DIR_NAME
+
+
+def scheduler_worker_path(run_dir: Path | str) -> Path:
+    return scheduler_dir(run_dir) / "worker.json"
+
+
+def scheduler_heartbeat_path(run_dir: Path | str) -> Path:
+    return scheduler_dir(run_dir) / "heartbeat.json"
+
+
+def scheduler_stop_path(run_dir: Path | str) -> Path:
+    return scheduler_dir(run_dir) / "stop.json"
+
+
+def scheduler_events_path(run_dir: Path | str) -> Path:
+    return scheduler_dir(run_dir) / "events.log"
+
+
+def default_worker_id() -> str:
+    return f"scheduler-{uuid.uuid4().hex[:12]}"
+
+
+def append_scheduler_event(
+    run_dir: Path | str,
+    event: str,
+    detail: dict[str, Any],
+) -> dict[str, Any]:
+    payload = {
+        "ts": utc_now(),
+        "event": event,
+        "detail": detail,
+    }
+    path = scheduler_events_path(run_dir)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8", newline="\n") as handle:
+        handle.write(json.dumps(payload, sort_keys=True) + "\n")
+    return payload
+
+
+def write_scheduler_worker(
+    run_dir: Path | str,
+    *,
+    worker_id: str,
+    poll_interval_seconds: float,
+    max_iterations: int | None,
+    max_seconds: float | None,
+    root: Path | str | None = None,
+) -> dict[str, Any]:
+    resolved_run_dir = Path(run_dir)
+    repo_root = resolve_repository_root(resolved_run_dir, root=root)
+    before = validate_run(resolved_run_dir, root=repo_root)
+    if not before.ok:
+        raise HarnessCliError(format_errors(before.errors))
+
+    worker = {
+        "worker_id": worker_id,
+        "pid": os.getpid(),
+        "started_at": utc_now(),
+        "run_dir": str(resolved_run_dir.resolve(strict=False)),
+        "poll_interval": poll_interval_seconds,
+        "max_iterations": max_iterations,
+        "max_seconds": max_seconds,
+        "cli_version": HARNESS_VERSION,
+    }
+    write_json_file(scheduler_worker_path(resolved_run_dir), worker)
+    return worker
+
+
+def write_scheduler_heartbeat(
+    run_dir: Path | str,
+    *,
+    worker_id: str,
+    iteration: int,
+    status: str,
+    current_job_id: str | None,
+) -> dict[str, Any]:
+    if status not in SCHEDULER_STATUSES:
+        raise HarnessCliError(f"invalid scheduler heartbeat status: {status}")
+
+    heartbeat = {
+        "worker_id": worker_id,
+        "last_seen_at": utc_now(),
+        "iteration": iteration,
+        "status": status,
+        "current_job_id": current_job_id,
+    }
+    write_json_file(scheduler_heartbeat_path(run_dir), heartbeat)
+    return heartbeat
+
+
+def request_scheduler_stop(
+    run_dir: Path | str,
+    *,
+    reason: str | None = None,
+    root: Path | str | None = None,
+) -> dict[str, Any]:
+    resolved_run_dir = Path(run_dir)
+    repo_root = resolve_repository_root(resolved_run_dir, root=root)
+    before = validate_run(resolved_run_dir, root=repo_root)
+    if not before.ok:
+        raise HarnessCliError(format_errors(before.errors))
+
+    payload = {
+        "requested_at": utc_now(),
+        "requested_by": CODEX_ACTOR,
+        "reason": reason or "operator requested shutdown",
+    }
+    write_json_file(scheduler_stop_path(resolved_run_dir), payload)
+    return payload
+
+
+def clear_scheduler_stop_request(run_dir: Path | str) -> None:
+    path = scheduler_stop_path(run_dir)
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        return
 
 
 def scheduler_run_once(

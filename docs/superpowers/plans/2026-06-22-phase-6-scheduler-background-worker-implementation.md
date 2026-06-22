@@ -46,7 +46,8 @@ Append these tests to `GenericCliAgentOrchestrationTest` in `tests/test_generic_
     def test_scheduler_artifacts_split_worker_identity_heartbeat_and_jsonl_events(self):
         with tempfile.TemporaryDirectory(dir=ROOT) as raw:
             run_dir = Path(raw)
-            write_json(run_dir / "state.json", minimal_state())
+            original_state = minimal_state()
+            write_json(run_dir / "state.json", original_state)
 
             worker = cli.write_scheduler_worker(
                 run_dir,
@@ -79,11 +80,36 @@ Append these tests to `GenericCliAgentOrchestrationTest` in `tests/test_generic_
             saved_heartbeat = json.loads((scheduler_dir / "heartbeat.json").read_text(encoding="utf-8"))
             event_lines = (scheduler_dir / "events.log").read_text(encoding="utf-8").splitlines()
             events = [json.loads(line) for line in event_lines]
+            saved_state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
 
         self.assertEqual(worker, saved_worker)
         self.assertEqual(heartbeat, saved_heartbeat)
+        self.assertEqual(saved_state, original_state)
+        self.assertEqual(
+            set(saved_worker),
+            {
+                "worker_id",
+                "pid",
+                "started_at",
+                "run_dir",
+                "poll_interval",
+                "max_iterations",
+                "max_seconds",
+                "cli_version",
+            },
+        )
+        self.assertEqual(
+            set(saved_heartbeat),
+            {
+                "worker_id",
+                "last_seen_at",
+                "iteration",
+                "status",
+                "current_job_id",
+            },
+        )
         self.assertEqual(saved_worker["worker_id"], "worker-test")
-        self.assertEqual(saved_worker["poll_interval_seconds"], 0.1)
+        self.assertEqual(saved_worker["poll_interval"], 0.1)
         self.assertEqual(saved_worker["max_iterations"], 3)
         self.assertEqual(saved_worker["cli_version"], "0.2.0")
         self.assertIn("pid", saved_worker)
@@ -104,14 +130,18 @@ Append these tests to `GenericCliAgentOrchestrationTest` in `tests/test_generic_
     def test_clear_scheduler_stop_request_removes_stale_stop_file(self):
         with tempfile.TemporaryDirectory(dir=ROOT) as raw:
             run_dir = Path(raw)
-            write_json(run_dir / "state.json", minimal_state())
+            original_state = minimal_state()
+            write_json(run_dir / "state.json", original_state)
             stop = cli.request_scheduler_stop(run_dir, reason="old stop", root=ROOT)
             stop_path = run_dir / "jobs" / "scheduler" / "stop.json"
 
             cli.clear_scheduler_stop_request(run_dir)
             exists_after_clear = stop_path.exists()
+            saved_state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
 
         self.assertEqual(stop["reason"], "old stop")
+        self.assertEqual(stop["requested_by"], "codex")
+        self.assertEqual(saved_state, original_state)
         self.assertFalse(exists_after_clear)
 ```
 
@@ -217,14 +247,16 @@ def write_scheduler_worker(
 ) -> dict[str, Any]:
     resolved_run_dir = Path(run_dir)
     repo_root = resolve_repository_root(resolved_run_dir, root=root)
-    state = load_json(state_path(resolved_run_dir))
+    before = validate_run(resolved_run_dir, root=repo_root)
+    if not before.ok:
+        raise HarnessCliError(format_errors(before.errors))
+
     worker = {
         "worker_id": worker_id,
         "pid": os.getpid(),
-        "run_id": state["run_id"],
         "run_dir": str(resolved_run_dir.resolve(strict=False)),
         "started_at": utc_now(),
-        "poll_interval_seconds": poll_interval_seconds,
+        "poll_interval": poll_interval_seconds,
         "max_iterations": max_iterations,
         "max_seconds": max_seconds,
         "cli_version": HARNESS_VERSION,

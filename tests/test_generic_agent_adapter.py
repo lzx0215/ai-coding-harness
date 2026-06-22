@@ -819,7 +819,8 @@ class GenericCliAgentOrchestrationTest(unittest.TestCase):
     def test_scheduler_run_once_aborts_on_semantically_invalid_job_before_executing_any_job(self):
         with tempfile.TemporaryDirectory(dir=ROOT) as raw:
             run_dir = Path(raw)
-            write_json(run_dir / "state.json", minimal_state())
+            original_state = minimal_state()
+            write_json(run_dir / "state.json", original_state)
             cli.create_generic_agent_job(
                 run_dir,
                 "bad-running",
@@ -855,6 +856,107 @@ class GenericCliAgentOrchestrationTest(unittest.TestCase):
 
         self.assertIn("running job requires started_at", str(raised.exception))
         self.assertEqual(valid_job["status"], "queued")
+
+    def test_scheduler_artifacts_split_worker_identity_heartbeat_and_jsonl_events(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            original_state = minimal_state()
+            write_json(run_dir / "state.json", original_state)
+
+            worker = cli.write_scheduler_worker(
+                run_dir,
+                worker_id="worker-test",
+                poll_interval_seconds=0.1,
+                max_iterations=3,
+                max_seconds=None,
+                root=ROOT,
+            )
+            heartbeat = cli.write_scheduler_heartbeat(
+                run_dir,
+                worker_id="worker-test",
+                iteration=1,
+                status="idle",
+                current_job_id=None,
+            )
+            cli.append_scheduler_event(
+                run_dir,
+                "worker_started",
+                {"worker_id": "worker-test"},
+            )
+            cli.append_scheduler_event(
+                run_dir,
+                "poll_completed",
+                {"worker_id": "worker-test", "iteration": 1},
+            )
+
+            scheduler_dir = run_dir / "jobs" / "scheduler"
+            saved_worker = json.loads((scheduler_dir / "worker.json").read_text(encoding="utf-8"))
+            saved_heartbeat = json.loads((scheduler_dir / "heartbeat.json").read_text(encoding="utf-8"))
+            event_lines = (scheduler_dir / "events.log").read_text(encoding="utf-8").splitlines()
+            events = [json.loads(line) for line in event_lines]
+            saved_state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(worker, saved_worker)
+        self.assertEqual(heartbeat, saved_heartbeat)
+        self.assertEqual(saved_state, original_state)
+        self.assertEqual(
+            set(saved_worker),
+            {
+                "worker_id",
+                "pid",
+                "started_at",
+                "run_dir",
+                "poll_interval",
+                "max_iterations",
+                "max_seconds",
+                "cli_version",
+            },
+        )
+        self.assertEqual(
+            set(saved_heartbeat),
+            {
+                "worker_id",
+                "last_seen_at",
+                "iteration",
+                "status",
+                "current_job_id",
+            },
+        )
+        self.assertEqual(saved_worker["worker_id"], "worker-test")
+        self.assertEqual(saved_worker["poll_interval"], 0.1)
+        self.assertEqual(saved_worker["max_iterations"], 3)
+        self.assertEqual(saved_worker["cli_version"], "0.2.0")
+        self.assertIn("pid", saved_worker)
+        self.assertIn("started_at", saved_worker)
+        self.assertNotIn("iteration", saved_worker)
+        self.assertNotIn("status", saved_worker)
+        self.assertEqual(saved_heartbeat["worker_id"], "worker-test")
+        self.assertEqual(saved_heartbeat["iteration"], 1)
+        self.assertEqual(saved_heartbeat["status"], "idle")
+        self.assertIsNone(saved_heartbeat["current_job_id"])
+        self.assertNotIn("pid", saved_heartbeat)
+        self.assertEqual([event["event"] for event in events], ["worker_started", "poll_completed"])
+        for event in events:
+            self.assertIsInstance(event["ts"], str)
+            self.assertIsInstance(event["event"], str)
+            self.assertIsInstance(event["detail"], dict)
+
+    def test_clear_scheduler_stop_request_removes_stale_stop_file(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            original_state = minimal_state()
+            write_json(run_dir / "state.json", original_state)
+            stop = cli.request_scheduler_stop(run_dir, reason="old stop", root=ROOT)
+            stop_path = run_dir / "jobs" / "scheduler" / "stop.json"
+
+            cli.clear_scheduler_stop_request(run_dir)
+            exists_after_clear = stop_path.exists()
+            saved_state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(stop["reason"], "old stop")
+        self.assertEqual(stop["requested_by"], "codex")
+        self.assertEqual(saved_state, original_state)
+        self.assertFalse(exists_after_clear)
 
     def test_aggregate_jobs_classifies_terminal_and_incomplete_jobs_without_mutating_state(self):
         with tempfile.TemporaryDirectory(dir=ROOT) as raw:

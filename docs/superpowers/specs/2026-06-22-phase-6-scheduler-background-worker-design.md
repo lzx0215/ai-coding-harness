@@ -97,10 +97,9 @@ This directory is not evidence by itself. Codex may later decide to index select
 {
   "worker_id": "scheduler-20260622-abc123",
   "pid": 12345,
-  "run_id": "2026-06-22-phase-6-scheduler-watch",
   "run_dir": "C:/ai/ai-coding-harness/harness/runs/...",
   "started_at": "2026-06-22T03:00:00Z",
-  "poll_interval_seconds": 5.0,
+  "poll_interval": 5.0,
   "max_iterations": null,
   "max_seconds": null,
   "cli_version": "0.2.0"
