@@ -26,6 +26,7 @@ Phase 4 adds three async-agent evidence types:
 | `agent-job` | `harness/runs/<run-id>/jobs/<job-id>/job.json` | Process record for an async job. When indexed, it must validate against `harness/schemas/job.schema.json` and have a terminal status: `succeeded`, `failed`, `timeout`, or `cancelled`. |
 | `agent-result` | `harness/runs/<run-id>/jobs/<job-id>/output.json` | Reserved pointer to an agent result payload when that payload is not promoted into an existing canonical review artifact. When indexed, it must validate against `harness/schemas/agent-result.schema.json`, match `state.run_id`, and match a terminal `agent-job` evidence entry for the same `job_id`. |
 | `aggregation` | `harness/runs/<run-id>/jobs/aggregation.json` | Fan-in summary for async jobs. When indexed, it must validate against `harness/schemas/aggregation.schema.json` and pass CLI semantic checks for job bucket consistency. |
+| `job-recovery` | `harness/runs/<run-id>/jobs/<job-id>/recovery/<timestamp>-<action>.json` | Explicit stale-running recovery audit artifact. When indexed, it must validate against `harness/schemas/job-recovery.schema.json` and match `state.run_id`. Recovery artifacts do not prove job success or completion; they only justify an operator-confirmed current-status correction. |
 
 ## Aggregation Semantics
 
@@ -43,3 +44,25 @@ the JSON schema:
 
 Aggregation recommendations are advisory. Codex remains responsible for any
 subsequent state transition.
+
+## Stale-Running Recovery Evidence
+
+`job-recovery` evidence exists to prevent silent history rewrites. A recovery
+artifact must record the stale assessment, previous job snapshot, new job
+snapshot, action (`requeue` or `fail`), explicit reason, actor, timestamp, and
+whether artifact correction was confirmed.
+
+The scheduler must not automatically index `job-recovery` evidence or advance
+`state.json`. Codex may index the recovery artifact only after deciding to
+consume it as part of the run record.
+
+## Scheduler Control Files
+
+`jobs/<job-id>/claim.lock/owner.json`, scheduler `worker.json`,
+`heartbeat.json`, `stop.json`, and `events.log` are scheduler control or
+diagnostic files, not evidence. They must not be auto-indexed into
+`state.json.evidence[]`. Historical runs where `claim.lock` is absent remain
+valid.
+
+Claim tokens and lease timestamps are control metadata, not evidence. They must
+not be auto-indexed.

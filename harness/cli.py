@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 import json
 import math
 import os
@@ -9,10 +10,11 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import uuid
-from dataclasses import dataclass
-from datetime import datetime, timezone
+from dataclasses import dataclass, replace
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -25,10 +27,13 @@ PACKAGE_DIR = Path(__file__).resolve().parent
 ROOT = PACKAGE_DIR.parent
 SCHEMA_DIR = PACKAGE_DIR / "schemas"
 STATE_SCHEMA = SCHEMA_DIR / "state.schema.json"
+CLAIM_OWNER_SCHEMA = SCHEMA_DIR / "claim-owner.schema.json"
 CODEX_ACTOR = "codex"
 HARNESS_VERSION = "0.2.0"
 GENERIC_ADAPTER_VERSION = "0.1.0"
 SCHEDULER_DIR_NAME = "scheduler"
+CLAIM_LOCK_DIR_NAME = "claim.lock"
+DEFAULT_CLAIM_LEASE_SECONDS = 60.0
 SCHEDULER_STATUSES = frozenset(
     {
         "starting",
@@ -43,6 +48,12 @@ SCHEDULER_STATUSES = frozenset(
 )
 ATOMIC_REPLACE_ATTEMPTS = 5
 ATOMIC_REPLACE_RETRY_SECONDS = 0.01
+CLAIM_LOCK_RENAME_ATTEMPTS = 5
+CLAIM_LOCK_RENAME_RETRY_SECONDS = 0.01
+TRANSIENT_CLAIM_LOCK_WINERRORS = frozenset({5, 32, 33})
+CLAIM_LOCK_REMOVE_ATTEMPTS = 5
+CLAIM_LOCK_REMOVE_RETRY_SECONDS = 0.01
+TRANSIENT_CLAIM_LOCK_REMOVE_WINERRORS = frozenset({5, 32, 33, 145})
 EVIDENCE_TYPES = frozenset(
     {
         "task",
@@ -65,6 +76,7 @@ EVIDENCE_TYPES = frozenset(
         "agent-job",
         "agent-result",
         "aggregation",
+        "job-recovery",
     }
 )
 REVIEW_COMPLETION_EVIDENCE_TYPES = frozenset(
@@ -72,6 +84,7 @@ REVIEW_COMPLETION_EVIDENCE_TYPES = frozenset(
 )
 COMPLETION_REQUIRED_EVIDENCE_TYPES = frozenset({"verification", "handoff"})
 JOB_SCHEMA = SCHEMA_DIR / "job.schema.json"
+JOB_RECOVERY_SCHEMA = SCHEMA_DIR / "job-recovery.schema.json"
 AGGREGATION_SCHEMA = SCHEMA_DIR / "aggregation.schema.json"
 AGENT_RESULT_SCHEMA = SCHEMA_DIR / "agent-result.schema.json"
 REVIEW_DECISION_SCHEMA = SCHEMA_DIR / "review-decision.schema.json"
@@ -113,6 +126,21 @@ REVIEW_SIGNAL_EVIDENCE_TYPES = frozenset(
     }
 )
 TERMINAL_JOB_STATUSES = frozenset({"succeeded", "failed", "timeout", "cancelled"})
+CLAIM_LIFECYCLE_MUTEX_FILE = ".claim-lock.mutex"
+_CLAIM_LIFECYCLE_LOCKS_GUARD = threading.Lock()
+_CLAIM_LIFECYCLE_LOCKS: dict[Path, threading.RLock] = {}
+
+
+@dataclass(frozen=True)
+class JobClaim:
+    run_dir: Path
+    job_id: str
+    worker_id: str
+    claim_token: str
+    job_dir: Path
+    lock_dir: Path
+    owner_path: Path
+    owner: dict[str, Any]
 AGGREGATION_JOB_BUCKETS = (
     "consumed_jobs",
     "succeeded_jobs",
@@ -305,6 +333,13 @@ def validate_state(
         )
     )
     errors.extend(
+        validate_job_recovery_evidence(
+            state,
+            root=repo_root,
+            run_dir=run_dir,
+        )
+    )
+    errors.extend(
         validate_review_decision_evidence(
             state,
             root=repo_root,
@@ -421,6 +456,7 @@ def validate_job_timestamp_semantics(job: dict[str, Any]) -> list[str]:
     created_at = job.get("created_at")
     started_at = job.get("started_at")
     completed_at = job.get("completed_at")
+    updated_at = job.get("updated_at")
 
     if created_at is None:
         errors.append("job requires created_at")
@@ -430,6 +466,8 @@ def validate_job_timestamp_semantics(job: dict[str, Any]) -> list[str]:
         errors.append("started_at must be a valid ISO 8601 timestamp")
     if completed_at is not None and parse_datetime(completed_at) is None:
         errors.append("completed_at must be a valid ISO 8601 timestamp")
+    if updated_at is not None and parse_datetime(updated_at) is None:
+        errors.append("updated_at must be a valid ISO 8601 timestamp")
 
     if status == "queued":
         if started_at is not None:
@@ -450,12 +488,19 @@ def validate_job_timestamp_semantics(job: dict[str, Any]) -> list[str]:
     created_dt = parse_datetime(created_at)
     started_dt = parse_datetime(started_at)
     completed_dt = parse_datetime(completed_at)
+    updated_dt = parse_datetime(updated_at)
     if created_dt is not None and started_dt is not None and started_dt < created_dt:
         errors.append("started_at must be on or after created_at")
     if started_dt is not None and completed_dt is not None and completed_dt < started_dt:
         errors.append("completed_at must be on or after started_at")
     if created_dt is not None and completed_dt is not None and completed_dt < created_dt:
         errors.append("completed_at must be on or after created_at")
+    if created_dt is not None and updated_dt is not None and updated_dt < created_dt:
+        errors.append("updated_at must be on or after created_at")
+    if started_dt is not None and updated_dt is not None and updated_dt < started_dt:
+        errors.append("updated_at must be on or after started_at")
+    if completed_dt is not None and updated_dt is not None and updated_dt < completed_dt:
+        errors.append("updated_at must be on or after completed_at")
 
     return errors
 
@@ -470,6 +515,26 @@ def parse_datetime(value: Any) -> datetime | None:
     if parsed.tzinfo is None or parsed.utcoffset() is None:
         return None
     return parsed.astimezone(timezone.utc)
+
+
+def resolve_datetime(value: str | datetime | None, field: str) -> datetime:
+    if value is None:
+        return datetime.now(timezone.utc)
+    if isinstance(value, datetime):
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise HarnessCliError(f"{field} must include timezone information")
+        return value.astimezone(timezone.utc)
+    parsed = parse_datetime(value)
+    if parsed is None:
+        raise HarnessCliError(f"{field} must be a valid ISO 8601 timestamp")
+    return parsed
+
+
+def format_datetime(value: datetime) -> str:
+    return value.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace(
+        "+00:00",
+        "Z",
+    )
 
 
 def validate_agent_result_evidence(
@@ -687,6 +752,48 @@ def validate_aggregation_against_jobs(
             errors.append(
                 f"aggregation incomplete job {job_id} has terminal agent-job status "
                 f"{actual_status}",
+            )
+
+    return errors
+
+
+def validate_job_recovery_evidence(
+    state: dict[str, Any],
+    *,
+    root: Path,
+    run_dir: Path,
+) -> list[str]:
+    errors: list[str] = []
+    run_id = state.get("run_id")
+    for index, evidence in evidence_items(state):
+        if evidence.get("type") != "job-recovery":
+            continue
+
+        raw_path = evidence.get("path")
+        if not isinstance(raw_path, str):
+            continue
+
+        recovery_path = first_existing_evidence_path(
+            raw_path,
+            root=root,
+            run_dir=run_dir,
+        )
+        if recovery_path is None:
+            continue
+
+        recovery, recovery_errors = validate_json_artifact(
+            recovery_path,
+            JOB_RECOVERY_SCHEMA,
+            "job-recovery",
+        )
+        errors.extend(f"evidence[{index}]: {error}" for error in recovery_errors)
+        if recovery is None:
+            continue
+
+        if recovery.get("run_id") != run_id:
+            errors.append(
+                f"evidence[{index}]: job-recovery run_id mismatch: "
+                f"expected {run_id}, got {recovery.get('run_id')}",
             )
 
     return errors
@@ -1575,6 +1682,8 @@ def create_generic_agent_job(
         "created_at": created_at,
         "started_at": None,
         "completed_at": None,
+        "updated_at": created_at,
+        "worker_id": None,
         "timeout_seconds": timeout_seconds,
         "error_reason": None,
         "provenance": {
@@ -1667,7 +1776,9 @@ def execute_generic_agent_job(
     run_dir: Path | str,
     job_id: str,
     *,
+    worker_id: str | None = None,
     root: Path | str | None = None,
+    claim: JobClaim | None = None,
 ) -> dict[str, Any]:
     validate_non_empty_string(job_id, "job_id")
     validate_generic_agent_job_id(job_id)
@@ -1732,9 +1843,25 @@ def execute_generic_agent_job(
     agent = job["agent"]
     adapter = job["adapter"]
     timeout_seconds = job["timeout_seconds"]
-    job["status"] = "running"
-    job["started_at"] = utc_now()
-    write_json_file(job_path, job)
+    started_at = utc_now()
+    if claim is None:
+        job["status"] = "running"
+        job["started_at"] = started_at
+        job["updated_at"] = started_at
+        job["worker_id"] = worker_id
+        write_json_file(job_path, job)
+    else:
+        if claim.job_id != job_id:
+            raise HarnessCliError(
+                f"claim job_id mismatch: expected {job_id}, got {claim.job_id}",
+            )
+        job = mark_claimed_job_running(claim, started_at=started_at)
+
+    agent_output_path = output_path
+    if claim is not None:
+        agent_output_path = claimed_output_temp_path(job_dir, claim.claim_token)
+        if agent_output_path.exists():
+            raise HarnessCliError(f"claimed output temp file already exists: {agent_output_path}")
 
     env = os.environ.copy()
     env.update(
@@ -1744,7 +1871,7 @@ def execute_generic_agent_job(
             "HARNESS_AGENT": agent,
             "HARNESS_AGENT_ADAPTER": adapter,
             "HARNESS_AGENT_INPUT_FILE": str(input_path),
-            "HARNESS_AGENT_OUTPUT_FILE": str(output_path),
+            "HARNESS_AGENT_OUTPUT_FILE": str(agent_output_path),
             "HARNESS_AGENT_RAW_LOG_FILE": str(raw_log_path),
         }
     )
@@ -1773,9 +1900,50 @@ def execute_generic_agent_job(
         status = "failed"
         error_reason = f"agent command could not be executed: {exc}"
 
-    write_raw_log(raw_log_path, command, returncode, raw_stdout, raw_stderr)
+    def write_claimed_terminal_job_unlocked(
+        terminal_status: str,
+        terminal_error_reason: str | None,
+        terminal_completed_at: str,
+    ) -> dict[str, Any]:
+        if claim is None:
+            raise AssertionError("claim is required for claimed terminal job write")
 
-    if status == "succeeded":
+        def complete_claimed_job(current: dict[str, Any]) -> dict[str, Any]:
+            current["status"] = terminal_status
+            current["completed_at"] = terminal_completed_at
+            current["updated_at"] = terminal_completed_at
+            current["error_reason"] = terminal_error_reason
+            current["claim_updated_at"] = terminal_completed_at
+            return current
+
+        return write_job_if_claim_matches_unlocked(
+            claim,
+            expected_status="running",
+            mutate=complete_claimed_job,
+        )
+
+    if claim is None:
+        try:
+            write_raw_log(raw_log_path, command, returncode, raw_stdout, raw_stderr)
+        except HarnessCliError as exc:
+            status = "failed"
+            error_reason = str(exc)
+    else:
+        with claim_lifecycle_lock(claim.job_dir):
+            assert_current_job_claim_matches_unlocked(claim, expected_status="running")
+            try:
+                write_raw_log(raw_log_path, command, returncode, raw_stdout, raw_stderr)
+            except HarnessCliError as exc:
+                status = "failed"
+                error_reason = str(exc)
+                cleanup_claimed_output_temp(agent_output_path)
+                return write_claimed_terminal_job_unlocked(
+                    status,
+                    error_reason,
+                    utc_now(),
+                )
+
+    if claim is None and status == "succeeded":
         if not output_path.exists():
             status = "failed"
             error_reason = "agent did not write output_file"
@@ -1797,11 +1965,58 @@ def execute_generic_agent_job(
                     status = "failed"
                     error_reason = "; ".join(result_contract_errors)
 
-    job["status"] = status
-    job["completed_at"] = utc_now()
-    job["error_reason"] = error_reason
-    write_json_file(job_path, job)
-    return job
+    if claim is not None:
+        with claim_lifecycle_lock(claim.job_dir):
+            assert_current_job_claim_matches_unlocked(claim, expected_status="running")
+            if status == "succeeded":
+                if not agent_output_path.exists():
+                    status = "failed"
+                    error_reason = "agent did not write output_file"
+                else:
+                    try:
+                        publish_claimed_output(agent_output_path, output_path)
+                    except HarnessCliError as exc:
+                        status = "failed"
+                        error_reason = str(exc)
+                        cleanup_claimed_output_temp(agent_output_path)
+                if status == "succeeded" and not output_path.exists():
+                    status = "failed"
+                    error_reason = "agent did not write output_file"
+                elif status == "succeeded":
+                    agent_result, result_errors = validate_json_artifact(
+                        output_path,
+                        AGENT_RESULT_SCHEMA,
+                        "agent-result",
+                    )
+                    if result_errors:
+                        status = "failed"
+                        error_reason = "; ".join(result_errors)
+                    elif agent_result is not None:
+                        result_contract_errors = validate_agent_result_matches_job(
+                            agent_result,
+                            job,
+                        )
+                        if result_contract_errors:
+                            status = "failed"
+                            error_reason = "; ".join(result_contract_errors)
+            else:
+                cleanup_claimed_output_temp(agent_output_path)
+
+            return write_claimed_terminal_job_unlocked(
+                status,
+                error_reason,
+                utc_now(),
+            )
+
+    completed_at = utc_now()
+    if claim is None:
+        job["status"] = status
+        job["completed_at"] = completed_at
+        job["updated_at"] = completed_at
+        job["error_reason"] = error_reason
+        write_json_file(job_path, job)
+        return job
+    raise AssertionError("unreachable claimed job completion")
 
 
 def load_scheduler_jobs(run_dir: Path, *, root: Path) -> list[dict[str, Any]]:
@@ -1862,6 +2077,51 @@ def scheduler_stop_path(run_dir: Path | str) -> Path:
 
 def scheduler_events_path(run_dir: Path | str) -> Path:
     return scheduler_dir(run_dir) / "events.log"
+
+
+def job_claim_lock_dir(run_dir: Path | str, job_id: str) -> Path:
+    return Path(run_dir) / "jobs" / job_id / CLAIM_LOCK_DIR_NAME
+
+
+def job_claim_owner_path(run_dir: Path | str, job_id: str) -> Path:
+    return job_claim_lock_dir(run_dir, job_id) / "owner.json"
+
+
+def claim_lock_relative_path(job_id: str) -> str:
+    return f"jobs/{job_id}/{CLAIM_LOCK_DIR_NAME}"
+
+
+def new_claim_token() -> str:
+    return uuid.uuid4().hex
+
+
+def add_seconds(timestamp: datetime, seconds: float) -> datetime:
+    return timestamp + timedelta(seconds=seconds)
+
+
+def build_claim_owner(
+    *,
+    run_id: str,
+    job_id: str,
+    worker_id: str,
+    claim_token: str,
+    claimed_at: datetime,
+    lease_seconds: float = DEFAULT_CLAIM_LEASE_SECONDS,
+) -> dict[str, Any]:
+    lease_expires_at = add_seconds(claimed_at, lease_seconds)
+    formatted_claimed_at = format_datetime(claimed_at)
+    return {
+        "schema_version": 2,
+        "run_id": run_id,
+        "job_id": job_id,
+        "worker_id": worker_id,
+        "claim_token": claim_token,
+        "claimed_at": formatted_claimed_at,
+        "lease_started_at": formatted_claimed_at,
+        "lease_heartbeat_at": formatted_claimed_at,
+        "lease_expires_at": format_datetime(lease_expires_at),
+        "lock_path": claim_lock_relative_path(job_id),
+    }
 
 
 def default_worker_id() -> str:
@@ -1999,6 +2259,673 @@ def load_scheduler_jobs_for_watch(
         return [], str(exc).splitlines()
 
 
+def resolve_generic_job_dir(run_dir: Path, job_id: str) -> Path:
+    jobs_dir = (run_dir / "jobs").resolve(strict=False)
+    job_dir = (jobs_dir / job_id).resolve(strict=False)
+    if not is_within_path(job_dir, jobs_dir):
+        raise HarnessCliError(f"job_id escapes jobs directory: {job_id}")
+    return job_dir
+
+
+def claim_lifecycle_mutex_path(job_dir: Path) -> Path:
+    return job_dir / CLAIM_LIFECYCLE_MUTEX_FILE
+
+
+def claim_lifecycle_local_lock(mutex_path: Path) -> threading.RLock:
+    resolved_mutex_path = mutex_path.resolve(strict=False)
+    with _CLAIM_LIFECYCLE_LOCKS_GUARD:
+        lock = _CLAIM_LIFECYCLE_LOCKS.get(resolved_mutex_path)
+        if lock is None:
+            lock = threading.RLock()
+            _CLAIM_LIFECYCLE_LOCKS[resolved_mutex_path] = lock
+        return lock
+
+
+def lock_claim_lifecycle_file(handle) -> None:
+    if os.name == "nt":
+        import msvcrt
+
+        handle.seek(0, os.SEEK_END)
+        if handle.tell() == 0:
+            handle.write(b"\0")
+            handle.flush()
+            os.fsync(handle.fileno())
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+        return
+
+    import fcntl
+
+    fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+
+
+def unlock_claim_lifecycle_file(handle) -> None:
+    if os.name == "nt":
+        import msvcrt
+
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        return
+
+    import fcntl
+
+    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+@contextmanager
+def claim_lifecycle_lock(job_dir: Path):
+    resolved_job_dir = job_dir.resolve(strict=False)
+    mutex_path = claim_lifecycle_mutex_path(resolved_job_dir)
+    local_lock = claim_lifecycle_local_lock(mutex_path)
+    with local_lock:
+        try:
+            mutex_path.parent.mkdir(parents=True, exist_ok=True)
+            fd = os.open(mutex_path, os.O_RDWR | os.O_CREAT)
+        except OSError as exc:
+            raise HarnessCliError(
+                f"failed to open claim lifecycle mutex {mutex_path}: {exc}",
+            ) from exc
+        with os.fdopen(fd, "r+b") as handle:
+            try:
+                lock_claim_lifecycle_file(handle)
+            except OSError as exc:
+                raise HarnessCliError(
+                    f"failed to lock claim lifecycle mutex {mutex_path}: {exc}",
+                ) from exc
+            try:
+                yield
+            finally:
+                try:
+                    unlock_claim_lifecycle_file(handle)
+                except OSError as exc:
+                    raise HarnessCliError(
+                        f"failed to unlock claim lifecycle mutex {mutex_path}: {exc}",
+                    ) from exc
+
+
+def remove_claim_lock_dir(lock_dir: Path, job_dir: Path) -> None:
+    resolved_job_dir = job_dir.resolve(strict=False)
+    resolved_lock_dir = lock_dir.resolve(strict=False)
+    if (
+        resolved_lock_dir.name != CLAIM_LOCK_DIR_NAME
+        or resolved_lock_dir.parent != resolved_job_dir
+        or not is_within_path(resolved_lock_dir, resolved_job_dir)
+    ):
+        raise HarnessCliError(f"refusing to remove unexpected claim lock path: {lock_dir}")
+    retry_seconds = CLAIM_LOCK_REMOVE_RETRY_SECONDS
+    for attempt in range(CLAIM_LOCK_REMOVE_ATTEMPTS):
+        try:
+            shutil.rmtree(resolved_lock_dir)
+            return
+        except FileNotFoundError:
+            return
+        except OSError as exc:
+            transient = (
+                os.name == "nt"
+                and getattr(exc, "winerror", None) in TRANSIENT_CLAIM_LOCK_REMOVE_WINERRORS
+            )
+            if transient and attempt + 1 < CLAIM_LOCK_REMOVE_ATTEMPTS:
+                time.sleep(retry_seconds)
+                retry_seconds *= 2
+                continue
+            raise HarnessCliError(f"failed to remove claim lock {lock_dir}: {exc}") from exc
+
+
+def release_job_claim_unlocked(claim: JobClaim | None) -> None:
+    if claim is None:
+        return
+    remove_claim_lock_dir(claim.lock_dir, claim.job_dir)
+
+
+def claim_owner_matches_claim(owner: dict[str, Any], claim: JobClaim) -> bool:
+    return (
+        owner.get("run_id") == claim.owner.get("run_id")
+        and owner.get("job_id") == claim.job_id
+        and owner.get("worker_id") == claim.worker_id
+        and owner.get("claim_token") == claim.claim_token
+    )
+
+
+def release_job_claim(claim: JobClaim | None) -> None:
+    if claim is None:
+        return
+    with claim_lifecycle_lock(claim.job_dir):
+        try:
+            owner = load_claim_owner_for_claim_unlocked(claim)
+        except HarnessCliError:
+            return
+        if claim_owner_matches_claim(owner, claim):
+            release_job_claim_unlocked(claim)
+
+
+def acquire_claim_lock_dir(job_dir: Path, lock_dir: Path, owner: dict[str, Any]) -> bool:
+    temp_dir = job_dir / f".{CLAIM_LOCK_DIR_NAME}.{uuid.uuid4().hex}.tmp"
+    try:
+        temp_dir.mkdir()
+        write_json_atomic(temp_dir / "owner.json", owner)
+        retry_seconds = CLAIM_LOCK_RENAME_RETRY_SECONDS
+        for attempt in range(CLAIM_LOCK_RENAME_ATTEMPTS):
+            try:
+                temp_dir.rename(lock_dir)
+                break
+            except FileExistsError:
+                shutil.rmtree(temp_dir, ignore_errors=True)
+                return False
+            except OSError as exc:
+                if lock_dir.exists():
+                    shutil.rmtree(temp_dir, ignore_errors=True)
+                    return False
+                transient = getattr(exc, "winerror", None) in TRANSIENT_CLAIM_LOCK_WINERRORS
+                if transient and attempt + 1 < CLAIM_LOCK_RENAME_ATTEMPTS:
+                    time.sleep(retry_seconds)
+                    retry_seconds *= 2
+                    continue
+                raise HarnessCliError(
+                    f"failed to acquire claim lock {lock_dir}: {exc}",
+                ) from exc
+        return True
+    except Exception:
+        if temp_dir.exists():
+            shutil.rmtree(temp_dir, ignore_errors=True)
+        raise
+
+
+def try_claim_job(
+    run_dir: Path | str,
+    job_id: str,
+    *,
+    worker_id: str,
+    root: Path | str | None = None,
+) -> JobClaim | None:
+    validate_non_empty_string(job_id, "job_id")
+    validate_generic_agent_job_id(job_id)
+    validate_non_empty_string(worker_id, "worker_id")
+
+    resolved_run_dir = Path(run_dir)
+    repo_root = resolve_repository_root(resolved_run_dir, root=root)
+    before = validate_run(resolved_run_dir, root=repo_root)
+    if not before.ok:
+        raise HarnessCliError(format_errors(before.errors))
+
+    state = load_json(state_path(resolved_run_dir))
+    job_dir = resolve_generic_job_dir(resolved_run_dir, job_id)
+    job_path = job_dir / "job.json"
+    if not job_path.exists():
+        raise HarnessCliError(f"job does not exist: {job_id}")
+
+    lock_dir = job_claim_lock_dir(resolved_run_dir, job_id)
+    owner_path = lock_dir / "owner.json"
+    claim_token = new_claim_token()
+    owner = build_claim_owner(
+        run_id=state["run_id"],
+        job_id=job_id,
+        worker_id=worker_id,
+        claim_token=claim_token,
+        claimed_at=datetime.now(timezone.utc),
+    )
+    claim = JobClaim(
+        run_dir=resolved_run_dir,
+        job_id=job_id,
+        worker_id=worker_id,
+        claim_token=claim_token,
+        job_dir=job_dir,
+        lock_dir=lock_dir,
+        owner_path=owner_path,
+        owner=owner,
+    )
+    with claim_lifecycle_lock(job_dir):
+        if not acquire_claim_lock_dir(job_dir, lock_dir, owner):
+            return None
+
+        try:
+            job, job_errors = validate_json_artifact(job_path, JOB_SCHEMA, "job")
+            if job_errors:
+                release_job_claim_unlocked(claim)
+                raise HarnessCliError(format_errors(job_errors))
+            if job is None:
+                release_job_claim_unlocked(claim)
+                raise HarnessCliError(f"job cannot be loaded: {job_path}")
+            if job.get("job_id") != job_id:
+                release_job_claim_unlocked(claim)
+                raise HarnessCliError(
+                    f"job_id mismatch: expected {job_id}, got {job.get('job_id')}",
+                )
+            if job.get("run_id") != state["run_id"]:
+                release_job_claim_unlocked(claim)
+                raise HarnessCliError(
+                    f"run_id mismatch: expected {state['run_id']}, got {job.get('run_id')}",
+                )
+            if job["status"] != "queued":
+                release_job_claim_unlocked(claim)
+                return None
+            return claim
+        except Exception:
+            if lock_dir.exists():
+                try:
+                    remove_claim_lock_dir(lock_dir, job_dir)
+                except HarnessCliError:
+                    pass
+            raise
+
+
+def refresh_claim_lease(
+    claim: JobClaim,
+    *,
+    lease_seconds: float = DEFAULT_CLAIM_LEASE_SECONDS,
+    now: str | datetime | None = None,
+    root: Path | str | None = None,
+) -> JobClaim:
+    validate_non_empty_string(claim.job_id, "job_id")
+    validate_generic_agent_job_id(claim.job_id)
+    validate_non_empty_string(claim.worker_id, "worker_id")
+    validate_non_empty_string(claim.claim_token, "claim_token")
+
+    resolved_run_dir = Path(claim.run_dir)
+    repo_root = resolve_repository_root(resolved_run_dir, root=root)
+    before = validate_run(resolved_run_dir, root=repo_root)
+    if not before.ok:
+        raise HarnessCliError(format_errors(before.errors))
+
+    state = load_json(state_path(resolved_run_dir))
+    with claim_lifecycle_lock(claim.job_dir):
+        owner, owner_errors = validate_json_artifact(
+            claim.owner_path,
+            CLAIM_OWNER_SCHEMA,
+            "claim-owner",
+        )
+        if owner_errors:
+            raise HarnessCliError(format_errors(owner_errors))
+        if owner is None:
+            raise HarnessCliError(f"claim owner cannot be loaded: {claim.owner_path}")
+
+        errors: list[str] = []
+        if owner.get("run_id") != state["run_id"]:
+            errors.append(
+                f"run_id mismatch: expected {state['run_id']}, got {owner.get('run_id')}",
+            )
+        if owner.get("job_id") != claim.job_id:
+            errors.append(
+                f"job_id mismatch: expected {claim.job_id}, got {owner.get('job_id')}",
+            )
+        if owner.get("worker_id") != claim.worker_id:
+            errors.append(
+                f"worker_id mismatch: expected {claim.worker_id}, got {owner.get('worker_id')}",
+            )
+        if owner.get("claim_token") != claim.claim_token:
+            errors.append("claim_token mismatch")
+        if errors:
+            raise HarnessCliError(format_errors(errors))
+
+        now_dt = resolve_datetime(now, "now")
+        refreshed_owner = dict(owner)
+        refreshed_owner["lease_heartbeat_at"] = format_datetime(now_dt)
+        refreshed_owner["lease_expires_at"] = format_datetime(
+            add_seconds(now_dt, lease_seconds),
+        )
+        write_json_atomic(claim.owner_path, refreshed_owner)
+        return replace(claim, owner=refreshed_owner)
+
+
+def assert_claim_matches_job(
+    job: dict[str, Any],
+    owner: dict[str, Any],
+    *,
+    worker_id: str,
+    expected_status: str,
+    expected_claim_token: str | None,
+) -> None:
+    errors: list[str] = []
+    if owner.get("run_id") != job.get("run_id"):
+        errors.append(
+            f"run_id mismatch: owner {owner.get('run_id')}, job {job.get('run_id')}",
+        )
+    if owner.get("job_id") != job.get("job_id"):
+        errors.append(
+            f"job_id mismatch: owner {owner.get('job_id')}, job {job.get('job_id')}",
+        )
+    if owner.get("worker_id") != worker_id:
+        errors.append(
+            f"worker_id mismatch: expected {worker_id}, got {owner.get('worker_id')}",
+        )
+    if owner.get("claim_token") != expected_claim_token:
+        errors.append("owner claim_token mismatch")
+    if job.get("status") != expected_status:
+        errors.append(
+            f"status mismatch: expected {expected_status}, got {job.get('status')}",
+        )
+
+    job_claim_token = job.get("claim_token")
+    if expected_status == "queued" and job_claim_token is not None:
+        errors.append(f"claim_token mismatch: expected null, got {job_claim_token}")
+    if expected_status == "running" and job_claim_token != expected_claim_token:
+        errors.append("claim_token mismatch")
+    if errors:
+        raise HarnessCliError(format_errors(errors))
+
+
+def load_claim_owner_for_claim_unlocked(claim: JobClaim) -> dict[str, Any]:
+    owner, owner_errors = validate_json_artifact(
+        claim.owner_path,
+        CLAIM_OWNER_SCHEMA,
+        "claim-owner",
+    )
+    if owner_errors:
+        raise HarnessCliError(format_errors(owner_errors))
+    if owner is None:
+        raise HarnessCliError(f"claim owner cannot be loaded: {claim.owner_path}")
+    return owner
+
+
+def load_claim_owner_for_claim(claim: JobClaim) -> dict[str, Any]:
+    return load_claim_owner_for_claim_unlocked(claim)
+
+
+def load_job_payload(job_path: Path) -> dict[str, Any]:
+    job, job_errors = validate_json_artifact(job_path, JOB_SCHEMA, "job")
+    if job_errors:
+        raise HarnessCliError(format_errors(job_errors))
+    if job is None:
+        raise HarnessCliError(f"job cannot be loaded: {job_path}")
+    return job
+
+
+def load_job_for_claim_unlocked(claim: JobClaim) -> dict[str, Any]:
+    return load_job_payload(claim.job_dir / "job.json")
+
+
+def validate_job_payload(job: Any) -> list[str]:
+    schema = load_json(JOB_SCHEMA)
+    errors = format_schema_errors(
+        "job",
+        Draft202012Validator(schema).iter_errors(job),
+    )
+    if isinstance(job, dict):
+        errors.extend(validate_job_timestamp_semantics(job))
+    return errors
+
+
+def write_job_if_claim_matches_unlocked(
+    claim: JobClaim,
+    *,
+    expected_status: str,
+    mutate: Any,
+) -> dict[str, Any]:
+    job_path = claim.job_dir / "job.json"
+    owner = load_claim_owner_for_claim_unlocked(claim)
+    job = load_job_for_claim_unlocked(claim)
+    assert_claim_matches_job(
+        job,
+        owner,
+        worker_id=claim.worker_id,
+        expected_status=expected_status,
+        expected_claim_token=claim.claim_token,
+    )
+    new_job = mutate(json.loads(json.dumps(job)))
+    new_job_errors = validate_job_payload(new_job)
+    if new_job_errors:
+        raise HarnessCliError(format_errors(new_job_errors))
+    write_json_atomic(job_path, new_job)
+    return new_job
+
+
+def write_job_if_claim_matches(
+    claim: JobClaim,
+    *,
+    expected_status: str,
+    mutate: Any,
+) -> dict[str, Any]:
+    with claim_lifecycle_lock(claim.job_dir):
+        return write_job_if_claim_matches_unlocked(
+            claim,
+            expected_status=expected_status,
+            mutate=mutate,
+        )
+
+
+def assert_current_job_claim_matches_unlocked(
+    claim: JobClaim,
+    *,
+    expected_status: str,
+) -> dict[str, Any]:
+    owner = load_claim_owner_for_claim_unlocked(claim)
+    job = load_job_for_claim_unlocked(claim)
+    assert_claim_matches_job(
+        job,
+        owner,
+        worker_id=claim.worker_id,
+        expected_status=expected_status,
+        expected_claim_token=claim.claim_token,
+    )
+    return job
+
+
+def assert_current_job_claim_matches(
+    claim: JobClaim,
+    *,
+    expected_status: str,
+) -> dict[str, Any]:
+    with claim_lifecycle_lock(claim.job_dir):
+        return assert_current_job_claim_matches_unlocked(
+            claim,
+            expected_status=expected_status,
+        )
+
+
+def mark_claimed_job_running(
+    claim: JobClaim,
+    *,
+    started_at: str,
+) -> dict[str, Any]:
+    def mutate(job: dict[str, Any]) -> dict[str, Any]:
+        job["status"] = "running"
+        job["started_at"] = started_at
+        job["updated_at"] = started_at
+        job["worker_id"] = claim.worker_id
+        job["claim_token"] = claim.claim_token
+        job["claim_started_at"] = started_at
+        job["claim_updated_at"] = started_at
+        return job
+
+    return write_job_if_claim_matches(
+        claim,
+        expected_status="queued",
+        mutate=mutate,
+    )
+
+
+def claimed_output_temp_path(job_dir: Path, claim_token: str) -> Path:
+    return job_dir / f"output.{claim_token}.tmp.json"
+
+
+def publish_claimed_output(temp_path: Path, output_path: Path) -> None:
+    if output_path.exists():
+        raise HarnessCliError(f"output_file already exists: {output_path}")
+    try:
+        with temp_path.open("rb") as source, output_path.open("xb") as target:
+            shutil.copyfileobj(source, target)
+    except FileExistsError as exc:
+        raise HarnessCliError(f"output_file already exists: {output_path}") from exc
+    temp_path.unlink(missing_ok=True)
+
+
+def cleanup_claimed_output_temp(temp_path: Path) -> None:
+    try:
+        temp_path.unlink(missing_ok=True)
+    except OSError as exc:
+        raise HarnessCliError(f"failed to remove claimed output temp file {temp_path}: {exc}") from exc
+
+
+def claim_lock_snapshot_matches_current_unlocked(
+    run_dir: Path,
+    job_id: str,
+    *,
+    run_id: str,
+    now: datetime,
+    expected_status: str,
+    expected_owner: dict[str, Any] | None,
+    expected_errors: list[str],
+) -> bool:
+    current = read_claim_lock_status(
+        run_dir,
+        job_id,
+        run_id=run_id,
+        now=now,
+    )
+    if current.get("status") != expected_status:
+        return False
+    if current.get("owner") != expected_owner:
+        return False
+    if expected_status in {"invalid-lock", "missing-owner", "invalid-owner"}:
+        return current.get("errors") == expected_errors
+    return True
+
+
+def claim_lock_has_fresh_matching_lease(
+    job: dict[str, Any],
+    claim_lock_status: dict[str, Any],
+) -> bool:
+    owner = claim_lock_status.get("owner")
+    return (
+        claim_lock_status.get("status") == "present"
+        and isinstance(owner, dict)
+        and claim_lock_status.get("lease_expired") is False
+        and owner.get("run_id") == job.get("run_id")
+        and owner.get("job_id") == job.get("job_id")
+        and owner.get("worker_id") == job.get("worker_id")
+        and owner.get("claim_token") == job.get("claim_token")
+    )
+
+
+def remove_recovered_claim_lock_if_unchanged(
+    *,
+    job_dir: Path,
+    lock_dir: Path,
+    expected_status: str,
+    expected_owner: dict[str, Any] | None,
+) -> bool:
+    if not lock_dir.exists():
+        return False
+    with claim_lifecycle_lock(job_dir):
+        if not lock_dir.exists():
+            return False
+        owner_path = lock_dir / "owner.json"
+        if expected_status == "missing-owner":
+            if owner_path.exists():
+                return False
+            remove_claim_lock_dir(lock_dir, job_dir)
+            return True
+        if expected_status != "present" or expected_owner is None:
+            return False
+        current_owner, owner_errors = validate_json_artifact(
+            owner_path,
+            CLAIM_OWNER_SCHEMA,
+            "claim-owner",
+        )
+        if owner_errors or current_owner is None:
+            return False
+        if current_owner != expected_owner:
+            return False
+        remove_claim_lock_dir(lock_dir, job_dir)
+        return True
+
+
+def read_claim_lock_status(
+    run_dir: Path | str,
+    job_id: str,
+    *,
+    run_id: str,
+    now: str | datetime | None = None,
+) -> dict[str, Any]:
+    now_dt = resolve_datetime(now, "now")
+    lock_dir = job_claim_lock_dir(run_dir, job_id)
+    owner_path = lock_dir / "owner.json"
+    status = {
+        "status": "absent",
+        "path": claim_lock_relative_path(job_id),
+        "owner": None,
+        "errors": [],
+    }
+    if not lock_dir.exists():
+        return status
+    if not lock_dir.is_dir():
+        status["status"] = "invalid-lock"
+        status["errors"] = [f"{lock_dir}: claim lock must be a directory"]
+        return status
+    if not owner_path.exists():
+        status["status"] = "missing-owner"
+        status["errors"] = [f"{owner_path}: owner.json missing"]
+        return status
+
+    owner, owner_errors = validate_json_artifact(
+        owner_path,
+        CLAIM_OWNER_SCHEMA,
+        "claim-owner",
+    )
+    errors = list(owner_errors)
+    if owner is not None:
+        if owner.get("job_id") != job_id:
+            errors.append(
+                f"{owner_path}: job_id mismatch: expected {job_id}, got {owner.get('job_id')}",
+            )
+        if owner.get("run_id") != run_id:
+            errors.append(
+                f"{owner_path}: run_id mismatch: expected {run_id}, got {owner.get('run_id')}",
+            )
+    if errors:
+        status["status"] = "invalid-owner"
+        status["owner"] = owner
+        status["errors"] = errors
+        return status
+
+    status["status"] = "present"
+    status["owner"] = owner
+    lease_heartbeat_at = parse_datetime(owner.get("lease_heartbeat_at"))
+    lease_expires_at = parse_datetime(owner.get("lease_expires_at"))
+    status["claim_token"] = owner.get("claim_token")
+    status["lease_heartbeat_at"] = owner.get("lease_heartbeat_at")
+    status["lease_expires_at"] = owner.get("lease_expires_at")
+    status["lease_age_seconds"] = seconds_since(lease_heartbeat_at, now_dt)
+    status["lease_expired"] = (
+        lease_expires_at is not None and seconds_since(lease_expires_at, now_dt) > 0
+    )
+    return status
+
+
+def execute_claimed_generic_agent_job(
+    run_dir: Path,
+    claim: JobClaim,
+    *,
+    iteration: int,
+    poll_interval_seconds: float,
+    root: Path,
+) -> dict[str, Any]:
+    executed_job: dict[str, Any] | None = None
+    try:
+        executed_job = execute_scheduler_job_with_heartbeat(
+            run_dir,
+            claim.job_id,
+            worker_id=claim.worker_id,
+            iteration=iteration,
+            poll_interval_seconds=poll_interval_seconds,
+            root=root,
+            claim=claim,
+        )
+        return executed_job
+    finally:
+        # Retain the lock for uncertain running states; explicit stale recovery owns cleanup.
+        should_release = False
+        if executed_job is not None:
+            should_release = executed_job.get("status") in TERMINAL_JOB_STATUSES
+        else:
+            try:
+                current_job = load_json(claim.job_dir / "job.json")
+                should_release = current_job.get("status") != "running"
+            except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+                should_release = False
+        if should_release:
+            release_job_claim(claim)
+
+
 def scheduler_stop_requested(
     run_dir: Path | str,
 ) -> tuple[bool, dict[str, Any] | None, list[str]]:
@@ -2014,9 +2941,510 @@ def scheduler_stop_requested(
     return True, payload, []
 
 
+def validate_heartbeat_timeout(heartbeat_timeout_seconds: float) -> None:
+    if not math.isfinite(heartbeat_timeout_seconds):
+        raise HarnessCliError("heartbeat_timeout_seconds must be finite")
+    if heartbeat_timeout_seconds <= 0:
+        raise HarnessCliError("heartbeat_timeout_seconds must be greater than 0")
+
+
+def load_scheduler_heartbeat(
+    run_dir: Path | str,
+) -> tuple[dict[str, Any] | None, list[str]]:
+    path = scheduler_heartbeat_path(run_dir)
+    if not path.exists():
+        return None, ["scheduler heartbeat missing"]
+    try:
+        payload = load_json(path)
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+        return None, [f"{path}: scheduler heartbeat cannot be read: {exc}"]
+    if not isinstance(payload, dict):
+        return None, [f"{path}: scheduler heartbeat must be an object"]
+    return payload, []
+
+
+def seconds_since(timestamp: datetime | None, now: datetime) -> float | None:
+    if timestamp is None:
+        return None
+    return max(0.0, (now - timestamp).total_seconds())
+
+
+def assess_running_job_staleness(
+    job: dict[str, Any],
+    *,
+    heartbeat: dict[str, Any] | None,
+    heartbeat_errors: list[str],
+    heartbeat_timeout_seconds: float,
+    now_dt: datetime,
+) -> dict[str, Any]:
+    job_id = job["job_id"]
+    worker_id = job.get("worker_id")
+    started_at = parse_datetime(job.get("started_at"))
+    updated_at = parse_datetime(job.get("updated_at")) if job.get("updated_at") else None
+    freshness_timestamp = updated_at or started_at
+    freshness_label = "updated_at" if updated_at is not None else "started_at"
+    freshness_age = seconds_since(freshness_timestamp, now_dt)
+    reasons: list[str] = []
+    heartbeat_age: float | None = None
+    classification = "stale"
+
+    if heartbeat_errors:
+        reasons.extend(heartbeat_errors)
+    if not worker_id:
+        reasons.append("job worker_id missing")
+
+    if heartbeat is not None:
+        heartbeat_worker_id = heartbeat.get("worker_id")
+        heartbeat_last_seen_at = parse_datetime(heartbeat.get("last_seen_at"))
+        heartbeat_age = seconds_since(heartbeat_last_seen_at, now_dt)
+        if heartbeat_worker_id != worker_id:
+            reasons.append("scheduler heartbeat worker_id mismatch")
+        if heartbeat_last_seen_at is None:
+            reasons.append("scheduler heartbeat last_seen_at invalid")
+        elif heartbeat_age is not None and heartbeat_age > heartbeat_timeout_seconds:
+            reasons.append("scheduler heartbeat timed out")
+        if heartbeat.get("status") != "running-job":
+            reasons.append(f"scheduler heartbeat status is {heartbeat.get('status')}")
+        if heartbeat.get("current_job_id") != job_id:
+            reasons.append("scheduler heartbeat current_job_id mismatch")
+
+        if (
+            worker_id
+            and heartbeat_worker_id == worker_id
+            and heartbeat_last_seen_at is not None
+            and heartbeat_age is not None
+            and heartbeat_age <= heartbeat_timeout_seconds
+            and heartbeat.get("status") == "running-job"
+            and heartbeat.get("current_job_id") == job_id
+        ):
+            classification = "active"
+            reasons = ["fresh matching scheduler heartbeat"]
+    if classification != "active":
+        if freshness_timestamp is None:
+            classification = "invalid"
+            reasons.append(f"job {freshness_label} invalid")
+        elif freshness_age is not None and freshness_age <= heartbeat_timeout_seconds:
+            classification = "recent"
+            reasons.append(f"job {freshness_label} within timeout")
+        else:
+            classification = "stale"
+            reasons.append(f"job {freshness_label} timed out")
+
+    return {
+        "job_id": job_id,
+        "classification": classification,
+        "reasons": reasons,
+        "worker_id": worker_id,
+        "started_at": job.get("started_at"),
+        "updated_at": job.get("updated_at"),
+        "heartbeat_worker_id": heartbeat.get("worker_id") if heartbeat else None,
+        "heartbeat_status": heartbeat.get("status") if heartbeat else None,
+        "heartbeat_current_job_id": heartbeat.get("current_job_id") if heartbeat else None,
+        "heartbeat_last_seen_at": heartbeat.get("last_seen_at") if heartbeat else None,
+        "heartbeat_age_seconds": heartbeat_age,
+        "job_age_seconds": freshness_age,
+    }
+
+
+def invalid_running_job_assessment(
+    *,
+    job_id: str,
+    reasons: list[str],
+    job: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return {
+        "job_id": job_id,
+        "classification": "invalid",
+        "reasons": reasons,
+        "worker_id": job.get("worker_id") if job else None,
+        "started_at": job.get("started_at") if job else None,
+        "updated_at": job.get("updated_at") if job else None,
+        "heartbeat_worker_id": None,
+        "heartbeat_status": None,
+        "heartbeat_current_job_id": None,
+        "heartbeat_last_seen_at": None,
+        "heartbeat_age_seconds": None,
+        "job_age_seconds": None,
+    }
+
+
+def load_running_jobs_for_stale_detection(
+    run_dir: Path,
+    *,
+    root: Path,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    state = load_json(state_path(run_dir))
+    run_id = state["run_id"]
+    jobs_dir = run_dir / "jobs"
+    if not jobs_dir.exists():
+        return [], []
+
+    running_jobs: list[dict[str, Any]] = []
+    invalid_jobs: list[dict[str, Any]] = []
+    for job_path in sorted(jobs_dir.glob("*/job.json")):
+        job_id = job_path.parent.name
+        try:
+            raw_job = load_json(job_path)
+        except (UnicodeDecodeError, json.JSONDecodeError, OSError) as exc:
+            invalid_jobs.append(
+                invalid_running_job_assessment(
+                    job_id=job_id,
+                    reasons=[f"{job_path}: job cannot be loaded: {exc}"],
+                )
+            )
+            continue
+        if not isinstance(raw_job, dict):
+            invalid_jobs.append(
+                invalid_running_job_assessment(
+                    job_id=job_id,
+                    reasons=[f"{job_path}: job must be an object"],
+                )
+            )
+            continue
+        if raw_job.get("status") != "running":
+            continue
+
+        job, schema_errors = validate_json_artifact(job_path, JOB_SCHEMA, "job")
+        errors = [f"{job_path}: {error}" for error in schema_errors]
+        candidate = raw_job if job is None else job
+        raw_job_id = candidate.get("job_id")
+        if isinstance(raw_job_id, str):
+            try:
+                validate_generic_agent_job_id(raw_job_id)
+            except HarnessCliError as exc:
+                errors.append(f"{job_path}: {exc}")
+            if raw_job_id != job_id:
+                errors.append(
+                    f"{job_path}: job_id mismatch: expected {job_id}, got {raw_job_id}",
+                )
+        else:
+            errors.append(f"{job_path}: job_id must be a string")
+        if candidate.get("run_id") != run_id:
+            errors.append(
+                f"{job_path}: run_id mismatch: expected {run_id}, got {candidate.get('run_id')}",
+            )
+        errors.extend(
+            f"{job_path}: {error}" for error in validate_job_timestamp_semantics(candidate)
+        )
+
+        if errors:
+            invalid_jobs.append(
+                invalid_running_job_assessment(
+                    job_id=job_id,
+                    reasons=errors,
+                    job=candidate,
+                )
+            )
+            continue
+        running_jobs.append(candidate)
+
+    return running_jobs, invalid_jobs
+
+
+def detect_stale_running_jobs(
+    run_dir: Path | str,
+    *,
+    heartbeat_timeout_seconds: float,
+    now: str | datetime | None = None,
+    root: Path | str | None = None,
+) -> dict[str, Any]:
+    validate_heartbeat_timeout(heartbeat_timeout_seconds)
+    now_dt = resolve_datetime(now, "now")
+    resolved_run_dir = Path(run_dir)
+    repo_root = resolve_repository_root(resolved_run_dir, root=root)
+    before = validate_run(resolved_run_dir, root=repo_root)
+    if not before.ok:
+        raise HarnessCliError(format_errors(before.errors))
+
+    state = load_json(state_path(resolved_run_dir))
+    heartbeat, heartbeat_errors = load_scheduler_heartbeat(resolved_run_dir)
+    jobs, invalid_assessments = load_running_jobs_for_stale_detection(
+        resolved_run_dir,
+        root=repo_root,
+    )
+    jobs = sorted(jobs, key=lambda item: (item["created_at"], item["job_id"]))
+    assessments = [
+        assess_running_job_staleness(
+            job,
+            heartbeat=heartbeat,
+            heartbeat_errors=heartbeat_errors,
+            heartbeat_timeout_seconds=heartbeat_timeout_seconds,
+            now_dt=now_dt,
+        )
+        for job in jobs
+    ]
+    assessments.extend(invalid_assessments)
+    for assessment in assessments:
+        assessment["claim_lock"] = read_claim_lock_status(
+            resolved_run_dir,
+            assessment["job_id"],
+            run_id=state["run_id"],
+            now=now_dt,
+        )
+
+    return {
+        "run_id": state["run_id"],
+        "generated_at": format_datetime(now_dt),
+        "heartbeat_timeout_seconds": heartbeat_timeout_seconds,
+        "active_jobs": [
+            item["job_id"] for item in assessments if item["classification"] == "active"
+        ],
+        "recent_jobs": [
+            item["job_id"] for item in assessments if item["classification"] == "recent"
+        ],
+        "stale_jobs": [
+            item["job_id"] for item in assessments if item["classification"] == "stale"
+        ],
+        "invalid_jobs": [
+            item["job_id"] for item in assessments if item["classification"] == "invalid"
+        ],
+        "jobs": assessments,
+    }
+
+
+def job_artifact_path(job_dir: Path, job: dict[str, Any], field: str) -> Path:
+    raw_path = job[field]
+    candidate = Path(raw_path)
+    if not candidate.is_absolute():
+        candidate = job_dir / candidate
+    resolved = candidate.resolve(strict=False)
+    if not is_within_path(resolved, job_dir):
+        raise HarnessCliError(f"{field} escapes job directory: {raw_path}")
+    return resolved
+
+
+def recovery_timestamp_fragment(timestamp: str) -> str:
+    return (
+        timestamp.replace("-", "")
+        .replace(":", "")
+        .replace("+", "")
+        .replace(".", "")
+    )
+
+
+def write_job_recovery_artifact(
+    run_dir: Path,
+    *,
+    job_id: str,
+    artifact: dict[str, Any],
+) -> Path:
+    recovery_dir = run_dir / "jobs" / job_id / "recovery"
+    recovery_dir.mkdir(parents=True, exist_ok=True)
+    requested_at = recovery_timestamp_fragment(artifact["requested_at"])
+    path = recovery_dir / f"{requested_at}-{artifact['action']}.json"
+    if path.exists():
+        path = recovery_dir / f"{requested_at}-{artifact['action']}-{uuid.uuid4().hex[:8]}.json"
+    write_json_atomic(path, artifact)
+    return path
+
+
+def recover_stale_running_job(
+    run_dir: Path | str,
+    job_id: str,
+    *,
+    action: str,
+    reason: str,
+    heartbeat_timeout_seconds: float,
+    now: str | datetime | None = None,
+    confirm: bool = False,
+    artifact_correction_confirmed: bool = False,
+    actor: str = CODEX_ACTOR,
+    root: Path | str | None = None,
+) -> dict[str, Any]:
+    validate_non_empty_string(job_id, "job_id")
+    validate_generic_agent_job_id(job_id)
+    validate_non_empty_string(reason, "reason")
+    if action not in {"requeue", "fail"}:
+        raise HarnessCliError("action must be one of: requeue, fail")
+    if not confirm:
+        raise HarnessCliError("--confirm is required to recover a stale running job")
+
+    validate_heartbeat_timeout(heartbeat_timeout_seconds)
+    now_dt = resolve_datetime(now, "now")
+    requested_at = format_datetime(now_dt)
+    resolved_run_dir = Path(run_dir)
+    repo_root = resolve_repository_root(resolved_run_dir, root=root)
+    before = validate_run(resolved_run_dir, root=repo_root)
+    if not before.ok:
+        raise HarnessCliError(format_errors(before.errors))
+
+    report = detect_stale_running_jobs(
+        resolved_run_dir,
+        heartbeat_timeout_seconds=heartbeat_timeout_seconds,
+        now=now_dt,
+        root=repo_root,
+    )
+    assessment = next(
+        (item for item in report["jobs"] if item["job_id"] == job_id),
+        None,
+    )
+    if assessment is None:
+        raise HarnessCliError(f"job is not running or does not exist: {job_id}")
+    if assessment["classification"] != "stale":
+        raise HarnessCliError(
+            f"job {job_id} is {assessment['classification']}, not stale; "
+            "recovery would risk rewriting an active job",
+        )
+    claim_lock_assessment = assessment.get("claim_lock", {})
+    claim_lock_status = claim_lock_assessment.get("status")
+    claim_lock_owner = claim_lock_assessment.get("owner")
+    claim_lock_errors = list(claim_lock_assessment.get("errors", []))
+    expected_claim_lock_owner = (
+        json.loads(json.dumps(claim_lock_owner))
+        if isinstance(claim_lock_owner, dict)
+        else None
+    )
+
+    job_dir = (resolved_run_dir / "jobs" / job_id).resolve(strict=False)
+    jobs_dir = (resolved_run_dir / "jobs").resolve(strict=False)
+    if not is_within_path(job_dir, jobs_dir):
+        raise HarnessCliError(f"job_id escapes jobs directory: {job_id}")
+    job_path = job_dir / "job.json"
+    job, job_errors = validate_json_artifact(job_path, JOB_SCHEMA, "job")
+    if job_errors:
+        raise HarnessCliError(format_errors(job_errors))
+    if job is None:
+        raise HarnessCliError(f"job cannot be loaded: {job_path}")
+    if job["status"] != "running":
+        raise HarnessCliError(f"job {job_id} is not running")
+    if claim_lock_has_fresh_matching_lease(job, claim_lock_assessment):
+        raise HarnessCliError(
+            f"job {job_id} has a fresh matching claim lease; "
+            "recovery would risk rewriting an active job",
+        )
+
+    artifact_warnings: list[str] = []
+    conflicting_artifacts: list[str] = []
+    for field in ("output_file", "raw_log_file"):
+        artifact_path = job_artifact_path(job_dir, job, field)
+        if artifact_path.exists():
+            conflicting_artifacts.append(job[field])
+    if action == "requeue" and conflicting_artifacts:
+        raise HarnessCliError(
+            "artifact correction required before requeue: "
+            + ", ".join(conflicting_artifacts),
+        )
+    if artifact_correction_confirmed:
+        artifact_warnings.append("operator confirmed artifact correction before recovery")
+
+    previous_job = json.loads(json.dumps(job))
+    new_job = json.loads(json.dumps(job))
+    if action == "requeue":
+        new_job["status"] = "queued"
+        new_job["started_at"] = None
+        new_job["completed_at"] = None
+        new_job["updated_at"] = requested_at
+        new_job["worker_id"] = None
+        new_job["error_reason"] = None
+        new_job["claim_token"] = None
+        new_job["claim_started_at"] = None
+        new_job["claim_updated_at"] = None
+    else:
+        new_job["status"] = "failed"
+        new_job["completed_at"] = requested_at
+        new_job["updated_at"] = requested_at
+        new_job["error_reason"] = f"stale running recovery: {reason}"
+
+    artifact = {
+        "schema_version": HARNESS_VERSION,
+        "run_id": job["run_id"],
+        "job_id": job_id,
+        "action": action,
+        "requested_by": actor,
+        "requested_at": requested_at,
+        "reason": reason,
+        "heartbeat_timeout_seconds": heartbeat_timeout_seconds,
+        "artifact_correction_confirmed": artifact_correction_confirmed,
+        "artifact_warnings": artifact_warnings,
+        "stale_assessment": assessment,
+        "previous_job": previous_job,
+        "new_job": new_job,
+    }
+    recovery_path = write_job_recovery_artifact(
+        resolved_run_dir,
+        job_id=job_id,
+        artifact=artifact,
+    )
+    claim_lock_removed = False
+    lock_dir = job_claim_lock_dir(resolved_run_dir, job_id)
+    if not isinstance(claim_lock_status, str):
+        raise HarnessCliError("stale assessment missing claim lock status")
+    with claim_lifecycle_lock(job_dir):
+        current_job = load_job_payload(job_path)
+        if current_job != previous_job:
+            raise HarnessCliError(
+                f"job {job_id} changed during recovery; "
+                "refusing to rewrite current job state",
+            )
+        if not claim_lock_snapshot_matches_current_unlocked(
+            resolved_run_dir,
+            job_id,
+            run_id=job["run_id"],
+            now=now_dt,
+            expected_status=claim_lock_status,
+            expected_owner=expected_claim_lock_owner,
+            expected_errors=claim_lock_errors,
+        ):
+            raise HarnessCliError(
+                f"claim lock for job {job_id} changed during recovery; "
+                "refusing to rewrite current job state",
+            )
+        append_scheduler_event(
+            resolved_run_dir,
+            "stale_running_job_recovered",
+            {
+                "job_id": job_id,
+                "action": action,
+                "worker_id": previous_job.get("worker_id"),
+                "recovery_artifact": str(recovery_path.relative_to(resolved_run_dir)),
+            },
+        )
+        current_job = load_job_payload(job_path)
+        if current_job != previous_job:
+            raise HarnessCliError(
+                f"job {job_id} changed during recovery; "
+                "refusing to rewrite current job state",
+            )
+        if not claim_lock_snapshot_matches_current_unlocked(
+            resolved_run_dir,
+            job_id,
+            run_id=job["run_id"],
+            now=now_dt,
+            expected_status=claim_lock_status,
+            expected_owner=expected_claim_lock_owner,
+            expected_errors=claim_lock_errors,
+        ):
+            raise HarnessCliError(
+                f"claim lock for job {job_id} changed during recovery; "
+                "refusing to rewrite current job state",
+            )
+        write_json_atomic(job_path, new_job)
+        if (
+            claim_lock_status in {"present", "missing-owner"}
+            and claim_lock_snapshot_matches_current_unlocked(
+                resolved_run_dir,
+                job_id,
+                run_id=job["run_id"],
+                now=now_dt,
+                expected_status=claim_lock_status,
+                expected_owner=expected_claim_lock_owner,
+                expected_errors=claim_lock_errors,
+            )
+        ):
+            remove_claim_lock_dir(lock_dir, job_dir)
+            claim_lock_removed = True
+    return {
+        "path": recovery_path,
+        "artifact": artifact,
+        "job": new_job,
+        "claim_lock_removed": claim_lock_removed,
+    }
+
+
 def scheduler_run_once(
     run_dir: Path | str,
     *,
+    worker_id: str | None = None,
     root: Path | str | None = None,
 ) -> dict[str, Any]:
     resolved_run_dir = Path(run_dir)
@@ -2031,30 +3459,170 @@ def scheduler_run_once(
     executed_jobs: list[str] = []
     skipped_jobs: list[str] = []
     terminal_statuses: dict[str, str] = {}
+    active_worker_id = worker_id or default_worker_id()
+    write_scheduler_worker(
+        resolved_run_dir,
+        worker_id=active_worker_id,
+        poll_interval_seconds=0.1,
+        max_iterations=1,
+        max_seconds=None,
+        root=repo_root,
+    )
+    write_scheduler_heartbeat(
+        resolved_run_dir,
+        worker_id=active_worker_id,
+        iteration=1,
+        status="idle",
+        current_job_id=None,
+    )
+    append_scheduler_event(
+        resolved_run_dir,
+        "worker_started",
+        {"worker_id": active_worker_id, "mode": "once"},
+    )
 
     for job in ordered_jobs:
         job_id = job["job_id"]
         status = job["status"]
         if status == "queued":
-            executed_job = execute_generic_agent_job(
+            claim = try_claim_job(
                 resolved_run_dir,
                 job_id,
+                worker_id=active_worker_id,
+                root=repo_root,
+            )
+            if claim is None:
+                skipped_jobs.append(job_id)
+                append_scheduler_event(
+                    resolved_run_dir,
+                    "job_claim_skipped",
+                    {"worker_id": active_worker_id, "job_id": job_id},
+                )
+                continue
+            write_scheduler_heartbeat(
+                resolved_run_dir,
+                worker_id=active_worker_id,
+                iteration=1,
+                status="running-job",
+                current_job_id=job_id,
+            )
+            append_scheduler_event(
+                resolved_run_dir,
+                "job_started",
+                {"worker_id": active_worker_id, "job_id": job_id},
+            )
+            executed_job = execute_claimed_generic_agent_job(
+                resolved_run_dir,
+                claim,
+                iteration=1,
+                poll_interval_seconds=0.1,
                 root=repo_root,
             )
             executed_jobs.append(job_id)
             if executed_job["status"] in TERMINAL_JOB_STATUSES:
                 terminal_statuses[job_id] = executed_job["status"]
+            append_scheduler_event(
+                resolved_run_dir,
+                "job_completed",
+                {
+                    "worker_id": active_worker_id,
+                    "job_id": job_id,
+                    "status": executed_job["status"],
+                },
+            )
         elif status == "running" or status in TERMINAL_JOB_STATUSES:
             skipped_jobs.append(job_id)
             if status in TERMINAL_JOB_STATUSES:
                 terminal_statuses[job_id] = status
 
+    write_scheduler_heartbeat(
+        resolved_run_dir,
+        worker_id=active_worker_id,
+        iteration=1,
+        status="stopped",
+        current_job_id=None,
+    )
+    append_scheduler_event(
+        resolved_run_dir,
+        "worker_stopped",
+        {
+            "worker_id": active_worker_id,
+            "iteration": 1,
+            "stop_reason": "once_completed",
+        },
+    )
     return {
         "run_id": state["run_id"],
+        "worker_id": active_worker_id,
         "executed_jobs": executed_jobs,
         "skipped_jobs": skipped_jobs,
         "terminal_statuses": terminal_statuses,
     }
+
+
+def scheduler_job_heartbeat_interval(poll_interval_seconds: float) -> float:
+    if poll_interval_seconds <= 0:
+        return 0.1
+    return min(max(poll_interval_seconds, 0.1), 5.0)
+
+
+def execute_scheduler_job_with_heartbeat(
+    run_dir: Path,
+    job_id: str,
+    *,
+    worker_id: str,
+    iteration: int,
+    poll_interval_seconds: float,
+    root: Path,
+    claim: JobClaim | None = None,
+) -> dict[str, Any]:
+    stop_event = threading.Event()
+    heartbeat_errors: list[str] = []
+
+    def refresh_heartbeat() -> None:
+        interval = scheduler_job_heartbeat_interval(poll_interval_seconds)
+        while not stop_event.wait(interval):
+            try:
+                write_scheduler_heartbeat(
+                    run_dir,
+                    worker_id=worker_id,
+                    iteration=iteration,
+                    status="running-job",
+                    current_job_id=job_id,
+                )
+                if claim is not None:
+                    refresh_claim_lease(claim, root=root)
+            except Exception as exc:  # pragma: no cover - defensive diagnostic path.
+                heartbeat_errors.append(str(exc))
+                return
+
+    heartbeat_thread = threading.Thread(
+        target=refresh_heartbeat,
+        name=f"harness-heartbeat-{job_id}",
+        daemon=True,
+    )
+    heartbeat_thread.start()
+    try:
+        return execute_generic_agent_job(
+            run_dir,
+            job_id,
+            worker_id=worker_id,
+            root=root,
+            claim=claim,
+        )
+    finally:
+        stop_event.set()
+        heartbeat_thread.join(timeout=1)
+        if heartbeat_errors:
+            append_scheduler_event(
+                run_dir,
+                "heartbeat_write_failed",
+                {
+                    "worker_id": worker_id,
+                    "job_id": job_id,
+                    "errors": heartbeat_errors,
+                },
+            )
 
 
 def scheduler_run_watch(
@@ -2217,6 +3785,26 @@ def scheduler_run_watch(
             executed_this_iteration: list[str] = []
             for job in queued_jobs:
                 job_id = job["job_id"]
+                claim = try_claim_job(
+                    resolved_run_dir,
+                    job_id,
+                    worker_id=active_worker_id,
+                    root=repo_root,
+                )
+                if claim is None:
+                    if job_id not in seen_skipped_jobs and job_id not in executed_jobs:
+                        skipped_jobs.append(job_id)
+                        seen_skipped_jobs.add(job_id)
+                    append_scheduler_event(
+                        resolved_run_dir,
+                        "job_claim_skipped",
+                        {
+                            "worker_id": active_worker_id,
+                            "iteration": iteration,
+                            "job_id": job_id,
+                        },
+                    )
+                    continue
                 write_scheduler_heartbeat(
                     resolved_run_dir,
                     worker_id=active_worker_id,
@@ -2229,9 +3817,11 @@ def scheduler_run_watch(
                     "job_started",
                     {"worker_id": active_worker_id, "job_id": job_id},
                 )
-                executed_job = execute_generic_agent_job(
+                executed_job = execute_claimed_generic_agent_job(
                     resolved_run_dir,
-                    job_id,
+                    claim,
+                    iteration=iteration,
+                    poll_interval_seconds=poll_interval_seconds,
                     root=repo_root,
                 )
                 executed_jobs.append(job_id)
@@ -2610,22 +4200,24 @@ def write_raw_log(
     stdout: str | None,
     stderr: str | None,
 ) -> None:
-    path.write_text(
-        "\n".join(
-            [
-                f"command: {json.dumps(command)}",
-                f"returncode: {returncode}",
-                "",
-                "stdout:",
-                stdout or "",
-                "",
-                "stderr:",
-                stderr or "",
-                "",
-            ]
-        ),
-        encoding="utf-8",
+    content = "\n".join(
+        [
+            f"command: {json.dumps(command)}",
+            f"returncode: {returncode}",
+            "",
+            "stdout:",
+            stdout or "",
+            "",
+            "stderr:",
+            stderr or "",
+            "",
+        ],
     )
+    try:
+        with path.open("x", encoding="utf-8") as handle:
+            handle.write(content)
+    except FileExistsError as exc:
+        raise HarnessCliError(f"raw_log_file already exists: {path}") from exc
 
 
 def write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
@@ -2669,10 +4261,7 @@ def write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
 
 
 def utc_now() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace(
-        "+00:00",
-        "Z",
-    )
+    return format_datetime(datetime.now(timezone.utc))
 
 
 def format_errors(errors: Iterable[str]) -> str:
@@ -2756,6 +4345,25 @@ def build_parser() -> argparse.ArgumentParser:
     )
     stop_scheduler_parser.add_argument("run_dir")
     stop_scheduler_parser.add_argument("--reason")
+
+    detect_stale_parser = subparsers.add_parser(
+        "detect-stale-jobs",
+        help="Classify running jobs as active, recent, stale, or invalid.",
+    )
+    detect_stale_parser.add_argument("run_dir")
+    detect_stale_parser.add_argument("--heartbeat-timeout-seconds", type=float, required=True)
+
+    recover_stale_parser = subparsers.add_parser(
+        "recover-stale-job",
+        help="Explicitly requeue or fail one stale running job with an audit artifact.",
+    )
+    recover_stale_parser.add_argument("run_dir")
+    recover_stale_parser.add_argument("job_id")
+    recover_stale_parser.add_argument("--action", choices=["requeue", "fail"], required=True)
+    recover_stale_parser.add_argument("--reason", required=True)
+    recover_stale_parser.add_argument("--heartbeat-timeout-seconds", type=float, required=True)
+    recover_stale_parser.add_argument("--confirm", action="store_true")
+    recover_stale_parser.add_argument("--confirm-artifact-correction", action="store_true")
 
     aggregate = subparsers.add_parser(
         "aggregate-jobs",
@@ -2882,7 +4490,7 @@ def main(argv: list[str] | None = None) -> int:
 
         if args.command == "run-scheduler":
             if args.once:
-                summary = scheduler_run_once(args.run_dir)
+                summary = scheduler_run_once(args.run_dir, worker_id=args.worker_id)
                 print(
                     f"scheduler: {summary['run_id']} "
                     f"executed={len(summary['executed_jobs'])} "
@@ -2924,6 +4532,31 @@ def main(argv: list[str] | None = None) -> int:
                 f"stop requested: "
                 f"{load_json(state_path(Path(args.run_dir)))['run_id']} "
                 f"{stop['reason']}",
+            )
+            return 0
+
+        if args.command == "detect-stale-jobs":
+            report = detect_stale_running_jobs(
+                args.run_dir,
+                heartbeat_timeout_seconds=args.heartbeat_timeout_seconds,
+            )
+            print(json.dumps(report, indent=2, sort_keys=True))
+            return 0
+
+        if args.command == "recover-stale-job":
+            recovery = recover_stale_running_job(
+                args.run_dir,
+                args.job_id,
+                action=args.action,
+                reason=args.reason,
+                heartbeat_timeout_seconds=args.heartbeat_timeout_seconds,
+                confirm=args.confirm,
+                artifact_correction_confirmed=args.confirm_artifact_correction,
+            )
+            print(
+                f"recovered stale job: "
+                f"{recovery['artifact']['run_id']}/{args.job_id} "
+                f"action={args.action} artifact={recovery['path']}",
             )
             return 0
 
