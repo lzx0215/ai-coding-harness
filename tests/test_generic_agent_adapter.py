@@ -991,6 +991,274 @@ class GenericCliAgentOrchestrationTest(unittest.TestCase):
         self.assertEqual(both.returncode, 2)
         self.assertIn("not allowed with argument", both.stderr)
 
+    def test_scheduler_watch_runs_queued_job_writes_artifacts_and_does_not_mutate_state(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            state = minimal_state()
+            write_json(run_dir / "state.json", state)
+            agent_script = run_dir / "watch_agent.py"
+            write_agent_script(
+                agent_script,
+                """
+                import json
+                import os
+                from pathlib import Path
+
+                payload = json.loads(Path(os.environ["HARNESS_AGENT_INPUT_FILE"]).read_text(encoding="utf-8"))
+                output = {
+                    "run_id": payload["run_id"],
+                    "job_id": payload["job_id"],
+                    "agent": payload["agent"],
+                    "adapter": payload["adapter"],
+                    "status": "passed",
+                    "summary": "Watch job completed.",
+                    "findings": [],
+                    "evidence": [],
+                    "not_tested": [],
+                    "residual_risks": [],
+                    "generated_at": payload["created_at"],
+                }
+                Path(os.environ["HARNESS_AGENT_OUTPUT_FILE"]).write_text(
+                    json.dumps(output, indent=2) + "\\n",
+                    encoding="utf-8",
+                )
+                print("watch job wrote output")
+                """,
+            )
+            cli.create_generic_agent_job(
+                run_dir,
+                "watch-job",
+                agent="generic-test-agent",
+                command=[sys.executable, str(agent_script)],
+                timeout_seconds=30,
+                root=ROOT,
+            )
+
+            summary = cli.scheduler_run_watch(
+                run_dir,
+                poll_interval_seconds=0,
+                max_iterations=3,
+                worker_id="watch-worker",
+                root=ROOT,
+                sleep_fn=lambda seconds: None,
+            )
+            saved_state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
+            job = json.loads((run_dir / "jobs" / "watch-job" / "job.json").read_text(encoding="utf-8"))
+            scheduler_dir = run_dir / "jobs" / "scheduler"
+            worker = json.loads((scheduler_dir / "worker.json").read_text(encoding="utf-8"))
+            heartbeat = json.loads((scheduler_dir / "heartbeat.json").read_text(encoding="utf-8"))
+            events = [
+                json.loads(line)
+                for line in (scheduler_dir / "events.log").read_text(encoding="utf-8").splitlines()
+            ]
+
+        self.assertEqual(saved_state, state)
+        self.assertEqual(summary["run_id"], "test-run")
+        self.assertEqual(summary["executed_jobs"], ["watch-job"])
+        self.assertEqual(summary["skipped_jobs"], [])
+        self.assertEqual(summary["stop_reason"], "max_iterations")
+        self.assertEqual(job["status"], "succeeded")
+        self.assertEqual(worker["worker_id"], "watch-worker")
+        self.assertEqual(heartbeat["worker_id"], "watch-worker")
+        self.assertEqual(heartbeat["status"], "stopped")
+        self.assertIsNone(heartbeat["current_job_id"])
+        self.assertIn("worker_started", [event["event"] for event in events])
+        self.assertIn("job_started", [event["event"] for event in events])
+        self.assertIn("job_completed", [event["event"] for event in events])
+        self.assertIn("worker_stopped", [event["event"] for event in events])
+        for event in events:
+            self.assertEqual(set(event), {"detail", "event", "ts"})
+            self.assertIsInstance(event["detail"], dict)
+
+    def test_scheduler_watch_rejects_unbounded_zero_interval_and_non_finite_options_before_artifacts(self):
+        cases = [
+            (
+                {
+                    "poll_interval_seconds": float("nan"),
+                    "max_iterations": 1,
+                },
+                "poll_interval_seconds must be finite",
+            ),
+            (
+                {
+                    "poll_interval_seconds": float("inf"),
+                    "max_iterations": 1,
+                },
+                "poll_interval_seconds must be finite",
+            ),
+            (
+                {
+                    "poll_interval_seconds": 0,
+                },
+                "poll_interval_seconds can be zero only with max_iterations or max_seconds",
+            ),
+            (
+                {
+                    "poll_interval_seconds": 1,
+                    "max_seconds": float("nan"),
+                },
+                "max_seconds must be finite",
+            ),
+        ]
+        for kwargs, expected_error in cases:
+            with self.subTest(expected_error=expected_error):
+                with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+                    run_dir = Path(raw)
+                    write_json(run_dir / "state.json", minimal_state())
+
+                    with self.assertRaises(cli.HarnessCliError) as raised:
+                        cli.scheduler_run_watch(run_dir, root=ROOT, **kwargs)
+
+                    self.assertIn(expected_error, str(raised.exception))
+                    self.assertFalse((run_dir / "jobs" / "scheduler").exists())
+
+    def test_scheduler_watch_stop_waits_for_current_job_and_does_not_claim_next_job(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            write_json(run_dir / "state.json", minimal_state())
+            agent_script = run_dir / "stop_aware_agent.py"
+            write_agent_script(
+                agent_script,
+                """
+                import json
+                import os
+                import time
+                from pathlib import Path
+
+                input_path = Path(os.environ["HARNESS_AGENT_INPUT_FILE"])
+                output_path = Path(os.environ["HARNESS_AGENT_OUTPUT_FILE"])
+                payload = json.loads(input_path.read_text(encoding="utf-8"))
+                stop_path = input_path.parents[1] / "scheduler" / "stop.json"
+                for _ in range(50):
+                    if stop_path.exists():
+                        break
+                    time.sleep(0.05)
+                output = {
+                    "run_id": payload["run_id"],
+                    "job_id": payload["job_id"],
+                    "agent": payload["agent"],
+                    "adapter": payload["adapter"],
+                    "status": "passed",
+                    "summary": "Stop-aware job completed.",
+                    "findings": [],
+                    "evidence": [],
+                    "not_tested": [],
+                    "residual_risks": [],
+                    "generated_at": payload["created_at"],
+                }
+                output_path.write_text(json.dumps(output, indent=2) + "\\n", encoding="utf-8")
+                """,
+            )
+            cli.create_generic_agent_job(
+                run_dir,
+                "001-current",
+                agent="generic-test-agent",
+                command=[sys.executable, str(agent_script)],
+                timeout_seconds=10,
+                root=ROOT,
+            )
+            cli.create_generic_agent_job(
+                run_dir,
+                "002-next",
+                agent="generic-test-agent",
+                command=[sys.executable, "-c", "print('must not run')"],
+                timeout_seconds=10,
+                root=ROOT,
+            )
+            result: dict[str, object] = {}
+            errors: list[BaseException] = []
+
+            def run_worker() -> None:
+                try:
+                    result["summary"] = cli.scheduler_run_watch(
+                        run_dir,
+                        poll_interval_seconds=0,
+                        max_iterations=5,
+                        worker_id="stop-worker",
+                        root=ROOT,
+                        sleep_fn=lambda seconds: None,
+                    )
+                except BaseException as exc:
+                    errors.append(exc)
+
+            import threading
+
+            worker_thread = threading.Thread(target=run_worker)
+            worker_thread.start()
+            current_job_path = run_dir / "jobs" / "001-current" / "job.json"
+            for _ in range(100):
+                current_job = json.loads(current_job_path.read_text(encoding="utf-8"))
+                if current_job["status"] == "running":
+                    break
+                time.sleep(0.05)
+            cli.request_scheduler_stop(run_dir, reason="test stop", root=ROOT)
+            worker_thread.join(timeout=10)
+
+            if errors:
+                raise errors[0]
+            current_job = json.loads(current_job_path.read_text(encoding="utf-8"))
+            next_job = json.loads(
+                (run_dir / "jobs" / "002-next" / "job.json").read_text(encoding="utf-8"),
+            )
+            heartbeat = json.loads(
+                (run_dir / "jobs" / "scheduler" / "heartbeat.json").read_text(encoding="utf-8"),
+            )
+            events = [
+                json.loads(line)
+                for line in (run_dir / "jobs" / "scheduler" / "events.log").read_text(
+                    encoding="utf-8",
+                ).splitlines()
+            ]
+
+        self.assertFalse(worker_thread.is_alive())
+        self.assertEqual(current_job["status"], "succeeded")
+        self.assertEqual(next_job["status"], "queued")
+        self.assertEqual(heartbeat["status"], "stopped")
+        self.assertEqual(result["summary"]["stop_reason"], "stop_requested")
+        self.assertIn("stop_observed", [event["event"] for event in events])
+
+    def test_scheduler_watch_records_invalid_job_warning_and_does_not_claim_valid_jobs(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            state = minimal_state()
+            write_json(run_dir / "state.json", state)
+            bad_path = run_dir / "jobs" / "000-bad" / "job.json"
+            bad_path.parent.mkdir(parents=True, exist_ok=True)
+            bad_path.write_text("[]\n", encoding="utf-8")
+            cli.create_generic_agent_job(
+                run_dir,
+                "001-valid",
+                agent="generic-test-agent",
+                command=[sys.executable, "-c", "print('must not run')"],
+                timeout_seconds=30,
+                root=ROOT,
+            )
+
+            summary = cli.scheduler_run_watch(
+                run_dir,
+                poll_interval_seconds=0,
+                max_iterations=1,
+                worker_id="warning-worker",
+                root=ROOT,
+                sleep_fn=lambda seconds: None,
+            )
+            saved_state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
+            valid_job = json.loads(
+                (run_dir / "jobs" / "001-valid" / "job.json").read_text(encoding="utf-8"),
+            )
+            events = [
+                json.loads(line)
+                for line in (run_dir / "jobs" / "scheduler" / "events.log").read_text(
+                    encoding="utf-8",
+                ).splitlines()
+            ]
+
+        self.assertEqual(saved_state, state)
+        self.assertEqual(summary["executed_jobs"], [])
+        self.assertEqual(summary["stop_reason"], "max_iterations")
+        self.assertEqual(valid_job["status"], "queued")
+        self.assertIn("invalid_jobs_observed", [event["event"] for event in events])
+
     def test_aggregate_jobs_classifies_terminal_and_incomplete_jobs_without_mutating_state(self):
         with tempfile.TemporaryDirectory(dir=ROOT) as raw:
             run_dir = Path(raw)

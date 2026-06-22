@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import signal
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -1961,6 +1963,55 @@ def clear_scheduler_stop_request(run_dir: Path | str) -> None:
         return
 
 
+def validate_scheduler_watch_options(
+    *,
+    poll_interval_seconds: float,
+    max_iterations: int | None,
+    max_seconds: float | None,
+) -> None:
+    if not math.isfinite(poll_interval_seconds):
+        raise HarnessCliError("poll_interval_seconds must be finite")
+    if poll_interval_seconds < 0:
+        raise HarnessCliError("poll_interval_seconds must be non-negative")
+    if poll_interval_seconds == 0 and max_iterations is None and max_seconds is None:
+        raise HarnessCliError(
+            "poll_interval_seconds can be zero only with max_iterations or max_seconds",
+        )
+    if max_iterations is not None and max_iterations < 1:
+        raise HarnessCliError("max_iterations must be at least 1")
+    if max_seconds is not None:
+        if not math.isfinite(max_seconds):
+            raise HarnessCliError("max_seconds must be finite")
+        if max_seconds <= 0:
+            raise HarnessCliError("max_seconds must be greater than 0")
+
+
+def load_scheduler_jobs_for_watch(
+    run_dir: Path | str,
+    *,
+    root: Path | str,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    try:
+        return load_scheduler_jobs(Path(run_dir), root=root), []
+    except HarnessCliError as exc:
+        return [], str(exc).splitlines()
+
+
+def scheduler_stop_requested(
+    run_dir: Path | str,
+) -> tuple[bool, dict[str, Any] | None, list[str]]:
+    path = scheduler_stop_path(run_dir)
+    if not path.exists():
+        return False, None, []
+    try:
+        payload = load_json(path)
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+        return False, None, [f"{path}: stop request cannot be read: {exc}"]
+    if not isinstance(payload, dict):
+        return False, None, [f"{path}: stop request must be an object"]
+    return True, payload, []
+
+
 def scheduler_run_once(
     run_dir: Path | str,
     *,
@@ -2001,6 +2052,282 @@ def scheduler_run_once(
         "executed_jobs": executed_jobs,
         "skipped_jobs": skipped_jobs,
         "terminal_statuses": terminal_statuses,
+    }
+
+
+def scheduler_run_watch(
+    run_dir: Path | str,
+    *,
+    poll_interval_seconds: float = 5.0,
+    max_iterations: int | None = None,
+    max_seconds: float | None = None,
+    worker_id: str | None = None,
+    root: Path | str | None = None,
+    sleep_fn: Any = time.sleep,
+    monotonic_fn: Any = time.monotonic,
+) -> dict[str, Any]:
+    validate_scheduler_watch_options(
+        poll_interval_seconds=poll_interval_seconds,
+        max_iterations=max_iterations,
+        max_seconds=max_seconds,
+    )
+    resolved_run_dir = Path(run_dir)
+    repo_root = resolve_repository_root(resolved_run_dir, root=root)
+    before = validate_run(resolved_run_dir, root=repo_root)
+    if not before.ok:
+        raise HarnessCliError(format_errors(before.errors))
+
+    state = load_json(state_path(resolved_run_dir))
+    active_worker_id = worker_id or default_worker_id()
+    clear_scheduler_stop_request(resolved_run_dir)
+    write_scheduler_worker(
+        resolved_run_dir,
+        worker_id=active_worker_id,
+        poll_interval_seconds=poll_interval_seconds,
+        max_iterations=max_iterations,
+        max_seconds=max_seconds,
+        root=repo_root,
+    )
+    write_scheduler_heartbeat(
+        resolved_run_dir,
+        worker_id=active_worker_id,
+        iteration=0,
+        status="starting",
+        current_job_id=None,
+    )
+    append_scheduler_event(
+        resolved_run_dir,
+        "worker_started",
+        {"worker_id": active_worker_id},
+    )
+
+    started_monotonic = monotonic_fn()
+    iteration = 0
+    executed_jobs: list[str] = []
+    skipped_jobs: list[str] = []
+    seen_skipped_jobs: set[str] = set()
+    stop_reason = "unknown"
+
+    try:
+        stop_loop = False
+        while not stop_loop:
+            if max_iterations is not None and iteration >= max_iterations:
+                stop_reason = "max_iterations"
+                append_scheduler_event(
+                    resolved_run_dir,
+                    "max_iterations_reached",
+                    {"worker_id": active_worker_id, "iteration": iteration},
+                )
+                break
+            if max_seconds is not None and monotonic_fn() - started_monotonic >= max_seconds:
+                stop_reason = "max_seconds"
+                append_scheduler_event(
+                    resolved_run_dir,
+                    "max_seconds_reached",
+                    {"worker_id": active_worker_id, "iteration": iteration},
+                )
+                break
+
+            stop_requested, stop_payload, stop_errors = scheduler_stop_requested(
+                resolved_run_dir,
+            )
+            if stop_errors:
+                append_scheduler_event(
+                    resolved_run_dir,
+                    "invalid_stop_request",
+                    {"worker_id": active_worker_id, "errors": stop_errors},
+                )
+            if stop_requested:
+                stop_reason = "stop_requested"
+                write_scheduler_heartbeat(
+                    resolved_run_dir,
+                    worker_id=active_worker_id,
+                    iteration=iteration,
+                    status="stopping",
+                    current_job_id=None,
+                )
+                append_scheduler_event(
+                    resolved_run_dir,
+                    "stop_observed",
+                    {"worker_id": active_worker_id, "stop": stop_payload},
+                )
+                break
+
+            iteration += 1
+            append_scheduler_event(
+                resolved_run_dir,
+                "poll_started",
+                {"worker_id": active_worker_id, "iteration": iteration},
+            )
+            jobs, job_errors = load_scheduler_jobs_for_watch(
+                resolved_run_dir,
+                root=repo_root,
+            )
+            if job_errors:
+                write_scheduler_heartbeat(
+                    resolved_run_dir,
+                    worker_id=active_worker_id,
+                    iteration=iteration,
+                    status="warning",
+                    current_job_id=None,
+                )
+                append_scheduler_event(
+                    resolved_run_dir,
+                    "invalid_jobs_observed",
+                    {
+                        "worker_id": active_worker_id,
+                        "iteration": iteration,
+                        "errors": job_errors,
+                    },
+                )
+                sleep_fn(poll_interval_seconds)
+                continue
+
+            ordered_jobs = sorted(jobs, key=lambda job: (job["created_at"], job["job_id"]))
+            queued_jobs = [job for job in ordered_jobs if job["status"] == "queued"]
+            for job in ordered_jobs:
+                job_id = job["job_id"]
+                status = job["status"]
+                if (
+                    status == "running" or status in TERMINAL_JOB_STATUSES
+                ) and job_id not in seen_skipped_jobs and job_id not in executed_jobs:
+                    skipped_jobs.append(job_id)
+                    seen_skipped_jobs.add(job_id)
+            if not queued_jobs:
+                write_scheduler_heartbeat(
+                    resolved_run_dir,
+                    worker_id=active_worker_id,
+                    iteration=iteration,
+                    status="idle",
+                    current_job_id=None,
+                )
+                append_scheduler_event(
+                    resolved_run_dir,
+                    "poll_completed",
+                    {
+                        "worker_id": active_worker_id,
+                        "iteration": iteration,
+                        "executed_jobs": [],
+                    },
+                )
+                sleep_fn(poll_interval_seconds)
+                continue
+
+            executed_this_iteration: list[str] = []
+            for job in queued_jobs:
+                job_id = job["job_id"]
+                write_scheduler_heartbeat(
+                    resolved_run_dir,
+                    worker_id=active_worker_id,
+                    iteration=iteration,
+                    status="running-job",
+                    current_job_id=job_id,
+                )
+                append_scheduler_event(
+                    resolved_run_dir,
+                    "job_started",
+                    {"worker_id": active_worker_id, "job_id": job_id},
+                )
+                executed_job = execute_generic_agent_job(
+                    resolved_run_dir,
+                    job_id,
+                    root=repo_root,
+                )
+                executed_jobs.append(job_id)
+                executed_this_iteration.append(job_id)
+                append_scheduler_event(
+                    resolved_run_dir,
+                    "job_completed",
+                    {
+                        "worker_id": active_worker_id,
+                        "job_id": job_id,
+                        "status": executed_job["status"],
+                    },
+                )
+                stop_requested, stop_payload, stop_errors = scheduler_stop_requested(
+                    resolved_run_dir,
+                )
+                if stop_errors:
+                    append_scheduler_event(
+                        resolved_run_dir,
+                        "invalid_stop_request",
+                        {"worker_id": active_worker_id, "errors": stop_errors},
+                    )
+                if stop_requested:
+                    stop_reason = "stop_requested"
+                    write_scheduler_heartbeat(
+                        resolved_run_dir,
+                        worker_id=active_worker_id,
+                        iteration=iteration,
+                        status="stopping",
+                        current_job_id=None,
+                    )
+                    append_scheduler_event(
+                        resolved_run_dir,
+                        "stop_observed",
+                        {"worker_id": active_worker_id, "stop": stop_payload},
+                    )
+                    stop_loop = True
+                    break
+
+            if stop_loop:
+                continue
+
+            write_scheduler_heartbeat(
+                resolved_run_dir,
+                worker_id=active_worker_id,
+                iteration=iteration,
+                status="sleeping",
+                current_job_id=None,
+            )
+            append_scheduler_event(
+                resolved_run_dir,
+                "poll_completed",
+                {
+                    "worker_id": active_worker_id,
+                    "iteration": iteration,
+                    "executed_jobs": executed_this_iteration,
+                },
+            )
+            sleep_fn(poll_interval_seconds)
+    except Exception:
+        write_scheduler_heartbeat(
+            resolved_run_dir,
+            worker_id=active_worker_id,
+            iteration=iteration,
+            status="failed",
+            current_job_id=None,
+        )
+        append_scheduler_event(
+            resolved_run_dir,
+            "worker_failed",
+            {"worker_id": active_worker_id, "iteration": iteration},
+        )
+        raise
+
+    write_scheduler_heartbeat(
+        resolved_run_dir,
+        worker_id=active_worker_id,
+        iteration=iteration,
+        status="stopped",
+        current_job_id=None,
+    )
+    append_scheduler_event(
+        resolved_run_dir,
+        "worker_stopped",
+        {
+            "worker_id": active_worker_id,
+            "iteration": iteration,
+            "stop_reason": stop_reason,
+        },
+    )
+    return {
+        "run_id": state["run_id"],
+        "worker_id": active_worker_id,
+        "iterations": iteration,
+        "executed_jobs": executed_jobs,
+        "skipped_jobs": skipped_jobs,
+        "stop_reason": stop_reason,
     }
 
 
