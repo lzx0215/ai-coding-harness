@@ -1,4 +1,4 @@
-command: ["python", "..\\..\\scripts\\scheduler-smoke.py"]
+﻿command: ["python", "..\\..\\scripts\\scheduler-smoke.py"]
 returncode: 0
 
 stdout:
@@ -6,4 +6,3 @@ phase5 live scheduler agent wrote output
 
 
 stderr:
-
