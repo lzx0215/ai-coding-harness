@@ -101,6 +101,7 @@ class Phase4ClosureRunTest(unittest.TestCase):
         result = cli.validate_run(PHASE6_WATCH_RUN, root=ROOT)
         state = json.loads((PHASE6_WATCH_RUN / "state.json").read_text(encoding="utf-8"))
         evidence_types = {item["type"] for item in state["evidence"]}
+        evidence_paths = {item["path"] for item in state["evidence"]}
         scheduler_dir = PHASE6_WATCH_RUN / "jobs" / "scheduler"
         worker = json.loads((scheduler_dir / "worker.json").read_text(encoding="utf-8"))
         heartbeat = json.loads((scheduler_dir / "heartbeat.json").read_text(encoding="utf-8"))
@@ -117,6 +118,12 @@ class Phase4ClosureRunTest(unittest.TestCase):
         self.assertIn("agent-job", evidence_types)
         self.assertIn("agent-result", evidence_types)
         self.assertIn("aggregation", evidence_types)
+        self.assertIn("verification", evidence_types)
+        self.assertIn("review-waiver", evidence_types)
+        self.assertIn("handoff", evidence_types)
+        self.assertIn("verification.md", evidence_paths)
+        self.assertIn("review-waiver.md", evidence_paths)
+        self.assertIn("handoff.md", evidence_paths)
         self.assertEqual(worker["worker_id"], "phase6-live-watch")
         self.assertEqual(heartbeat["worker_id"], "phase6-live-watch")
         self.assertEqual(heartbeat["status"], "stopped")

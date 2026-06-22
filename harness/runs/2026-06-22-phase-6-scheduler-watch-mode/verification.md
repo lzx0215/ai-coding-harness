@@ -26,6 +26,7 @@ python -m harness.cli advance harness/runs/2026-06-22-phase-6-scheduler-watch-mo
 python -m unittest tests.test_async_job_artifacts.Phase4ClosureRunTest.test_phase6_watch_run_was_produced_by_watch_scheduler_path -v
 python -m harness.cli validate harness/runs/2026-06-22-phase-6-scheduler-watch-mode
 git diff --check
+git diff --check HEAD^ HEAD
 ```
 
 ## Results
@@ -45,7 +46,7 @@ git diff --check
 - Closure evidence indexing and lifecycle advances through `implemented`, `verified`, `reviewed`, and `completed` exited 0.
 - The targeted Phase 6 watch scheduler regression test exited 0 and passed 1 test.
 - `validate` exited 0 and printed `valid: harness\runs\2026-06-22-phase-6-scheduler-watch-mode`.
-- `git diff --check` exited 0. It printed CRLF replacement warnings for touched text files, but no whitespace errors.
+- Pre-commit `git diff --check` exited 0. It printed CRLF replacement warnings for touched text files, but no whitespace errors. The committed patch range must be verified separately after commit with `git diff --check HEAD^ HEAD`.
 
 ## Not Verified
 
