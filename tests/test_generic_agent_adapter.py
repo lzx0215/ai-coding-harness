@@ -1149,6 +1149,96 @@ class GenericCliAgentOrchestrationTest(unittest.TestCase):
         self.assertEqual(heartbeat["status"], "stopped")
         self.assertIn("max_seconds_reached", [event["event"] for event in events])
 
+    def test_scheduler_watch_records_failed_job_and_continues(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            write_json(run_dir / "state.json", minimal_state())
+            success_script = run_dir / "success_agent.py"
+            write_agent_script(
+                success_script,
+                """
+                import json
+                import os
+                from pathlib import Path
+
+                payload = json.loads(Path(os.environ["HARNESS_AGENT_INPUT_FILE"]).read_text(encoding="utf-8"))
+                output = {
+                    "run_id": payload["run_id"],
+                    "job_id": payload["job_id"],
+                    "agent": payload["agent"],
+                    "adapter": payload["adapter"],
+                    "status": "passed",
+                    "summary": "Follow-up job completed.",
+                    "findings": [],
+                    "evidence": [],
+                    "not_tested": [],
+                    "residual_risks": [],
+                    "generated_at": payload["created_at"],
+                }
+                Path(os.environ["HARNESS_AGENT_OUTPUT_FILE"]).write_text(
+                    json.dumps(output, indent=2) + "\\n",
+                    encoding="utf-8",
+                )
+                """,
+            )
+            cli.create_generic_agent_job(
+                run_dir,
+                "001-fails",
+                agent="generic-test-agent",
+                command=[sys.executable, "-c", "import sys; sys.exit(7)"],
+                timeout_seconds=10,
+                root=ROOT,
+            )
+            cli.create_generic_agent_job(
+                run_dir,
+                "002-succeeds",
+                agent="generic-test-agent",
+                command=[sys.executable, str(success_script)],
+                timeout_seconds=10,
+                root=ROOT,
+            )
+
+            summary = cli.scheduler_run_watch(
+                run_dir,
+                poll_interval_seconds=0,
+                max_iterations=1,
+                worker_id="failed-job-worker",
+                root=ROOT,
+                sleep_fn=lambda seconds: None,
+            )
+            failed_job = json.loads(
+                (run_dir / "jobs" / "001-fails" / "job.json").read_text(encoding="utf-8"),
+            )
+            succeeded_job = json.loads(
+                (run_dir / "jobs" / "002-succeeds" / "job.json").read_text(
+                    encoding="utf-8",
+                ),
+            )
+            heartbeat = json.loads(
+                (run_dir / "jobs" / "scheduler" / "heartbeat.json").read_text(
+                    encoding="utf-8",
+                ),
+            )
+            events = [
+                json.loads(line)
+                for line in (run_dir / "jobs" / "scheduler" / "events.log").read_text(
+                    encoding="utf-8",
+                ).splitlines()
+            ]
+
+        completed_statuses = [
+            event["detail"].get("status")
+            for event in events
+            if event["event"] == "job_completed"
+        ]
+        self.assertEqual(summary["executed_jobs"], ["001-fails", "002-succeeds"])
+        self.assertEqual(summary["stop_reason"], "max_iterations")
+        self.assertEqual(failed_job["status"], "failed")
+        self.assertEqual(succeeded_job["status"], "succeeded")
+        self.assertEqual(heartbeat["status"], "stopped")
+        self.assertEqual(completed_statuses, ["failed", "succeeded"])
+        self.assertNotIn("worker_failed", [event["event"] for event in events])
+
     def test_scheduler_watch_stop_waits_for_current_job_and_does_not_claim_next_job(self):
         with tempfile.TemporaryDirectory(dir=ROOT) as raw:
             run_dir = Path(raw)
