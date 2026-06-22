@@ -472,6 +472,29 @@ class HarnessCliTest(unittest.TestCase):
 
         self.assertEqual(temp_files, [])
 
+    def test_atomic_write_retries_transient_permission_error_on_replace(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            run_dir.mkdir(parents=True, exist_ok=True)
+            state_file = run_dir / "state.json"
+            replace_calls = 0
+            original_replace = Path.replace
+
+            def flaky_replace(path: Path, target: Path) -> Path:
+                nonlocal replace_calls
+                replace_calls += 1
+                if replace_calls == 1:
+                    raise PermissionError("temporary file lock")
+                return original_replace(path, target)
+
+            with mock.patch.object(Path, "replace", autospec=True, side_effect=flaky_replace):
+                cli.write_json_atomic(state_file, minimal_state(status="draft"))
+
+            saved = json.loads(state_file.read_text(encoding="utf-8"))
+
+        self.assertEqual(replace_calls, 2)
+        self.assertEqual(saved["status"], "draft")
+
     def test_advance_rejects_invalid_transition(self):
         with tempfile.TemporaryDirectory(dir=ROOT) as raw:
             run_dir = Path(raw)

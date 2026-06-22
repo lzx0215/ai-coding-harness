@@ -41,6 +41,8 @@ SCHEDULER_STATUSES = frozenset(
         "failed",
     }
 )
+ATOMIC_REPLACE_ATTEMPTS = 5
+ATOMIC_REPLACE_RETRY_SECONDS = 0.01
 EVIDENCE_TYPES = frozenset(
     {
         "task",
@@ -2079,7 +2081,6 @@ def scheduler_run_watch(
 
     state = load_json(state_path(resolved_run_dir))
     active_worker_id = worker_id or default_worker_id()
-    clear_scheduler_stop_request(resolved_run_dir)
     write_scheduler_worker(
         resolved_run_dir,
         worker_id=active_worker_id,
@@ -2464,6 +2465,66 @@ def run_generic_agent(
     return execute_generic_agent_job(run_dir, job_id, root=root)
 
 
+def start_scheduler(
+    run_dir: Path | str,
+    *,
+    poll_interval_seconds: float = 5.0,
+    max_iterations: int | None = None,
+    max_seconds: float | None = None,
+    worker_id: str | None = None,
+    root: Path | str | None = None,
+) -> dict[str, Any]:
+    validate_scheduler_watch_options(
+        poll_interval_seconds=poll_interval_seconds,
+        max_iterations=max_iterations,
+        max_seconds=max_seconds,
+    )
+    resolved_run_dir = Path(run_dir)
+    repo_root = resolve_repository_root(resolved_run_dir, root=root)
+    before = validate_run(resolved_run_dir, root=repo_root)
+    if not before.ok:
+        raise HarnessCliError(format_errors(before.errors))
+
+    active_worker_id = worker_id or default_worker_id()
+    clear_scheduler_stop_request(resolved_run_dir)
+    command = [
+        sys.executable,
+        "-m",
+        "harness.cli",
+        "run-scheduler",
+        str(resolved_run_dir.resolve(strict=False)),
+        "--watch",
+        "--poll-interval-seconds",
+        str(poll_interval_seconds),
+        "--worker-id",
+        active_worker_id,
+    ]
+    if max_iterations is not None:
+        command.extend(["--max-iterations", str(max_iterations)])
+    if max_seconds is not None:
+        command.extend(["--max-seconds", str(max_seconds)])
+
+    creationflags = 0
+    if os.name == "nt":
+        creationflags = subprocess.CREATE_NEW_PROCESS_GROUP
+        creationflags |= getattr(subprocess, "DETACHED_PROCESS", 0)
+    process = subprocess.Popen(
+        command,
+        cwd=repo_root,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        creationflags=creationflags,
+        start_new_session=os.name != "nt",
+    )
+    return {
+        "run_id": load_json(state_path(resolved_run_dir))["run_id"],
+        "worker_id": active_worker_id,
+        "pid": process.pid,
+        "command": command,
+    }
+
+
 def run_agent_subprocess(
     command: list[str],
     *,
@@ -2584,7 +2645,16 @@ def write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
             temp_file.flush()
             os.fsync(temp_file.fileno())
 
-        temp_path.replace(path)
+        retry_seconds = ATOMIC_REPLACE_RETRY_SECONDS
+        for attempt in range(ATOMIC_REPLACE_ATTEMPTS):
+            try:
+                temp_path.replace(path)
+                break
+            except PermissionError:
+                if attempt + 1 == ATOMIC_REPLACE_ATTEMPTS:
+                    raise
+                time.sleep(retry_seconds)
+                retry_seconds *= 2
         replaced = True
     except OSError as exc:
         raise HarnessCliError(f"failed to write state atomically: {exc}") from exc
@@ -2668,6 +2738,23 @@ def build_parser() -> argparse.ArgumentParser:
     scheduler.add_argument("--max-iterations", type=int)
     scheduler.add_argument("--max-seconds", type=float)
     scheduler.add_argument("--worker-id")
+
+    start_scheduler_parser = subparsers.add_parser(
+        "start-scheduler",
+        help="Start a detached local scheduler worker for a Harness run.",
+    )
+    start_scheduler_parser.add_argument("run_dir")
+    start_scheduler_parser.add_argument("--poll-interval-seconds", type=float, default=5.0)
+    start_scheduler_parser.add_argument("--max-iterations", type=int)
+    start_scheduler_parser.add_argument("--max-seconds", type=float)
+    start_scheduler_parser.add_argument("--worker-id")
+
+    stop_scheduler_parser = subparsers.add_parser(
+        "stop-scheduler",
+        help="Request graceful stop for a scheduler worker.",
+    )
+    stop_scheduler_parser.add_argument("run_dir")
+    stop_scheduler_parser.add_argument("--reason")
 
     aggregate = subparsers.add_parser(
         "aggregate-jobs",
@@ -2813,6 +2900,29 @@ def main(argv: list[str] | None = None) -> int:
                 f"iterations={summary['iterations']} "
                 f"executed={len(summary['executed_jobs'])} "
                 f"stop_reason={summary['stop_reason']}",
+            )
+            return 0
+
+        if args.command == "start-scheduler":
+            result = start_scheduler(
+                args.run_dir,
+                poll_interval_seconds=args.poll_interval_seconds,
+                max_iterations=args.max_iterations,
+                max_seconds=args.max_seconds,
+                worker_id=args.worker_id,
+            )
+            print(
+                f"started scheduler: {result['run_id']} "
+                f"worker_id={result['worker_id']} pid={result['pid']}",
+            )
+            return 0
+
+        if args.command == "stop-scheduler":
+            stop = request_scheduler_stop(args.run_dir, reason=args.reason)
+            print(
+                f"stop requested: "
+                f"{load_json(state_path(Path(args.run_dir)))['run_id']} "
+                f"{stop['reason']}",
             )
             return 0
 

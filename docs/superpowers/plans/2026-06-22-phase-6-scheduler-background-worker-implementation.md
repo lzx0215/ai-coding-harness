@@ -631,7 +631,6 @@ def scheduler_run_watch(
 
     state = load_json(state_path(resolved_run_dir))
     active_worker_id = worker_id or default_worker_id()
-    clear_scheduler_stop_request(resolved_run_dir)
     write_scheduler_worker(
         resolved_run_dir,
         worker_id=active_worker_id,
@@ -1160,6 +1159,7 @@ def start_scheduler(
         raise HarnessCliError(format_errors(before.errors))
 
     active_worker_id = worker_id or default_worker_id()
+    clear_scheduler_stop_request(resolved_run_dir)
     command = [
         sys.executable,
         "-m",

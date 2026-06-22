@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -1258,6 +1259,119 @@ class GenericCliAgentOrchestrationTest(unittest.TestCase):
         self.assertEqual(summary["stop_reason"], "max_iterations")
         self.assertEqual(valid_job["status"], "queued")
         self.assertIn("invalid_jobs_observed", [event["event"] for event in events])
+
+    def test_scheduler_watch_observes_existing_stop_before_first_poll(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            state = minimal_state()
+            write_json(run_dir / "state.json", state)
+            cli.request_scheduler_stop(run_dir, reason="pre-start stop", root=ROOT)
+
+            summary = cli.scheduler_run_watch(
+                run_dir,
+                poll_interval_seconds=0,
+                max_iterations=3,
+                worker_id="prestop-worker",
+                root=ROOT,
+                sleep_fn=lambda seconds: None,
+            )
+            saved_state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
+            stop_exists = (run_dir / "jobs" / "scheduler" / "stop.json").exists()
+            heartbeat = json.loads(
+                (run_dir / "jobs" / "scheduler" / "heartbeat.json").read_text(encoding="utf-8"),
+            )
+            events = [
+                json.loads(line)
+                for line in (run_dir / "jobs" / "scheduler" / "events.log").read_text(
+                    encoding="utf-8",
+                ).splitlines()
+            ]
+
+        self.assertEqual(saved_state, state)
+        self.assertTrue(stop_exists)
+        self.assertEqual(summary["iterations"], 0)
+        self.assertEqual(summary["executed_jobs"], [])
+        self.assertEqual(summary["stop_reason"], "stop_requested")
+        self.assertEqual(heartbeat["status"], "stopped")
+        self.assertIn("stop_observed", [event["event"] for event in events])
+
+    def test_start_scheduler_launches_detached_watch_process(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            write_json(run_dir / "state.json", minimal_state())
+            cli.request_scheduler_stop(run_dir, reason="stale stop", root=ROOT)
+            popen_calls = []
+
+            class FakeProcess:
+                pid = 43210
+
+            def fake_popen(command, **kwargs):
+                popen_calls.append((command, kwargs))
+                return FakeProcess()
+
+            with mock.patch("harness.cli.subprocess.Popen", side_effect=fake_popen):
+                result = cli.start_scheduler(
+                    run_dir,
+                    poll_interval_seconds=0.1,
+                    max_iterations=3,
+                    max_seconds=None,
+                    worker_id="detached-worker",
+                    root=ROOT,
+                )
+
+        command, kwargs = popen_calls[0]
+        self.assertEqual(result["worker_id"], "detached-worker")
+        self.assertIn(sys.executable, command[0])
+        self.assertEqual(command[1:4], ["-m", "harness.cli", "run-scheduler"])
+        self.assertEqual(Path(command[4]), run_dir.resolve(strict=False))
+        self.assertIn("--watch", command)
+        self.assertIn("--worker-id", command)
+        self.assertEqual(kwargs["cwd"], ROOT.resolve(strict=False))
+        self.assertIs(kwargs["stdin"], subprocess.DEVNULL)
+        self.assertIs(kwargs["stdout"], subprocess.DEVNULL)
+        self.assertIs(kwargs["stderr"], subprocess.DEVNULL)
+        self.assertFalse((run_dir / "jobs" / "scheduler" / "stop.json").exists())
+        if os.name == "nt":
+            expected_creationflags = subprocess.CREATE_NEW_PROCESS_GROUP
+            expected_creationflags |= getattr(subprocess, "DETACHED_PROCESS", 0)
+            self.assertEqual(kwargs["creationflags"], expected_creationflags)
+            self.assertFalse(kwargs["start_new_session"])
+        else:
+            self.assertEqual(kwargs["creationflags"], 0)
+            self.assertTrue(kwargs["start_new_session"])
+
+    def test_stop_scheduler_cli_writes_stop_without_mutating_state(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            state = minimal_state()
+            write_json(run_dir / "state.json", state)
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "harness.cli",
+                    "stop-scheduler",
+                    str(run_dir),
+                    "--reason",
+                    "cli stop",
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            saved_state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
+            stop = json.loads(
+                (run_dir / "jobs" / "scheduler" / "stop.json").read_text(
+                    encoding="utf-8",
+                )
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertIn("stop requested: test-run", result.stdout)
+        self.assertEqual(saved_state, state)
+        self.assertEqual(stop["reason"], "cli stop")
 
     def test_aggregate_jobs_classifies_terminal_and_incomplete_jobs_without_mutating_state(self):
         with tempfile.TemporaryDirectory(dir=ROOT) as raw:

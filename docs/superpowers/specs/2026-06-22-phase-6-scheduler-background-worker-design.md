@@ -69,9 +69,9 @@ The PowerShell line continuations are for readability only. CI/package-smoke com
 
 `run-scheduler --once` keeps the Phase 5.2 strict behavior: invalid job records fail the command before execution.
 
-`run-scheduler --watch` runs in the current process. It validates startup state, clears any pre-existing `jobs/scheduler/stop.json`, writes scheduler identity and heartbeat artifacts, then loops until a stop condition is reached.
+`run-scheduler --watch` runs in the current process. It validates startup state, writes scheduler identity and heartbeat artifacts, then loops until a stop condition is reached. If a valid `jobs/scheduler/stop.json` already exists when the worker starts polling, the worker treats it as an active stop request.
 
-`start-scheduler` validates arguments, then starts a detached Python child process that runs `python -m harness.cli run-scheduler <run-dir> --watch ...`. It returns after launch and prints the worker id. It does not claim that the worker successfully executed jobs; the heartbeat and events artifacts are the observable worker state. The detached launch mechanism is platform-specific and finalized at implementation; the watch loop itself is platform-independent. The detached child must not depend on the caller console staying open: child stdin/stdout/stderr should be redirected away from the caller, and intentional scheduler diagnostics belong in `events.log` and `heartbeat.json`.
+`start-scheduler` validates arguments, clears any stale `jobs/scheduler/stop.json`, then starts a detached Python child process that runs `python -m harness.cli run-scheduler <run-dir> --watch ...`. It returns after launch and prints the worker id. It does not claim that the worker successfully executed jobs; the heartbeat and events artifacts are the observable worker state. The detached launch mechanism is platform-specific and finalized at implementation; the watch loop itself is platform-independent. The detached child must not depend on the caller console staying open: child stdin/stdout/stderr should be redirected away from the caller, and intentional scheduler diagnostics belong in `events.log` and `heartbeat.json`.
 
 `stop-scheduler` writes `jobs/scheduler/stop.json` atomically. The worker observes it between polling iterations or after the current job completes.
 
@@ -203,7 +203,8 @@ Jobs queued while an iteration is executing are picked up in a later polling ite
 
 Stop requests are cooperative:
 
-- A pre-existing `stop.json` is a stale one-shot control signal. New worker startup removes it before entering the polling loop, so a worker stopped in a previous session does not cause the next worker to exit immediately.
+- `start-scheduler` removes a pre-existing `stop.json` before spawning the child, treating it as a stale one-shot signal from a previous worker session.
+- `run-scheduler --watch` does not remove `stop.json` at worker startup. If a stop request is present before the first polling iteration, the worker observes it and exits cleanly.
 - If the worker is sleeping or between jobs, it exits before claiming another job.
 - If the worker is executing a job, it waits for the current job to reach a terminal state, writes job artifacts, observes `stop.json`, and exits without claiming a later queued job.
 - Stop requests do not kill subprocesses.
