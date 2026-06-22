@@ -65,11 +65,13 @@ harness start-scheduler <run-dir> `
 harness stop-scheduler <run-dir> [--reason <text>]
 ```
 
+The PowerShell line continuations are for readability only. CI/package-smoke commands should be verified against the current workflow shell and may use single-line equivalents.
+
 `run-scheduler --once` keeps the Phase 5.2 strict behavior: invalid job records fail the command before execution.
 
-`run-scheduler --watch` runs in the current process. It validates startup state, writes scheduler identity and heartbeat artifacts, then loops until a stop condition is reached.
+`run-scheduler --watch` runs in the current process. It validates startup state, clears any pre-existing `jobs/scheduler/stop.json`, writes scheduler identity and heartbeat artifacts, then loops until a stop condition is reached.
 
-`start-scheduler` validates arguments, then starts a detached Python child process that runs `python -m harness.cli run-scheduler <run-dir> --watch ...`. It returns after launch and prints the worker id. It does not claim that the worker successfully executed jobs; the heartbeat and events artifacts are the observable worker state.
+`start-scheduler` validates arguments, then starts a detached Python child process that runs `python -m harness.cli run-scheduler <run-dir> --watch ...`. It returns after launch and prints the worker id. It does not claim that the worker successfully executed jobs; the heartbeat and events artifacts are the observable worker state. The detached launch mechanism is platform-specific and finalized at implementation; the watch loop itself is platform-independent. The detached child must not depend on the caller console staying open: child stdin/stdout/stderr should be redirected away from the caller, and intentional scheduler diagnostics belong in `events.log` and `heartbeat.json`.
 
 `stop-scheduler` writes `jobs/scheduler/stop.json` atomically. The worker observes it between polling iterations or after the current job completes.
 
@@ -101,11 +103,11 @@ This directory is not evidence by itself. Codex may later decide to index select
   "poll_interval_seconds": 5.0,
   "max_iterations": null,
   "max_seconds": null,
-  "cli_version": "0.1.0"
+  "cli_version": "0.2.0"
 }
 ```
 
-If a later worker is started for the same run, it writes a new `worker.json`. Phase 6 does not add lockfiles or stale-worker takeover semantics, so operators remain responsible for not launching overlapping workers.
+If a later worker is started for the same run, it writes a new `worker.json`. `worker.json` is a current-worker snapshot, not append-only history. Worker start/stop history is retained in `events.log` through `worker_started`, `worker_stopped`, and failure events. Phase 6 does not add lockfiles or stale-worker takeover semantics, so operators remain responsible for not launching overlapping workers.
 
 ### `heartbeat.json`
 
@@ -202,6 +204,7 @@ Jobs queued while an iteration is executing are picked up in a later polling ite
 
 Stop requests are cooperative:
 
+- A pre-existing `stop.json` is a stale one-shot control signal. New worker startup removes it before entering the polling loop, so a worker stopped in a previous session does not cause the next worker to exit immediately.
 - If the worker is sleeping or between jobs, it exits before claiming another job.
 - If the worker is executing a job, it waits for the current job to reach a terminal state, writes job artifacts, observes `stop.json`, and exits without claiming a later queued job.
 - Stop requests do not kill subprocesses.
@@ -236,6 +239,8 @@ Job failure only applies after a queued job has been claimed and the generic age
 - the next polling iteration retries from disk
 
 This prevents a long-running worker from dying because a partially written or manually edited job artifact appears, while still making the problem visible and avoiding mixed execution under a corrupt job set.
+
+The all-or-nothing skip is intentional. When any corrupt job record exists, watch mode does not partially execute other queued jobs in the same run. Operators must fix or remove the invalid job artifact before normal watch execution resumes.
 
 ## Claim And Concurrency Semantics
 
@@ -333,6 +338,8 @@ git diff --check
 ```
 
 Package smoke should add a bounded foreground watch invocation so CI proves the packaged console script can execute watch mode from outside the repository. Detached background launch should be covered by unit tests and, if stable on Windows and GitHub-hosted runners, an optional local smoke.
+
+Before implementation reuses the verification commands above, validate them against the current GitHub Actions shell and local Windows shell. If the current workflow shell is not PowerShell, use the equivalent shell-native loop for validating every source-controlled run.
 
 ## Live Phase 6 Run
 
