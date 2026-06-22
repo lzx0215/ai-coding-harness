@@ -20,14 +20,14 @@ Phase 4 async job substrate is implemented in the current source tree. It added 
 
 Phase 5.2 local scheduler smoke is implemented in `harness/runs/2026-06-22-phase-5-live-scheduler-smoke`. The live run queued `phase5-live-scheduler-agent` with `queue-generic-agent`, executed it with `run-scheduler --once` (`executed=1 skipped=0`), and wrote `jobs/aggregation.json` with `aggregate-jobs` (`consumed=1 incomplete=0`). The scheduler did not mutate `state.json`; Codex indexed `agent-job`, `agent-result`, and `aggregation` evidence explicitly before completing the run. Residual risks: watch mode, multi-worker concurrency, cloud queue behavior, and automatic stale-running recovery remain unverified; this proves local single-process scheduler execution only; orphaned running jobs are skipped, not recovered.
 
-The current branch also adds team-repeatable validation entrypoints and packaged CLI hardening:
+The Phase 5.2 `master` baseline also adds team-repeatable validation entrypoints and packaged CLI hardening:
 
 - `harness.cli` now separates package resources (`harness/schemas`, `harness/templates`) from repository root discovery used for evidence paths. Packaged console-script execution can validate absolute run directories from outside the repository.
 - `.github/workflows/ci.yml` runs editable install, the full unittest suite, every source-controlled run validation, non-editable package smoke validation from outside the repo, and merge-base scoped `git diff --check`.
 - `pyproject.toml` defines the `ai-coding-harness` package and `harness = harness.cli:main` console script.
 - `harness/core/run-lifecycle-sop.md` captures the repeatable create-run / advance-state / index-evidence / handoff flow; it should become a Codex skill only after at least two real reuses or explicit user request.
 
-The current verification baseline for the Phase 5.2 scheduler branch is:
+The pre-merge local verification baseline for the Phase 5.2 scheduler work is:
 
 - `python -m unittest discover -s tests` -> 253 tests OK, 1 skipped
 - all 12 source-controlled `harness/runs/*` directories validated successfully, including `2026-06-22-phase-5-live-scheduler-smoke`
@@ -39,4 +39,8 @@ Follow-up Phase 3 provenance hardening now rejects empty `source_evidence` for r
 
 ## Next Step
 
-Push `codex/phase5-live-scheduler` and confirm the remote GitHub Actions run. After CI is green, choose between merging the scheduler branch or designing the next scheduler slice: watch mode, stale-running detection, or multi-worker claim locking.
+Phase 5.2 release closure is complete. `master` is pushed at `b314474f3abbcc933d4a0154050e19ecc43a7621` (`fix: clarify aggregation classification error`), and GitHub Actions CI run `27924953687` / `CI #9` for the `master` push completed with `conclusion=success` on `2026-06-22T02:00:38Z`.
+
+No Phase 5.2 release tag is recorded; GitHub currently has no repository tags. The remote branch `codex/phase5-live-scheduler` points at the same SHA as `master`, and `codex/phase4-run-ci-package` is an older merged branch. They are cleanup candidates only and do not block the durable release state.
+
+Next implementation choice: design the next scheduler slice: watch mode, stale-running detection, or multi-worker claim locking.
