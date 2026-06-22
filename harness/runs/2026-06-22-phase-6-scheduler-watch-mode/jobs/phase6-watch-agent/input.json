@@ -1,0 +1,15 @@
+{
+  "run_id": "2026-06-22-phase-6-scheduler-watch-mode",
+  "job_id": "phase6-watch-agent",
+  "agent": "generic-cli-agent",
+  "adapter": "generic-cli-agent",
+  "command": [
+    "python",
+    "..\\..\\scripts\\watch-smoke.py"
+  ],
+  "created_at": "2026-06-22T05:22:40Z",
+  "timeout_seconds": 30,
+  "input_file": "C:\\ai\\ai-coding-harness\\harness\\runs\\2026-06-22-phase-6-scheduler-watch-mode\\jobs\\phase6-watch-agent\\input.json",
+  "output_file": "C:\\ai\\ai-coding-harness\\harness\\runs\\2026-06-22-phase-6-scheduler-watch-mode\\jobs\\phase6-watch-agent\\output.json",
+  "raw_log_file": "C:\\ai\\ai-coding-harness\\harness\\runs\\2026-06-22-phase-6-scheduler-watch-mode\\jobs\\phase6-watch-agent\\raw.log"
+}

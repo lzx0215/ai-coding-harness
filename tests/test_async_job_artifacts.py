@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 PHASE4_RUN = ROOT / "harness" / "runs" / "2026-06-21-phase-4-async-substrate-closure"
 PHASE4_LIVE_RUN = ROOT / "harness" / "runs" / "2026-06-21-phase-4-live-generic-agent-smoke"
 PHASE5_LIVE_RUN = ROOT / "harness" / "runs" / "2026-06-22-phase-5-live-scheduler-smoke"
+PHASE6_WATCH_RUN = ROOT / "harness" / "runs" / "2026-06-22-phase-6-scheduler-watch-mode"
 JOB_SCHEMA = ROOT / "harness" / "schemas" / "job.schema.json"
 AGGREGATION_SCHEMA = ROOT / "harness" / "schemas" / "aggregation.schema.json"
 AGENT_RESULT_SCHEMA = ROOT / "harness" / "schemas" / "agent-result.schema.json"
@@ -94,6 +95,36 @@ class Phase4ClosureRunTest(unittest.TestCase):
         )
         self.assertIn("phase5 live scheduler agent wrote output", raw_log)
         self.assertEqual(aggregation["consumed_jobs"], ["phase5-live-scheduler-agent"])
+        self.assertEqual(aggregation["incomplete_jobs"], [])
+
+    def test_phase6_watch_run_was_produced_by_watch_scheduler_path(self):
+        result = cli.validate_run(PHASE6_WATCH_RUN, root=ROOT)
+        state = json.loads((PHASE6_WATCH_RUN / "state.json").read_text(encoding="utf-8"))
+        evidence_types = {item["type"] for item in state["evidence"]}
+        scheduler_dir = PHASE6_WATCH_RUN / "jobs" / "scheduler"
+        worker = json.loads((scheduler_dir / "worker.json").read_text(encoding="utf-8"))
+        heartbeat = json.loads((scheduler_dir / "heartbeat.json").read_text(encoding="utf-8"))
+        events = [
+            json.loads(line)
+            for line in (scheduler_dir / "events.log").read_text(encoding="utf-8").splitlines()
+        ]
+        aggregation = json.loads(
+            PHASE6_WATCH_RUN.joinpath("jobs", "aggregation.json").read_text(encoding="utf-8")
+        )
+
+        self.assertEqual(result.errors, [])
+        self.assertEqual(state["status"], "completed")
+        self.assertIn("agent-job", evidence_types)
+        self.assertIn("agent-result", evidence_types)
+        self.assertIn("aggregation", evidence_types)
+        self.assertEqual(worker["worker_id"], "phase6-live-watch")
+        self.assertEqual(heartbeat["worker_id"], "phase6-live-watch")
+        self.assertEqual(heartbeat["status"], "stopped")
+        self.assertTrue(events)
+        self.assertTrue(all({"ts", "event", "detail"} <= set(event) for event in events))
+        self.assertIn("worker_started", {event["event"] for event in events})
+        self.assertIn("job_completed", {event["event"] for event in events})
+        self.assertEqual(aggregation["consumed_jobs"], ["phase6-watch-agent"])
         self.assertEqual(aggregation["incomplete_jobs"], [])
 
 

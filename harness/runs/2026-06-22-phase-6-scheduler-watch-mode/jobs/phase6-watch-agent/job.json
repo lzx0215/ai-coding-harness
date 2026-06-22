@@ -1,0 +1,20 @@
+{
+  "job_id": "phase6-watch-agent",
+  "run_id": "2026-06-22-phase-6-scheduler-watch-mode",
+  "agent": "generic-cli-agent",
+  "adapter": "generic-cli-agent",
+  "status": "succeeded",
+  "input_file": "input.json",
+  "output_file": "output.json",
+  "raw_log_file": "raw.log",
+  "created_at": "2026-06-22T05:22:40Z",
+  "started_at": "2026-06-22T05:22:55Z",
+  "completed_at": "2026-06-22T05:22:55Z",
+  "timeout_seconds": 30,
+  "error_reason": null,
+  "provenance": {
+    "agent": "generic-cli-agent",
+    "adapter_version": "0.1.0",
+    "runtime": "local-cli"
+  }
+}
