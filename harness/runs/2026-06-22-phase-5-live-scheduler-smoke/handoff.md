@@ -13,6 +13,7 @@ verified:
   - "aggregate-jobs printed aggregated jobs: 2026-06-22-phase-5-live-scheduler-smoke consumed=1 incomplete=0"
   - "state.json SHA256 was unchanged by run-scheduler --once"
   - "raw.log contains phase5 live scheduler agent wrote output"
+  - "External Claude Code review completed with status findings and no medium/high/critical findings."
 not_verified:
   - "Watch mode."
   - "Multi-worker concurrency."
@@ -20,6 +21,7 @@ not_verified:
   - "Automatic stale-running recovery."
   - "Local single-process only."
   - "Orphaned running jobs are skipped, not recovered."
+  - "Real GitHub Actions execution for this branch."
 residual_risks:
   - "Watch mode remains unverified."
   - "Multi-worker concurrency remains unverified."
@@ -27,6 +29,9 @@ residual_risks:
   - "Automatic stale-running recovery remains unverified."
   - "This run proves local single-process scheduler execution only."
   - "Orphaned running jobs are skipped, not recovered."
+  - "Concurrent scheduler invocation can double-claim a queued job because Phase 5.2 has no cross-process claim lock."
+  - "queue-generic-agent values that start with -- require the --key=value form."
+  - "Remote GitHub Actions verification remains pending until the branch is pushed."
 next_step: "Use this live scheduler smoke as the Phase 5.2 local scheduler baseline before broadening to watch mode or concurrency."
 memory_update: updated
 memory_files:
@@ -46,6 +51,8 @@ Created a live Phase 5.2 run whose async job artifacts were produced by the real
 - `jobs/phase5-live-scheduler-agent/output.json`
 - `jobs/phase5-live-scheduler-agent/raw.log`
 - `jobs/aggregation.json`
+- `reviews/phase5-code-review/claude-review.json`
+- `reviews/phase5-code-review/claude-review.evidence.json`
 
 `input.json` is retained as historical runtime input from this worktree execution. Its absolute artifact paths document what the scheduler used for this run; they are not a portable replay interface.
 
@@ -56,3 +63,5 @@ completed
 ## Risks
 
 This run proves local single-process scheduler execution only. Watch mode, multi-worker concurrency, cloud queue behavior, automatic stale-running recovery, and orphaned running job recovery remain unverified. Orphaned running jobs are skipped, not recovered.
+
+The external Claude Code review found no medium, high, or critical issues. Its low findings are tracked as residual risks for the next scheduler phase: cross-process claim locking is absent, dash-prefixed queue option values require `--key=value`, and remote GitHub Actions has not run for this branch yet.

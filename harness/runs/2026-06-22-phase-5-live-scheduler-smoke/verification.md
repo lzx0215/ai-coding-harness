@@ -10,6 +10,7 @@ Get-FileHash harness\runs\2026-06-22-phase-5-live-scheduler-smoke\state.json -Al
 python -m unittest tests.test_async_job_artifacts.Phase4ClosureRunTest.test_phase5_live_run_was_produced_by_scheduler_path -v
 python -m harness.cli validate harness/runs/2026-06-22-phase-5-live-scheduler-smoke
 git diff --check
+python mcp\claude-review\scripts\invoke-claude-reviewer.py --input <payload> --output harness\runs\2026-06-22-phase-5-live-scheduler-smoke\reviews\phase5-code-review\claude-review.json --raw-log harness\runs\2026-06-22-phase-5-live-scheduler-smoke\reviews\phase5-code-review\claude-review.raw.log
 ```
 
 ## Results
@@ -24,6 +25,7 @@ git diff --check
 - The targeted Phase 5 live scheduler regression test exited 0 and passed 1 test.
 - `validate` exited 0 and printed `valid: harness\runs\2026-06-22-phase-5-live-scheduler-smoke`.
 - `git diff --check` exited 0. It printed CRLF replacement warnings for touched text files, but no whitespace errors.
+- External Claude Code review exited 0 and produced `reviews/phase5-code-review/claude-review.json` with status `findings`. The review reported no medium, high, or critical findings. Its low findings are accepted as scoped Phase 5.2 limitations: single-process claim semantics only, dash-prefixed queue option values require `--key=value`, and the generic-agent job-id error text changed.
 
 ## Not Verified
 
@@ -32,8 +34,12 @@ git diff --check
 - Cloud queue integration.
 - Automatic stale-running recovery.
 - Orphaned running job recovery.
+- Real GitHub Actions execution for this branch.
 
 ## Residual Risks
 
 - This proves local single-process scheduler execution only.
 - Orphaned running jobs are skipped, not recovered.
+- Concurrent scheduler invocation can double-claim a queued job because Phase 5.2 has no cross-process lock or compare-and-swap claim primitive.
+- `queue-generic-agent` values that start with `--` require the `--key=value` form.
+- The branch still needs a pushed GitHub Actions run before remote CI can be claimed.

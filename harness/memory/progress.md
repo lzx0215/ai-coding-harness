@@ -27,18 +27,16 @@ The current branch also adds team-repeatable validation entrypoints and packaged
 - `pyproject.toml` defines the `ai-coding-harness` package and `harness = harness.cli:main` console script.
 - `harness/core/run-lifecycle-sop.md` captures the repeatable create-run / advance-state / index-evidence / handoff flow; it should become a Codex skill only after at least two real reuses or explicit user request.
 
-The current verification baseline is:
+The current verification baseline for the Phase 5.2 scheduler branch is:
 
-- `python -m unittest discover -s tests` -> baseline before this change: 217 tests OK, 1 skipped
-- all 10 pre-existing `harness/runs/*` directories validated successfully before this change
-- `python -m pip install -e .` succeeded locally
-- `harness validate harness/runs/2026-06-21-phase-4-async-substrate-closure` passed locally
-- `python -m harness.cli validate harness/runs/2026-06-21-phase-4-live-generic-agent-smoke` passed locally
-- `python -m unittest tests.test_async_job_artifacts.Phase4ClosureRunTest.test_phase4_live_run_was_produced_by_run_generic_agent -v` passed locally
-- real Claude Code review adapter output is indexed under the Phase 3 run
+- `python -m unittest discover -s tests` -> 253 tests OK, 1 skipped
+- all 12 source-controlled `harness/runs/*` directories validated successfully, including `2026-06-22-phase-5-live-scheduler-smoke`
+- local non-editable package smoke passed from outside the repository cwd: packaged `harness.exe` validated every source-controlled run, queued a scheduler smoke job, ran `run-scheduler --once`, generated aggregation, indexed `agent-job` / `agent-result` / `aggregation`, and validated the temporary package-smoke run
+- `git diff --check` passed locally with no whitespace errors
+- real Claude Code review adapter output is indexed under the Phase 3 run and under the Phase 5.2 live scheduler smoke run; the Phase 5.2 review returned `findings` with no medium, high, or critical findings
 
 Follow-up Phase 3 provenance hardening now rejects empty `source_evidence` for review-result decisions, duplicate indexed `review-decision.json` artifacts, and mismatched `severity_counts` when linked review findings can be computed. Historical runs still validate because none indexed a pre-existing `review-decision.json` except the updated Phase 3 run.
 
 ## Next Step
 
-Run final full-suite/package verification for the current branch, then choose the next focus: live async worker/scheduler integration, CI hardening after the first GitHub Actions run, or documentation for the Codex review-decision authoring flow.
+Push `codex/phase5-live-scheduler` and confirm the remote GitHub Actions run. After CI is green, choose between merging the scheduler branch or designing the next scheduler slice: watch mode, stale-running detection, or multi-worker claim locking.
