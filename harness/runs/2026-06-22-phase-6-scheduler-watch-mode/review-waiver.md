@@ -8,6 +8,10 @@ not_waived:
   - "State schema changes."
   - "Evidence validation changes."
   - "CI or packaging changes."
+  - "tests/test_async_job_artifacts.py."
+  - "README.md."
+  - "docs/INDEX.md."
+  - "harness/memory/progress.md."
 residual_risks:
   - "Heartbeat is observational only."
   - "Stop requests are cooperative and do not interrupt running jobs."
@@ -19,19 +23,24 @@ owner: codex
 
 ## Decision
 
-External review is waived for this run-record-only smoke artifact. The task does not change scheduler runtime implementation, schemas, or adapter execution behavior.
+External review is waived only for run-record artifacts under `harness/runs/2026-06-22-phase-6-scheduler-watch-mode/`. The task does not change scheduler runtime implementation, schemas, or adapter execution behavior.
 
 ## Scope
 
 This waiver covers only:
 
 - `harness/runs/2026-06-22-phase-6-scheduler-watch-mode/`
-- Durable documentation updates that point to the live run.
-- The regression test asserting the live run artifacts exist and validate.
 
 ## Not Waived
 
-Runtime scheduler changes, state schema changes, evidence validation behavior, CI changes, and packaging changes still require normal review handling.
+Runtime scheduler changes, state schema changes, evidence validation behavior, CI changes, packaging changes, durable documentation updates, and tests still require normal review handling.
+
+Spec and quality review on the implementation branch cover the related non-run-record files:
+
+- `tests/test_async_job_artifacts.py`
+- `README.md`
+- `docs/INDEX.md`
+- `harness/memory/progress.md`
 
 ## Residual Risks
 
