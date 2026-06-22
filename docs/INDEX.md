@@ -27,6 +27,7 @@
 - `docs/superpowers/specs/2026-06-22-phase-7-stale-running-recovery-design.md` - Phase 7 stale-running detection and explicit recovery design.
 - `docs/superpowers/specs/2026-06-22-phase-7-1-crash-smoke-claim-locking-design.md` - Phase 7.1 real scheduler crash smoke and local claim locking design.
 - `docs/superpowers/specs/2026-06-22-phase-8-multi-worker-concurrency-design.md` - Phase 8 local multi-worker claim token, lease, and artifact protection design.
+- `docs/superpowers/specs/2026-06-23-phase-9-cross-run-cloud-queue-design.md` - Phase 9 Strict design for gated cross-run local queue and later cloud queue adapters.
 - `docs/superpowers/specs/2026-06-20-phase-2-run-definition-evidence-design.md` - Phase 2 run definition, frontmatter, and evidence helper design.
 - `docs/superpowers/specs/2026-06-20-phase-3-review-decision-memory-design.md` - Phase 3 review decision, handoff, and memory closure design.
 
