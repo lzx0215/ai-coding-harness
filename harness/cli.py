@@ -2334,7 +2334,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Run the local async scheduler for queued jobs.",
     )
     scheduler.add_argument("run_dir")
-    scheduler.add_argument("--once", action="store_true", required=True)
+    scheduler_mode = scheduler.add_mutually_exclusive_group(required=True)
+    scheduler_mode.add_argument("--once", action="store_true")
+    scheduler_mode.add_argument("--watch", action="store_true")
+    scheduler.add_argument("--poll-interval-seconds", type=float, default=5.0)
+    scheduler.add_argument("--max-iterations", type=int)
+    scheduler.add_argument("--max-seconds", type=float)
+    scheduler.add_argument("--worker-id")
 
     aggregate = subparsers.add_parser(
         "aggregate-jobs",
@@ -2460,11 +2466,26 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
         if args.command == "run-scheduler":
-            summary = scheduler_run_once(args.run_dir)
+            if args.once:
+                summary = scheduler_run_once(args.run_dir)
+                print(
+                    f"scheduler: {summary['run_id']} "
+                    f"executed={len(summary['executed_jobs'])} "
+                    f"skipped={len(summary['skipped_jobs'])}",
+                )
+                return 0
+            summary = scheduler_run_watch(
+                args.run_dir,
+                poll_interval_seconds=args.poll_interval_seconds,
+                max_iterations=args.max_iterations,
+                max_seconds=args.max_seconds,
+                worker_id=args.worker_id,
+            )
             print(
-                f"scheduler: {summary['run_id']} "
+                f"scheduler-watch: {summary['run_id']} "
+                f"iterations={summary['iterations']} "
                 f"executed={len(summary['executed_jobs'])} "
-                f"skipped={len(summary['skipped_jobs'])}",
+                f"stop_reason={summary['stop_reason']}",
             )
             return 0
 

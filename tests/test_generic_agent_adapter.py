@@ -958,6 +958,39 @@ class GenericCliAgentOrchestrationTest(unittest.TestCase):
         self.assertEqual(saved_state, original_state)
         self.assertFalse(exists_after_clear)
 
+    def test_run_scheduler_requires_exactly_one_mode(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            run_dir = Path(raw)
+            write_json(run_dir / "state.json", minimal_state())
+
+            missing = subprocess.run(
+                [sys.executable, "-m", "harness.cli", "run-scheduler", str(run_dir)],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            both = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "harness.cli",
+                    "run-scheduler",
+                    str(run_dir),
+                    "--once",
+                    "--watch",
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+        self.assertEqual(missing.returncode, 2)
+        self.assertIn("one of the arguments --once --watch is required", missing.stderr)
+        self.assertEqual(both.returncode, 2)
+        self.assertIn("not allowed with argument", both.stderr)
+
     def test_aggregate_jobs_classifies_terminal_and_incomplete_jobs_without_mutating_state(self):
         with tempfile.TemporaryDirectory(dir=ROOT) as raw:
             run_dir = Path(raw)
