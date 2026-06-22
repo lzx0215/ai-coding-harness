@@ -135,6 +135,8 @@ class StaticContractsTest(unittest.TestCase):
             "harness index-evidence \"$GITHUB_WORKSPACE/.tmp/package-smoke-run\" agent-result jobs/package-smoke-scheduler/output.json",
             "harness index-evidence \"$GITHUB_WORKSPACE/.tmp/package-smoke-run\" aggregation jobs/aggregation.json",
             "package-smoke-scheduler-agent",
+            "harness run-scheduler \"$GITHUB_WORKSPACE/.tmp/package-smoke-run\" --watch --poll-interval-seconds 0.1 --max-iterations 3",
+            "package-smoke-watch-agent",
             "github.event.before",
             "github.base_ref",
             "git merge-base HEAD origin/master",
