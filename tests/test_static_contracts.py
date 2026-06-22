@@ -15,6 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 STATE_SCHEMA = ROOT / "harness" / "schemas" / "state.schema.json"
 LIFECYCLE = ROOT / "harness" / "core" / "lifecycle.md"
 STATE_AUTHORITY = ROOT / "harness" / "core" / "state-authority.md"
+EVIDENCE_CONTRACT = ROOT / "harness" / "core" / "evidence.md"
 ADAPTER_PATH = ROOT / "mcp" / "claude-review" / "adapter.py"
 ADAPTER_REQUIREMENTS = ROOT / "mcp" / "claude-review" / "requirements.txt"
 ADAPTER_LOCKFILE = ROOT / "mcp" / "claude-review" / "requirements.lock.txt"
@@ -157,6 +158,19 @@ class StaticContractsTest(unittest.TestCase):
             "## Residual Risks",
         ]:
             self.assertIn(heading, text)
+
+    def test_evidence_contract_matches_aggregation_incomplete_semantics(self):
+        text = read_text(EVIDENCE_CONTRACT)
+
+        self.assertIn(
+            "non-terminal observed jobs belong in `incomplete_jobs` only",
+            text,
+        )
+        self.assertIn("must not\n  appear in `consumed_jobs`", text)
+        self.assertNotIn(
+            "`cancelled_jobs`, and `incomplete_jobs` must appear in `consumed_jobs`",
+            text,
+        )
 
     def test_claude_review_output_schema_accepts_v0_1_1_fixture_without_provenance(self):
         fixture = json.loads(read_text(V011_REVIEW_FIXTURE))

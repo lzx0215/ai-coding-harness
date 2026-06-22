@@ -25,7 +25,7 @@ python mcp\claude-review\scripts\invoke-claude-reviewer.py --input <payload> --o
 - The targeted Phase 5 live scheduler regression test exited 0 and passed 1 test.
 - `validate` exited 0 and printed `valid: harness\runs\2026-06-22-phase-5-live-scheduler-smoke`.
 - `git diff --check` exited 0. It printed CRLF replacement warnings for touched text files, but no whitespace errors.
-- External Claude Code review exited 0 and produced `reviews/phase5-code-review/claude-review.json` with status `findings`. The review reported no medium, high, or critical findings. Its low findings are accepted as scoped Phase 5.2 limitations: single-process claim semantics only, dash-prefixed queue option values require `--key=value`, and the generic-agent job-id error text changed.
+- External Claude Code review exited 0 and produced `reviews/phase5-code-review/claude-review.json` with status `findings`. The review reported no medium, high, or critical findings. Its low findings are triaged in `reviews/phase5-code-review/review-decision.json` as scoped Phase 5.2 limitations or non-blocking behavior: single-process claim semantics only, dash-prefixed queue option values require `--key=value`, and the generic-agent job-id error text changed.
 
 ## Not Verified
 

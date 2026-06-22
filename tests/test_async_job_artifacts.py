@@ -73,6 +73,7 @@ class Phase4ClosureRunTest(unittest.TestCase):
         result = cli.validate_run(PHASE5_LIVE_RUN, root=ROOT)
         state = json.loads((PHASE5_LIVE_RUN / "state.json").read_text(encoding="utf-8"))
         evidence_types = {item["type"] for item in state["evidence"]}
+        evidence_paths = {item["path"] for item in state["evidence"]}
         raw_log = PHASE5_LIVE_RUN.joinpath(
             "jobs",
             "phase5-live-scheduler-agent",
@@ -87,6 +88,10 @@ class Phase4ClosureRunTest(unittest.TestCase):
         self.assertIn("agent-job", evidence_types)
         self.assertIn("agent-result", evidence_types)
         self.assertIn("aggregation", evidence_types)
+        self.assertIn(
+            "reviews/phase5-code-review/review-decision.json",
+            evidence_paths,
+        )
         self.assertIn("phase5 live scheduler agent wrote output", raw_log)
         self.assertEqual(aggregation["consumed_jobs"], ["phase5-live-scheduler-agent"])
         self.assertEqual(aggregation["incomplete_jobs"], [])

@@ -1,0 +1,56 @@
+{
+  "schema_version": "0.1.0",
+  "run_id": "2026-06-22-phase-5-live-scheduler-smoke",
+  "generated_at": "2026-06-22T00:28:45Z",
+  "disposition": "findings-triaged",
+  "recommended_status": "reviewed",
+  "decision_owner": "codex",
+  "source_evidence": [
+    {
+      "type": "review-output",
+      "path": "reviews/phase5-code-review/claude-review.json"
+    },
+    {
+      "type": "review-evidence",
+      "path": "reviews/phase5-code-review/claude-review.evidence.json"
+    }
+  ],
+  "severity_counts": {
+    "critical": 0,
+    "high": 0,
+    "medium": 0,
+    "low": 3,
+    "info": 3
+  },
+  "resolved_findings": [
+    {
+      "title": "Job claim is not cross-process atomic",
+      "severity": "low",
+      "evidence": "Accepted as a Phase 5.2 scope boundary. The run handoff and verification record state that this slice proves local single-process scheduler execution only and that multi-worker claim locking remains future work."
+    },
+    {
+      "title": "Dash-prefixed queue option values require equals form",
+      "severity": "low",
+      "evidence": "Accepted as a CLI edge-case limitation. Python argparse itself rejects space-separated option values that begin with --, while the implemented equals form is supported and covered by tests."
+    },
+    {
+      "title": "Invalid job_id error text changed",
+      "severity": "low",
+      "evidence": "Accepted as a non-blocking error wording change. Tests assert the new safer single-segment validation message, and no stable external error-text contract exists in this repository."
+    }
+  ],
+  "accepted_risks": [],
+  "not_tested": [
+    "Real GitHub Actions execution for this branch.",
+    "Cross-process or multi-worker scheduler concurrency.",
+    "Scheduler watch mode.",
+    "Cloud queue behavior.",
+    "Automatic stale-running recovery."
+  ],
+  "residual_risks": [
+    "Phase 5.2 has no cross-process job claim lock or compare-and-swap primitive.",
+    "Dash-prefixed queue option values require the --key=value form.",
+    "Remote GitHub Actions verification remains pending until the branch is pushed."
+  ],
+  "notes": "External Claude Code review completed with status findings and no medium, high, or critical findings. Low findings were triaged as documented Phase 5.2 scope boundaries or non-blocking CLI/error-text limitations."
+}

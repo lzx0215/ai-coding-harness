@@ -14,6 +14,7 @@ verified:
   - "state.json SHA256 was unchanged by run-scheduler --once"
   - "raw.log contains phase5 live scheduler agent wrote output"
   - "External Claude Code review completed with status findings and no medium/high/critical findings."
+  - "reviews/phase5-code-review/review-decision.json triages the low findings as documented Phase 5.2 limitations or non-blocking behavior."
 not_verified:
   - "Watch mode."
   - "Multi-worker concurrency."
@@ -53,6 +54,7 @@ Created a live Phase 5.2 run whose async job artifacts were produced by the real
 - `jobs/aggregation.json`
 - `reviews/phase5-code-review/claude-review.json`
 - `reviews/phase5-code-review/claude-review.evidence.json`
+- `reviews/phase5-code-review/review-decision.json`
 
 `input.json` is retained as historical runtime input from this worktree execution. Its absolute artifact paths document what the scheduler used for this run; they are not a portable replay interface.
 
@@ -64,4 +66,4 @@ completed
 
 This run proves local single-process scheduler execution only. Watch mode, multi-worker concurrency, cloud queue behavior, automatic stale-running recovery, and orphaned running job recovery remain unverified. Orphaned running jobs are skipped, not recovered.
 
-The external Claude Code review found no medium, high, or critical issues. Its low findings are tracked as residual risks for the next scheduler phase: cross-process claim locking is absent, dash-prefixed queue option values require `--key=value`, and remote GitHub Actions has not run for this branch yet.
+The external Claude Code review found no medium, high, or critical issues. `reviews/phase5-code-review/review-decision.json` records the Codex triage decision (`findings-triaged -> reviewed`). Its low findings are tracked as residual risks for the next scheduler phase: cross-process claim locking is absent, dash-prefixed queue option values require `--key=value`, and remote GitHub Actions has not run for this branch yet.

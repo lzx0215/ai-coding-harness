@@ -33,9 +33,10 @@ Indexed `aggregation` evidence must satisfy these semantic rules in addition to
 the JSON schema:
 
 - every job id in `succeeded_jobs`, `failed_jobs`, `timeout_jobs`,
-  `cancelled_jobs`, and `incomplete_jobs` must appear in `consumed_jobs`
-- every `consumed_jobs` entry must appear in exactly one terminal bucket or in
-  `incomplete_jobs`
+  and `cancelled_jobs` must appear in `consumed_jobs`
+- every `consumed_jobs` entry must appear in exactly one terminal bucket
+- non-terminal observed jobs belong in `incomplete_jobs` only; they must not
+  appear in `consumed_jobs`
 - a job cannot appear in more than one terminal bucket
 - a job cannot be both terminal and incomplete
 - duplicate job ids inside any aggregation bucket are invalid
