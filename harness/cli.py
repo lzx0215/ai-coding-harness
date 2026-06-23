@@ -2274,9 +2274,14 @@ def create_cross_run_queue_entry(
 
     queue_path = Path(queue_dir)
     queue_id = ensure_cross_run_queue(queue_path)
-    entry_path = cross_run_queue_entry_path(queue_path, entry_id)
-    if entry_path.exists():
-        raise HarnessCliError(f"cross-run queue entry already exists: {entry_id}")
+    entry_dir = cross_run_queue_entry_dir(queue_path, entry_id)
+    entry_path = entry_dir / "entry.json"
+    try:
+        entry_dir.mkdir(parents=True, exist_ok=False)
+    except FileExistsError as exc:
+        raise HarnessCliError(f"cross-run queue entry already exists: {entry_id}") from exc
+    except OSError as exc:
+        raise HarnessCliError(f"failed to create cross-run queue entry directory: {exc}") from exc
 
     created_at = utc_now()
     entry = {
@@ -2303,16 +2308,20 @@ def create_cross_run_queue_entry(
         "recovery": [],
         "cleanup": [],
     }
-    validate_json_payload(entry, CROSS_RUN_QUEUE_ENTRY_SCHEMA, "cross-run-queue-entry")
-    write_json_atomic(entry_path, entry)
-    append_cross_run_queue_event(
-        queue_path,
-        queue_id=queue_id,
-        entry_id=entry_id,
-        event="entry_created",
-        actor=creator,
-        details={"run_id": state["run_id"], "job_id": job_id},
-    )
+    try:
+        validate_json_payload(entry, CROSS_RUN_QUEUE_ENTRY_SCHEMA, "cross-run-queue-entry")
+        write_json_atomic(entry_path, entry)
+        append_cross_run_queue_event(
+            queue_path,
+            queue_id=queue_id,
+            entry_id=entry_id,
+            event="entry_created",
+            actor=creator,
+            details={"run_id": state["run_id"], "job_id": job_id},
+        )
+    except Exception:
+        shutil.rmtree(entry_dir, ignore_errors=True)
+        raise
     return entry
 
 
@@ -2536,6 +2545,26 @@ def cross_run_queue_run_once(
                 root=repo_root,
             )
             if job_claim is None:
+                current_job = load_job_payload(run_dir / "jobs" / claimed_entry["job_id"] / "job.json")
+                if current_job["status"] in TERMINAL_JOB_STATUSES:
+                    terminal_job_status = current_job["status"]
+                    terminal_entry_status = (
+                        "succeeded" if terminal_job_status == "succeeded" else "failed"
+                    )
+                    mark_cross_run_queue_entry_terminal(
+                        queue_path,
+                        claimed_entry,
+                        status=terminal_entry_status,
+                        terminal_job_status=terminal_job_status,
+                        worker_id=worker_id,
+                        details={
+                            "terminal_job_status": terminal_job_status,
+                            "reason": "referenced job was already terminal",
+                        },
+                    )
+                    skipped_entries.append(entry_id)
+                    release_queue_claim = True
+                    continue
                 mark_cross_run_queue_entry_terminal(
                     queue_path,
                     claimed_entry,
@@ -2618,6 +2647,13 @@ def recover_cross_run_queue_entry(
     before = validate_run(run_dir, root=repo_root)
     if not before.ok:
         raise HarnessCliError(format_errors(before.errors))
+    if action == "requeue":
+        referenced_job = load_job_payload(run_dir / "jobs" / entry["job_id"] / "job.json")
+        if referenced_job["status"] != "queued":
+            raise HarnessCliError(
+                "cross-run queue requeue requires the referenced run-local job "
+                "to be queued; recover the run-local job first",
+            )
 
     created_at = utc_now()
     timestamp = recovery_timestamp_fragment(created_at)

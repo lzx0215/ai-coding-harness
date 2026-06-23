@@ -229,6 +229,34 @@ class CrossRunQueueCreationTest(unittest.TestCase):
 
 
 class CrossRunQueueExecutionTest(unittest.TestCase):
+    def test_worker_id_must_be_authorized_to_claim_queue_entry(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            base = Path(raw)
+            _, queue_dir = build_queued_entry_fixture(
+                base,
+                allowed_groups=[],
+                allowed_worker_id="worker-a",
+            )
+
+            unauthorized = cli.try_claim_cross_run_queue_entry(
+                queue_dir,
+                "entry-a",
+                worker_id="worker-b",
+                worker_groups=[],
+                root=base,
+            )
+            authorized = cli.try_claim_cross_run_queue_entry(
+                queue_dir,
+                "entry-a",
+                worker_id="worker-a",
+                worker_groups=[],
+                root=base,
+            )
+
+            self.assertIsNone(unauthorized)
+            self.assertIsNotNone(authorized)
+            self.assertEqual(authorized["claim_owner"], "worker-a")
+
     def test_worker_group_must_be_authorized_to_claim_queue_entry(self):
         with tempfile.TemporaryDirectory(dir=ROOT) as raw:
             base = Path(raw)
@@ -285,6 +313,34 @@ class CrossRunQueueExecutionTest(unittest.TestCase):
             self.assertEqual(entry["terminal_job_status"], "succeeded")
             self.assertTrue((run_dir / "jobs" / "job-a" / "output.json").exists())
             self.assertEqual((run_dir / "state.json").read_text(encoding="utf-8"), before_state)
+
+    def test_cross_run_queue_run_once_mirrors_already_terminal_referenced_job(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            base = Path(raw)
+            run_dir, queue_dir = build_queued_entry_fixture(base, allowed_groups=["local"])
+            scheduler_summary = cli.scheduler_run_once(
+                run_dir,
+                worker_id="run-local-worker",
+                root=base,
+            )
+
+            summary = cli.cross_run_queue_run_once(
+                queue_dir,
+                worker_id="worker-a",
+                worker_groups=["local"],
+                root=base,
+            )
+
+            entry = json.loads(
+                (queue_dir / "entries" / "entry-a" / "entry.json").read_text(
+                    encoding="utf-8",
+                )
+            )
+            self.assertEqual(scheduler_summary["executed_jobs"], ["job-a"])
+            self.assertEqual(summary["executed_entries"], [])
+            self.assertEqual(summary["skipped_entries"], ["entry-a"])
+            self.assertEqual(entry["status"], "succeeded")
+            self.assertEqual(entry["terminal_job_status"], "succeeded")
 
 
 class CrossRunQueueCliTest(unittest.TestCase):
@@ -367,6 +423,68 @@ class CrossRunQueueRecoveryCleanupTest(unittest.TestCase):
                 )
 
             self.assertIn("requires --confirm", str(raised.exception))
+
+    def test_recover_requeue_requires_referenced_job_to_be_queued(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            base = Path(raw)
+            run_dir, queue_dir = build_queued_entry_fixture(base, allowed_groups=["local"])
+            claimed = cli.try_claim_cross_run_queue_entry(
+                queue_dir,
+                "entry-a",
+                worker_id="worker-a",
+                worker_groups=["local"],
+                root=base,
+            )
+            self.assertIsNotNone(claimed)
+            job_claim = cli.try_claim_job(
+                run_dir,
+                "job-a",
+                worker_id="worker-a",
+                root=base,
+            )
+            self.assertIsNotNone(job_claim)
+            cli.mark_claimed_job_running(job_claim, started_at=cli.utc_now())
+
+            with self.assertRaises(cli.HarnessCliError) as raised:
+                cli.recover_cross_run_queue_entry(
+                    queue_dir,
+                    "entry-a",
+                    action="requeue",
+                    reason="stale worker",
+                    confirm=True,
+                    actor="codex",
+                    root=base,
+                )
+
+            self.assertIn("recover the run-local job first", str(raised.exception))
+
+    def test_recover_abandon_records_audit_and_clears_claim(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            base = Path(raw)
+            _, queue_dir = build_queued_entry_fixture(base, allowed_groups=["local"])
+            claimed = cli.try_claim_cross_run_queue_entry(
+                queue_dir,
+                "entry-a",
+                worker_id="worker-a",
+                worker_groups=["local"],
+                root=base,
+            )
+            self.assertIsNotNone(claimed)
+
+            result = cli.recover_cross_run_queue_entry(
+                queue_dir,
+                "entry-a",
+                action="abandon",
+                reason="operator abandoned stale route",
+                confirm=True,
+                actor="codex",
+                root=base,
+            )
+
+            self.assertEqual(result["entry"]["status"], "abandoned")
+            self.assertIsNone(result["entry"]["claim_owner"])
+            self.assertTrue(result["recovery_path"].exists())
+            self.assertFalse((queue_dir / "entries" / "entry-a" / "claim.lock").exists())
 
     def test_cleanup_terminal_entry_does_not_delete_run_local_artifacts(self):
         with tempfile.TemporaryDirectory(dir=ROOT) as raw:

@@ -168,10 +168,24 @@ class StaticContractsTest(unittest.TestCase):
         ]:
             with self.subTest(relative_path=relative_path):
                 schema = json.loads((ROOT / relative_path).read_text(encoding="utf-8"))
+                Draft202012Validator.check_schema(schema)
                 self.assertEqual(
                     schema["$schema"],
                     "https://json-schema.org/draft/2020-12/schema",
                 )
+
+    def test_phase9a_cross_run_queue_cli_commands_exist(self):
+        result = subprocess.run(
+            [sys.executable, "-m", "harness.cli", "--help"],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertIn("queue-cross-run-job", result.stdout)
+        self.assertIn("run-cross-run-queue", result.stdout)
 
     def test_evidence_contract_matches_aggregation_incomplete_semantics(self):
         text = read_text(EVIDENCE_CONTRACT)
