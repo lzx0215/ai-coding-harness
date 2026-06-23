@@ -2551,7 +2551,7 @@ def cross_run_queue_run_once(
                     worker_id=worker_id,
                     root=repo_root,
                 )
-            except HarnessCliError as exc:
+            except Exception as exc:
                 mark_cross_run_queue_entry_terminal(
                     queue_path,
                     claimed_entry,
@@ -2568,7 +2568,7 @@ def cross_run_queue_run_once(
                     current_job = load_job_payload(
                         run_dir / "jobs" / claimed_entry["job_id"] / "job.json",
                     )
-                except HarnessCliError as exc:
+                except Exception as exc:
                     mark_cross_run_queue_entry_terminal(
                         queue_path,
                         claimed_entry,
@@ -2645,6 +2645,17 @@ def cross_run_queue_run_once(
                 worker_id=worker_id,
             )
             executed_entries.append(entry_id)
+            release_queue_claim = True
+        except Exception as exc:
+            mark_cross_run_queue_entry_terminal(
+                queue_path,
+                claimed_entry,
+                status="failed",
+                terminal_job_status=None,
+                worker_id=worker_id,
+                details={"reason": f"cross-run queue execution failed: {exc}"},
+            )
+            skipped_entries.append(entry_id)
             release_queue_claim = True
         finally:
             if release_queue_claim:

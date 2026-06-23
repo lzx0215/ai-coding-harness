@@ -4,6 +4,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from jsonschema import Draft202012Validator
 
@@ -384,6 +385,55 @@ class CrossRunQueueExecutionTest(unittest.TestCase):
                 worker_groups=["local"],
                 root=base,
             )
+
+            entry_dir = queue_dir / "entries" / "entry-a"
+            entry = json.loads((entry_dir / "entry.json").read_text(encoding="utf-8"))
+            self.assertEqual(summary["executed_entries"], [])
+            self.assertEqual(summary["skipped_entries"], ["entry-a"])
+            self.assertEqual(entry["status"], "failed")
+            self.assertIsNone(entry["terminal_job_status"])
+            self.assertFalse((entry_dir / "claim.lock").exists())
+
+    def test_cross_run_queue_run_once_marks_unloadable_referenced_job_failed_without_stranding_lock(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            base = Path(raw)
+            _, queue_dir = build_queued_entry_fixture(base, allowed_groups=["local"])
+
+            with (
+                mock.patch.object(cli, "try_claim_job", return_value=None),
+                mock.patch.object(cli, "load_job_payload", side_effect=OSError("disk unavailable")),
+            ):
+                summary = cli.cross_run_queue_run_once(
+                    queue_dir,
+                    worker_id="worker-a",
+                    worker_groups=["local"],
+                    root=base,
+                )
+
+            entry_dir = queue_dir / "entries" / "entry-a"
+            entry = json.loads((entry_dir / "entry.json").read_text(encoding="utf-8"))
+            self.assertEqual(summary["executed_entries"], [])
+            self.assertEqual(summary["skipped_entries"], ["entry-a"])
+            self.assertEqual(entry["status"], "failed")
+            self.assertIsNone(entry["terminal_job_status"])
+            self.assertFalse((entry_dir / "claim.lock").exists())
+
+    def test_cross_run_queue_run_once_releases_queue_claim_after_unexpected_execution_error(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            base = Path(raw)
+            _, queue_dir = build_queued_entry_fixture(base, allowed_groups=["local"])
+
+            with mock.patch.object(
+                cli,
+                "execute_claimed_generic_agent_job",
+                side_effect=RuntimeError("agent executor crashed"),
+            ):
+                summary = cli.cross_run_queue_run_once(
+                    queue_dir,
+                    worker_id="worker-a",
+                    worker_groups=["local"],
+                    root=base,
+                )
 
             entry_dir = queue_dir / "entries" / "entry-a"
             entry = json.loads((entry_dir / "entry.json").read_text(encoding="utf-8"))
