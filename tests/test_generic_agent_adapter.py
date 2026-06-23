@@ -1144,9 +1144,10 @@ class GenericCliAgentOrchestrationTest(unittest.TestCase):
             (lock_dir / "owner.json").write_text("{}\n", encoding="utf-8")
             original_rmtree = cli.shutil.rmtree
             injected_failures: list[str] = []
+            expected_lock_dir = lock_dir.resolve(strict=False)
 
             def flaky_rmtree(path):
-                if Path(path) == lock_dir and not injected_failures:
+                if os.fspath(path) == os.fspath(expected_lock_dir) and not injected_failures:
                     injected_failures.append("failed-once")
                     error = OSError("directory not empty")
                     error.winerror = 145
