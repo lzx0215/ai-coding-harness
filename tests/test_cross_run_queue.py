@@ -1,9 +1,13 @@
 import json
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 
 from jsonschema import Draft202012Validator
+
+from harness import cli
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -42,6 +46,28 @@ def valid_entry() -> dict:
     }
 
 
+def write_json(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+
+def minimal_state(run_id: str) -> dict:
+    return {
+        "run_id": run_id,
+        "harness_version": "0.2.0",
+        "state_schema_version": "0.2.0",
+        "status": "verified",
+        "track": "Standard",
+        "current_workflow": "standard-agent-adapter-change",
+        "owner": "codex",
+        "base_commit": "HEAD",
+        "created_at": "2026-06-23T00:00:00Z",
+        "updated_at": "2026-06-23T00:00:00Z",
+        "external_agents": [],
+        "evidence": [],
+    }
+
+
 class CrossRunQueueSchemaTest(unittest.TestCase):
     def test_cross_run_queue_entry_schema_accepts_minimal_queued_entry(self):
         Draft202012Validator(load_schema(ENTRY_SCHEMA)).validate(valid_entry())
@@ -74,6 +100,65 @@ class CrossRunQueueSchemaTest(unittest.TestCase):
         }
 
         Draft202012Validator(load_schema(EVENT_SCHEMA)).validate(event)
+
+
+class CrossRunQueueCreationTest(unittest.TestCase):
+    def test_create_cross_run_queue_entry_references_existing_queued_job(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            base = Path(raw)
+            run_dir = base / "harness" / "runs" / "run-a"
+            queue_dir = base / "queue"
+            write_json(run_dir / "state.json", minimal_state("run-a"))
+            cli.create_generic_agent_job(
+                run_dir,
+                "job-a",
+                agent="generic-test-agent",
+                command=["python", "-c", "print('ok')"],
+                root=base,
+            )
+
+            entry = cli.create_cross_run_queue_entry(
+                queue_dir,
+                "entry-a",
+                run_dir=run_dir,
+                job_id="job-a",
+                creator="codex",
+                allowed_worker_id=None,
+                allowed_worker_groups=["local"],
+                root=base,
+            )
+
+            saved = json.loads(
+                (queue_dir / "entries" / "entry-a" / "entry.json").read_text(
+                    encoding="utf-8",
+                )
+            )
+            self.assertEqual(entry["entry_id"], "entry-a")
+            self.assertEqual(saved["run_id"], "run-a")
+            self.assertEqual(saved["job_id"], "job-a")
+            self.assertEqual(saved["status"], "queued")
+            self.assertEqual(saved["allowed_worker_groups"], ["local"])
+
+    def test_create_cross_run_queue_entry_rejects_missing_job(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            base = Path(raw)
+            run_dir = base / "harness" / "runs" / "run-a"
+            queue_dir = base / "queue"
+            write_json(run_dir / "state.json", minimal_state("run-a"))
+
+            with self.assertRaises(cli.HarnessCliError) as raised:
+                cli.create_cross_run_queue_entry(
+                    queue_dir,
+                    "entry-a",
+                    run_dir=run_dir,
+                    job_id="missing",
+                    creator="codex",
+                    allowed_worker_id=None,
+                    allowed_worker_groups=["local"],
+                    root=base,
+                )
+
+            self.assertIn("referenced job does not exist", str(raised.exception))
 
 
 if __name__ == "__main__":

@@ -31,6 +31,7 @@ CLAIM_OWNER_SCHEMA = SCHEMA_DIR / "claim-owner.schema.json"
 CODEX_ACTOR = "codex"
 HARNESS_VERSION = "0.2.0"
 GENERIC_ADAPTER_VERSION = "0.1.0"
+CROSS_RUN_QUEUE_ENTRY_VERSION = "0.1.0"
 SCHEDULER_DIR_NAME = "scheduler"
 CLAIM_LOCK_DIR_NAME = "claim.lock"
 DEFAULT_CLAIM_LEASE_SECONDS = 60.0
@@ -88,6 +89,8 @@ JOB_RECOVERY_SCHEMA = SCHEMA_DIR / "job-recovery.schema.json"
 AGGREGATION_SCHEMA = SCHEMA_DIR / "aggregation.schema.json"
 AGENT_RESULT_SCHEMA = SCHEMA_DIR / "agent-result.schema.json"
 REVIEW_DECISION_SCHEMA = SCHEMA_DIR / "review-decision.schema.json"
+CROSS_RUN_QUEUE_ENTRY_SCHEMA = SCHEMA_DIR / "cross-run-queue-entry.schema.json"
+CROSS_RUN_QUEUE_EVENT_SCHEMA = SCHEMA_DIR / "cross-run-queue-event.schema.json"
 REVIEW_DECISION_FILENAME = "review-decision.json"
 REVIEW_DECISION_SOURCE_REQUIRED_DISPOSITIONS = frozenset(
     {"passed", "findings-triaged", "waived", "risk-accepted", "blocked"},
@@ -1134,6 +1137,13 @@ def validate_json_artifact(
     return payload, []
 
 
+def validate_json_payload(payload: dict[str, Any], schema_path: Path, prefix: str) -> None:
+    schema = load_json(schema_path)
+    errors = format_schema_errors(prefix, Draft202012Validator(schema).iter_errors(payload))
+    if errors:
+        raise HarnessCliError(format_errors(errors))
+
+
 def evidence_path_candidates(raw_path: str, *, root: Path, run_dir: Path) -> list[Path]:
     evidence_path = Path(raw_path)
     candidates = [evidence_path]
@@ -2098,6 +2108,191 @@ def job_claim_owner_path(run_dir: Path | str, job_id: str) -> Path:
 
 def claim_lock_relative_path(job_id: str) -> str:
     return f"jobs/{job_id}/{CLAIM_LOCK_DIR_NAME}"
+
+
+def cross_run_queue_entries_dir(queue_dir: Path | str) -> Path:
+    return Path(queue_dir) / "entries"
+
+
+def cross_run_queue_entry_dir(queue_dir: Path | str, entry_id: str) -> Path:
+    validate_generic_agent_job_id(entry_id)
+    return cross_run_queue_entries_dir(queue_dir) / entry_id
+
+
+def cross_run_queue_entry_path(queue_dir: Path | str, entry_id: str) -> Path:
+    return cross_run_queue_entry_dir(queue_dir, entry_id) / "entry.json"
+
+
+def cross_run_queue_events_path(queue_dir: Path | str) -> Path:
+    return Path(queue_dir) / "events.log"
+
+
+def cross_run_queue_manifest_path(queue_dir: Path | str) -> Path:
+    return Path(queue_dir) / "queue.json"
+
+
+def queue_id_for_dir(queue_dir: Path | str) -> str:
+    return Path(queue_dir).name or "local-cross-run-queue"
+
+
+def ensure_cross_run_queue(queue_dir: Path | str) -> str:
+    queue_path = Path(queue_dir)
+    queue_id = queue_id_for_dir(queue_path)
+    manifest_path = cross_run_queue_manifest_path(queue_path)
+    if manifest_path.exists():
+        manifest = load_json(manifest_path)
+        existing_queue_id = manifest.get("queue_id")
+        if existing_queue_id != queue_id:
+            raise HarnessCliError(
+                f"cross-run queue id mismatch: expected {queue_id}, got {existing_queue_id}",
+            )
+        return queue_id
+
+    created_at = utc_now()
+    manifest = {
+        "schema_version": CROSS_RUN_QUEUE_ENTRY_VERSION,
+        "queue_id": queue_id,
+        "created_at": created_at,
+        "updated_at": created_at,
+    }
+    validate_non_empty_string(queue_id, "queue_id")
+    write_json_atomic(manifest_path, manifest)
+    append_cross_run_queue_event(
+        queue_path,
+        queue_id=queue_id,
+        entry_id=None,
+        event="queue_initialized",
+        actor=CODEX_ACTOR,
+        details={},
+    )
+    return queue_id
+
+
+def append_cross_run_queue_event(
+    queue_dir: Path | str,
+    *,
+    queue_id: str,
+    entry_id: str | None,
+    event: str,
+    actor: str,
+    details: dict[str, Any],
+) -> dict[str, Any]:
+    payload = {
+        "schema_version": CROSS_RUN_QUEUE_ENTRY_VERSION,
+        "queue_id": queue_id,
+        "entry_id": entry_id,
+        "event": event,
+        "actor": actor,
+        "created_at": utc_now(),
+        "details": details,
+    }
+    validate_json_payload(payload, CROSS_RUN_QUEUE_EVENT_SCHEMA, "cross-run-queue-event")
+    events_path = cross_run_queue_events_path(queue_dir)
+    events_path.parent.mkdir(parents=True, exist_ok=True)
+    with events_path.open("a", encoding="utf-8", newline="\n") as handle:
+        handle.write(json.dumps(payload, sort_keys=True) + "\n")
+    return payload
+
+
+def load_cross_run_queue_entry(queue_dir: Path | str, entry_id: str) -> dict[str, Any]:
+    entry_path = cross_run_queue_entry_path(queue_dir, entry_id)
+    entry, errors = validate_json_artifact(
+        entry_path,
+        CROSS_RUN_QUEUE_ENTRY_SCHEMA,
+        "cross-run-queue-entry",
+    )
+    if errors:
+        raise HarnessCliError(format_errors(errors))
+    if entry is None:
+        raise HarnessCliError(f"cross-run queue entry cannot be loaded: {entry_path}")
+    return entry
+
+
+def repository_relative_path(path: Path, *, root: Path) -> str:
+    resolved_path = path.resolve(strict=False)
+    resolved_root = root.resolve(strict=False)
+    if not is_within_path(resolved_path, resolved_root):
+        raise HarnessCliError(f"path is outside repository root: {path}")
+    return str(resolved_path.relative_to(resolved_root)).replace("\\", "/")
+
+
+def create_cross_run_queue_entry(
+    queue_dir: Path | str,
+    entry_id: str,
+    *,
+    run_dir: Path | str,
+    job_id: str,
+    creator: str,
+    allowed_worker_id: str | None,
+    allowed_worker_groups: list[str],
+    root: Path | str | None = None,
+) -> dict[str, Any]:
+    validate_generic_agent_job_id(entry_id)
+    validate_generic_agent_job_id(job_id)
+    validate_non_empty_string(creator, "creator")
+    if allowed_worker_id is not None:
+        validate_non_empty_string(allowed_worker_id, "allowed_worker_id")
+    for group in allowed_worker_groups:
+        validate_non_empty_string(group, "allowed_worker_group")
+    if allowed_worker_id is None and not allowed_worker_groups:
+        raise HarnessCliError("cross-run queue entry requires allowed_worker_id or allowed_worker_groups")
+
+    resolved_run_dir = Path(run_dir).resolve(strict=False)
+    repo_root = resolve_repository_root(resolved_run_dir, root=root)
+    before = validate_run(resolved_run_dir, root=repo_root)
+    if not before.ok:
+        raise HarnessCliError(format_errors(before.errors))
+
+    state = load_json(state_path(resolved_run_dir))
+    job_path = resolved_run_dir / "jobs" / job_id / "job.json"
+    if not job_path.exists():
+        raise HarnessCliError(f"referenced job does not exist: {job_id}")
+    job = load_job_payload(job_path)
+    if job.get("status") != "queued":
+        raise HarnessCliError(f"referenced job must be queued, got {job.get('status')}")
+
+    queue_path = Path(queue_dir)
+    queue_id = ensure_cross_run_queue(queue_path)
+    entry_path = cross_run_queue_entry_path(queue_path, entry_id)
+    if entry_path.exists():
+        raise HarnessCliError(f"cross-run queue entry already exists: {entry_id}")
+
+    created_at = utc_now()
+    entry = {
+        "schema_version": CROSS_RUN_QUEUE_ENTRY_VERSION,
+        "queue_id": queue_id,
+        "entry_id": entry_id,
+        "run_id": state["run_id"],
+        "run_dir": repository_relative_path(resolved_run_dir, root=repo_root),
+        "job_id": job_id,
+        "agent": job["agent"],
+        "adapter": job["adapter"],
+        "creator": creator,
+        "allowed_worker_id": allowed_worker_id,
+        "allowed_worker_groups": allowed_worker_groups,
+        "status": "queued",
+        "created_at": created_at,
+        "updated_at": created_at,
+        "claim_owner": None,
+        "claim_token": None,
+        "claim_started_at": None,
+        "claim_updated_at": None,
+        "lease_expires_at": None,
+        "terminal_job_status": None,
+        "recovery": [],
+        "cleanup": [],
+    }
+    validate_json_payload(entry, CROSS_RUN_QUEUE_ENTRY_SCHEMA, "cross-run-queue-entry")
+    write_json_atomic(entry_path, entry)
+    append_cross_run_queue_event(
+        queue_path,
+        queue_id=queue_id,
+        entry_id=entry_id,
+        event="entry_created",
+        actor=creator,
+        details={"run_id": state["run_id"], "job_id": job_id},
+    )
+    return entry
 
 
 def new_claim_token() -> str:
