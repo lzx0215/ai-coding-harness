@@ -2,13 +2,13 @@
   "run_id": "2026-06-23-phase-9-entry-gate-local-scheduler-closure",
   "harness_version": "0.2.0",
   "state_schema_version": "0.2.0",
-  "status": "implemented",
+  "status": "completed",
   "track": "Strict",
   "current_workflow": "strict-risk-change",
   "owner": "codex",
   "base_commit": "00c3b57cc09c9ad4e33a5fe84dab398693e35a4f",
   "created_at": "2026-06-23T00:26:57Z",
-  "updated_at": "2026-06-23T01:16:08Z",
+  "updated_at": "2026-06-23T01:24:43Z",
   "external_agents": [
     {
       "name": "claude-code",
@@ -77,6 +77,16 @@
       "type": "verification",
       "path": "verification.md",
       "description": "Verification summary for Phase 9 entry-gate local scheduler closure."
+    },
+    {
+      "type": "review-waiver",
+      "path": "review-waiver.md",
+      "description": "Scoped review waiver for documentation and run-evidence-only closure."
+    },
+    {
+      "type": "handoff",
+      "path": "handoff.md",
+      "description": "Completion handoff for Phase 9 entry-gate local scheduler closure."
     }
   ]
 }
