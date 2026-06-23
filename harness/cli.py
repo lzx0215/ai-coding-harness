@@ -2590,6 +2590,134 @@ def cross_run_queue_run_once(
     return {"executed_entries": executed_entries, "skipped_entries": skipped_entries}
 
 
+def recover_cross_run_queue_entry(
+    queue_dir: Path | str,
+    entry_id: str,
+    *,
+    action: str,
+    reason: str,
+    confirm: bool,
+    actor: str,
+    root: Path | str | None = None,
+) -> dict[str, Any]:
+    validate_generic_agent_job_id(entry_id)
+    validate_non_empty_string(reason, "reason")
+    validate_non_empty_string(actor, "actor")
+    if action not in {"requeue", "abandon"}:
+        raise HarnessCliError("action must be one of: requeue, abandon")
+    if not confirm:
+        raise HarnessCliError("cross-run queue recovery requires --confirm")
+
+    queue_path = Path(queue_dir)
+    entry = load_cross_run_queue_entry(queue_path, entry_id)
+    if entry["status"] not in {"claimed", "running", "failed"}:
+        raise HarnessCliError(f"entry {entry_id} is {entry['status']}, not recoverable")
+
+    repo_root = resolve_repository_root(queue_path, root=root)
+    run_dir = repo_root / entry["run_dir"]
+    before = validate_run(run_dir, root=repo_root)
+    if not before.ok:
+        raise HarnessCliError(format_errors(before.errors))
+
+    created_at = utc_now()
+    timestamp = recovery_timestamp_fragment(created_at)
+    recovery_path = (
+        cross_run_queue_entry_dir(queue_path, entry_id)
+        / "recovery"
+        / f"{timestamp}-{action}.json"
+    )
+    recovery = {
+        "entry_id": entry_id,
+        "run_id": entry["run_id"],
+        "job_id": entry["job_id"],
+        "action": action,
+        "reason": reason,
+        "actor": actor,
+        "created_at": created_at,
+        "previous_status": entry["status"],
+    }
+    write_json_atomic(recovery_path, recovery)
+
+    entry["status"] = "queued" if action == "requeue" else "abandoned"
+    entry["claim_owner"] = None
+    entry["claim_token"] = None
+    entry["claim_started_at"] = None
+    entry["claim_updated_at"] = None
+    entry["lease_expires_at"] = None
+    if action == "requeue":
+        entry["terminal_job_status"] = None
+    entry["updated_at"] = created_at
+    entry["recovery"].append(str(recovery_path.relative_to(queue_path)).replace("\\", "/"))
+    write_cross_run_queue_entry(queue_path, entry_id, entry)
+    release_cross_run_queue_claim(queue_path, entry_id)
+    append_cross_run_queue_event(
+        queue_path,
+        queue_id=entry["queue_id"],
+        entry_id=entry_id,
+        event="entry_requeued" if action == "requeue" else "entry_abandoned",
+        actor=actor,
+        details={"reason": reason},
+    )
+    return {"entry": entry, "recovery_path": recovery_path}
+
+
+def cleanup_cross_run_queue_entry(
+    queue_dir: Path | str,
+    entry_id: str,
+    *,
+    confirm: bool,
+    actor: str,
+    root: Path | str | None = None,
+) -> dict[str, Any]:
+    validate_generic_agent_job_id(entry_id)
+    validate_non_empty_string(actor, "actor")
+    if not confirm:
+        raise HarnessCliError("cross-run queue cleanup requires --confirm")
+
+    queue_path = Path(queue_dir)
+    entry = load_cross_run_queue_entry(queue_path, entry_id)
+    if entry["status"] not in {"succeeded", "failed", "abandoned"}:
+        raise HarnessCliError(f"entry {entry_id} is {entry['status']}, not terminal")
+
+    repo_root = resolve_repository_root(queue_path, root=root)
+    run_dir = repo_root / entry["run_dir"]
+    before = validate_run(run_dir, root=repo_root)
+    if not before.ok:
+        raise HarnessCliError(format_errors(before.errors))
+
+    created_at = utc_now()
+    timestamp = recovery_timestamp_fragment(created_at)
+    cleanup_path = (
+        cross_run_queue_entry_dir(queue_path, entry_id)
+        / "cleanup"
+        / f"{timestamp}-cleanup.json"
+    )
+    cleanup = {
+        "entry_id": entry_id,
+        "run_id": entry["run_id"],
+        "job_id": entry["job_id"],
+        "actor": actor,
+        "created_at": created_at,
+        "retained_run_dir": entry["run_dir"],
+        "retained_job_id": entry["job_id"],
+    }
+    write_json_atomic(cleanup_path, cleanup)
+
+    cleanup_record = str(cleanup_path.relative_to(queue_path)).replace("\\", "/")
+    entry["cleanup"].append(cleanup_record)
+    entry["updated_at"] = created_at
+    write_cross_run_queue_entry(queue_path, entry_id, entry)
+    append_cross_run_queue_event(
+        queue_path,
+        queue_id=entry["queue_id"],
+        entry_id=entry_id,
+        event="entry_cleanup_recorded",
+        actor=actor,
+        details={"cleanup": cleanup_record},
+    )
+    return {"entry": entry, "cleanup_record": cleanup_record}
+
+
 def new_claim_token() -> str:
     return uuid.uuid4().hex
 

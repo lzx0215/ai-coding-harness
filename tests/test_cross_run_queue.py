@@ -341,5 +341,56 @@ class CrossRunQueueCliTest(unittest.TestCase):
             self.assertIn("cross-run queue: executed=1", run_result.stdout)
 
 
+class CrossRunQueueRecoveryCleanupTest(unittest.TestCase):
+    def test_recover_claimed_cross_run_entry_requires_confirmation(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            base = Path(raw)
+            _, queue_dir = build_queued_entry_fixture(base, allowed_groups=["local"])
+            claimed = cli.try_claim_cross_run_queue_entry(
+                queue_dir,
+                "entry-a",
+                worker_id="worker-a",
+                worker_groups=["local"],
+                root=base,
+            )
+            self.assertIsNotNone(claimed)
+
+            with self.assertRaises(cli.HarnessCliError) as raised:
+                cli.recover_cross_run_queue_entry(
+                    queue_dir,
+                    "entry-a",
+                    action="requeue",
+                    reason="stale worker",
+                    confirm=False,
+                    actor="codex",
+                    root=base,
+                )
+
+            self.assertIn("requires --confirm", str(raised.exception))
+
+    def test_cleanup_terminal_entry_does_not_delete_run_local_artifacts(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            base = Path(raw)
+            run_dir, queue_dir = build_queued_entry_fixture(base, allowed_groups=["local"])
+            cli.cross_run_queue_run_once(
+                queue_dir,
+                worker_id="worker-a",
+                worker_groups=["local"],
+                root=base,
+            )
+
+            result = cli.cleanup_cross_run_queue_entry(
+                queue_dir,
+                "entry-a",
+                confirm=True,
+                actor="codex",
+                root=base,
+            )
+
+            self.assertTrue(result["cleanup_record"].endswith("-cleanup.json"))
+            self.assertTrue((run_dir / "jobs" / "job-a" / "job.json").exists())
+            self.assertTrue((run_dir / "jobs" / "job-a" / "output.json").exists())
+
+
 if __name__ == "__main__":
     unittest.main()
