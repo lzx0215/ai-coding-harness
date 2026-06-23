@@ -26,7 +26,7 @@ Phase 7 stale-running detection and explicit recovery are implemented in source.
 
 Phase 8 multi-worker concurrency hardening is implemented in source. Local filesystem workers now use claim tokens, claim lease diagnostics, claim-aware job writes, guarded raw/output artifact publishing, recovery safeguards for fresh matching leases, and a live multi-worker scheduler smoke for local filesystem workers.
 
-Phase 9 Cross-Run / Cloud Queue is a Strict gated phase. The local scheduler entry gates are closed by `harness/runs/2026-06-23-phase-9-entry-gate-local-scheduler-closure` plus successful remote CI run `27999826047` for commit `c2f2299ee5803e770e2e1db6ed71c22d2397abe6`. Phase 9A local cross-run queue is implemented in source and recorded by `harness/runs/2026-06-23-phase-9a-cross-run-local-queue`: queue entries reference existing run-local jobs, local workers claim queue entries before claiming the owning run-local job, terminal job artifacts remain under the owning run, and queue recovery/cleanup decisions are explicit audit records. Cloud queue adapters are later work requiring explicit provider, credential, cost, cleanup, and audit approval.
+Phase 9 Cross-Run / Cloud Queue is a Strict gated phase. The local scheduler entry gates are closed by `harness/runs/2026-06-23-phase-9-entry-gate-local-scheduler-closure` plus successful remote CI run `27999826047` for commit `c2f2299ee5803e770e2e1db6ed71c22d2397abe6`. Phase 9A local cross-run queue is merged to `master` at `3ebef52bfb0b9506b226c45bb9ef12f8a24442ea` after successful GitHub Actions run `28003038959` for feature head `786499db849d00563c7f12ca1e19934976387241`, and is recorded by `harness/runs/2026-06-23-phase-9a-cross-run-local-queue`: queue entries reference existing run-local jobs, local workers claim queue entries before claiming the owning run-local job, terminal job artifacts remain under the owning run, and queue recovery/cleanup decisions are explicit audit records. Cloud queue adapters are later work requiring explicit provider, credential, cost, cleanup, and audit approval.
 
 The Phase 5.2 `master` baseline also adds team-repeatable validation entrypoints and packaged CLI hardening:
 
@@ -49,4 +49,4 @@ Follow-up Phase 3 provenance hardening now rejects empty `source_evidence` for r
 
 ## Next Step
 
-Close Phase 9A review/CI and merge the local cross-run queue branch when verification remains green. Do not start Phase 9B cloud queue work until the user approves provider, credential, cost, cleanup, and audit boundaries.
+Phase 9A is closed on `master`. Do not start Phase 9B cloud queue work until the user approves provider, credential, cost, cleanup, and audit boundaries.
