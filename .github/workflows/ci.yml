@@ -83,6 +83,7 @@ jobs:
           trap 'rm -rf "$GITHUB_WORKSPACE/.tmp/package-smoke-run"' EXIT
           cd "$RUNNER_TEMP"
           harness validate "$GITHUB_WORKSPACE/harness/runs/example-fast-doc-change"
+          harness audit-run "$GITHUB_WORKSPACE/harness/runs/example-fast-doc-change" --format json
           for run_dir in "$GITHUB_WORKSPACE"/harness/runs/*; do
             if [ -d "$run_dir" ]; then
               harness validate "$run_dir"

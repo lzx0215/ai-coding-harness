@@ -128,6 +128,7 @@ class StaticContractsTest(unittest.TestCase):
             "python -m unittest discover -s tests",
             "python -m harness.cli validate",
             "harness validate harness/runs/example-fast-doc-change",
+            "harness audit-run \"$GITHUB_WORKSPACE/harness/runs/example-fast-doc-change\" --format json",
             "harness queue-generic-agent",
             "harness run-scheduler",
             "harness aggregate-jobs",

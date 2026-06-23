@@ -60,6 +60,7 @@ python -m unittest discover -s tests -v
 ```powershell
 python -m pip install -e .
 harness validate harness/runs/example-fast-doc-change
+harness audit-run harness/runs/example-fast-doc-change --format json
 ```
 
 验证 Phase 4 live generic-agent run：
