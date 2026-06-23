@@ -119,6 +119,25 @@ def terminate_pid_tree(pid: int) -> None:
 
 
 class GenericCliAgentOrchestrationTest(unittest.TestCase):
+    def test_load_json_retries_transient_permission_error(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            payload_path = Path(raw) / "payload.json"
+            write_json(payload_path, {"ok": True})
+            original_read_text = Path.read_text
+            attempts: list[Path] = []
+
+            def flaky_read_text(path: Path, *args, **kwargs) -> str:
+                if path == payload_path and not attempts:
+                    attempts.append(path)
+                    raise PermissionError("transient access denied")
+                return original_read_text(path, *args, **kwargs)
+
+            with mock.patch.object(Path, "read_text", flaky_read_text):
+                loaded = cli.load_json(payload_path)
+
+        self.assertEqual(loaded, {"ok": True})
+        self.assertEqual(attempts, [payload_path])
+
     def test_create_generic_agent_job_writes_queued_artifacts_without_mutating_state(self):
         with temporary_run_directory() as raw:
             run_dir = Path(raw)
@@ -2521,9 +2540,9 @@ class GenericCliAgentOrchestrationTest(unittest.TestCase):
             owner_path = job_dir / "claim.lock" / "owner.json"
             for _ in range(200):
                 if owner_path.exists():
-                    job = json.loads(job_path.read_text(encoding="utf-8"))
+                    job = cli.load_json(job_path)
                     if job["status"] == "running":
-                        initial_owner = json.loads(owner_path.read_text(encoding="utf-8"))
+                        initial_owner = cli.load_json(owner_path)
                         break
                 time.sleep(0.05)
             else:
@@ -2533,7 +2552,7 @@ class GenericCliAgentOrchestrationTest(unittest.TestCase):
 
             refreshed_owner = initial_owner
             for _ in range(200):
-                refreshed_owner = json.loads(owner_path.read_text(encoding="utf-8"))
+                refreshed_owner = cli.load_json(owner_path)
                 if (
                     cli.parse_datetime(refreshed_owner["lease_heartbeat_at"])
                     > cli.parse_datetime(initial_owner["lease_heartbeat_at"])

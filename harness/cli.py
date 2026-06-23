@@ -254,7 +254,16 @@ def resolve_repository_root(
 
 
 def load_json(path: Path) -> dict[str, Any]:
-    return json.loads(path.read_text(encoding="utf-8-sig"))
+    retry_seconds = ATOMIC_REPLACE_RETRY_SECONDS
+    for attempt in range(ATOMIC_REPLACE_ATTEMPTS):
+        try:
+            return json.loads(path.read_text(encoding="utf-8-sig"))
+        except PermissionError:
+            if attempt + 1 == ATOMIC_REPLACE_ATTEMPTS:
+                raise
+            time.sleep(retry_seconds)
+            retry_seconds *= 2
+    raise RuntimeError("unreachable")
 
 
 def state_path(run_dir: Path) -> Path:
