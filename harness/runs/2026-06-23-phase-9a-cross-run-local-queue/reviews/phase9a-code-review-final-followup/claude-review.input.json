@@ -1,0 +1,25 @@
+{
+    "run_id":  "phase9a-cross-run-local-queue-final-followup-review",
+    "harness_version":  "0.2.0",
+    "prompt_version":  "0.2.0",
+    "artifact_dir":  "harness\\runs\\2026-06-23-phase-9a-cross-run-local-queue\\reviews\\phase9a-code-review-final-followup",
+    "task_file":  "harness\\runs\\2026-06-23-phase-9a-cross-run-local-queue\\task.md",
+    "plan_file":  "harness\\runs\\2026-06-23-phase-9a-cross-run-local-queue\\plan.md",
+    "diff_file":  "harness\\runs\\2026-06-23-phase-9a-cross-run-local-queue\\reviews\\phase9a-code-review-final-followup\\diff.patch",
+    "diff_meta_file":  "harness\\runs\\2026-06-23-phase-9a-cross-run-local-queue\\reviews\\phase9a-code-review-final-followup\\diff.meta.json",
+    "changed_files_file":  "harness\\runs\\2026-06-23-phase-9a-cross-run-local-queue\\reviews\\phase9a-code-review-final-followup\\changed-files.txt",
+    "verification_file":  "harness\\runs\\2026-06-23-phase-9a-cross-run-local-queue\\reviews\\phase9a-code-review-final-followup\\verification-summary.md",
+    "review_scope":  [
+                         "Verify final Phase 9A follow-up fixes only",
+                         "terminal queue status preservation for timeout/cancelled",
+                         "no stranded queue claim on referenced job claim/load errors",
+                         "medium/high/critical risks only"
+                     ],
+    "output_file":  "harness\\runs\\2026-06-23-phase-9a-cross-run-local-queue\\reviews\\phase9a-code-review-final-followup\\claude-review.json",
+    "review_file":  "harness\\runs\\2026-06-23-phase-9a-cross-run-local-queue\\reviews\\phase9a-code-review-final-followup\\claude-review.evidence.json",
+    "raw_log_file":  "harness\\runs\\2026-06-23-phase-9a-cross-run-local-queue\\reviews\\phase9a-code-review-final-followup\\claude-review.raw.log",
+    "timeout_seconds":  600,
+    "max_input_chars":  120000,
+    "max_files":  15,
+    "max_diff_lines":  1600
+}

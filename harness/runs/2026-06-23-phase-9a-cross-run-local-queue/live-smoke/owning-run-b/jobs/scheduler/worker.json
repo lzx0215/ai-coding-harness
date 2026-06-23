@@ -1,0 +1,10 @@
+{
+  "worker_id": "phase9a-local-worker",
+  "pid": 9424,
+  "started_at": "2026-06-23T04:40:59Z",
+  "run_dir": "<repo>\\harness\\runs\\2026-06-23-phase-9a-cross-run-local-queue\\live-smoke\\owning-run-b",
+  "poll_interval": 0.1,
+  "max_iterations": 1,
+  "max_seconds": null,
+  "cli_version": "0.2.0"
+}

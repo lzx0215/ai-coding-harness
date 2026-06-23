@@ -1,0 +1,37 @@
+{
+  "run_id": "phase9a-live-owning-run-b",
+  "harness_version": "0.2.0",
+  "state_schema_version": "0.2.0",
+  "status": "draft",
+  "track": "Standard",
+  "current_workflow": "standard-agent-adapter-change",
+  "owner": "codex",
+  "base_commit": "acba379a930232a4d187462ae51ff4263f15a496",
+  "created_at": "2026-06-23T04:40:58Z",
+  "updated_at": "2026-06-23T04:40:58Z",
+  "external_agents": [
+    {
+      "name": "claude-code",
+      "role": "reviewer",
+      "state_access": "none",
+      "status": "not_requested"
+    }
+  ],
+  "evidence": [
+    {
+      "type": "task",
+      "path": "task.md",
+      "description": "Task definition."
+    },
+    {
+      "type": "triage",
+      "path": "triage.md",
+      "description": "Task triage."
+    },
+    {
+      "type": "plan",
+      "path": "plan.md",
+      "description": "Implementation plan."
+    }
+  ]
+}

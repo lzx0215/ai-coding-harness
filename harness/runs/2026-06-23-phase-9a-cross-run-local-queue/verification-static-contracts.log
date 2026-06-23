@@ -1,0 +1,48 @@
+python : test_ci_workflow_runs_core_validation_steps (tests.test_static_contracts.StaticContractsTest.test_ci_workflow_
+runs_core_validation_steps) ... ok
+At line:3 char:1
++ python -m unittest tests.test_static_contracts -v *> "$run\verificati ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (test_ci_workflo...n_steps) ... ok:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+
+test_claude_review_adapter_dependencies_are_locked (tests.test_static_contracts.StaticContractsTest.test_claude_review_
+adapter_dependencies_are_locked) ... ok
+test_claude_review_adapter_lockfile_hash_validation_passes (tests.test_static_contracts.StaticContractsTest.test_claude
+_review_adapter_lockfile_hash_validation_passes) ... skipped 'set HARNESS_RUN_PIP_HASH_CHECK=1 to run live pip hash val
+idation'
+test_claude_review_output_schema_accepts_nonempty_models_with_present_primary_model (tests.test_static_contracts.Static
+ContractsTest.test_claude_review_output_schema_accepts_nonempty_models_with_present_primary_model) ... ok
+test_claude_review_output_schema_accepts_v0_1_1_fixture_without_provenance (tests.test_static_contracts.StaticContracts
+Test.test_claude_review_output_schema_accepts_v0_1_1_fixture_without_provenance) ... ok
+test_claude_review_output_schema_accepts_v0_2_reviewer_provenance (tests.test_static_contracts.StaticContractsTest.test
+_claude_review_output_schema_accepts_v0_2_reviewer_provenance) ... ok
+test_claude_review_output_schema_allows_nullable_identity_metadata (tests.test_static_contracts.StaticContractsTest.tes
+t_claude_review_output_schema_allows_nullable_identity_metadata) ... ok
+test_claude_review_output_schema_rejects_empty_models_without_model_name_unknown (tests.test_static_contracts.StaticCon
+tractsTest.test_claude_review_output_schema_rejects_empty_models_without_model_name_unknown) ... ok
+test_claude_review_output_schema_rejects_nonempty_models_with_null_primary_model (tests.test_static_contracts.StaticCon
+tractsTest.test_claude_review_output_schema_rejects_nonempty_models_with_null_primary_model) ... ok
+test_claude_review_output_schema_rejects_unknowns_outside_vocabulary (tests.test_static_contracts.StaticContractsTest.t
+est_claude_review_output_schema_rejects_unknowns_outside_vocabulary) ... ok
+test_evidence_contract_matches_aggregation_incomplete_semantics (tests.test_static_contracts.StaticContractsTest.test_e
+vidence_contract_matches_aggregation_incomplete_semantics) ... ok
+test_lifecycle_workflow_registry_matches_state_schema (tests.test_static_contracts.StaticContractsTest.test_lifecycle_w
+orkflow_registry_matches_state_schema) ... ok
+test_phase9a_cross_run_queue_cli_commands_exist (tests.test_static_contracts.StaticContractsTest.test_phase9a_cross_run
+_queue_cli_commands_exist) ... ok
+test_phase9a_cross_run_queue_schemas_exist (tests.test_static_contracts.StaticContractsTest.test_phase9a_cross_run_queu
+e_schemas_exist) ... ok
+test_pyproject_defines_harness_console_script (tests.test_static_contracts.StaticContractsTest.test_pyproject_defines_h
+arness_console_script) ... ok
+test_review_status_mapping_matches_adapter_terminal_statuses (tests.test_static_contracts.StaticContractsTest.test_revi
+ew_status_mapping_matches_adapter_terminal_statuses) ... ok
+test_risk_acceptance_template_exists_with_required_sections (tests.test_static_contracts.StaticContractsTest.test_risk_
+acceptance_template_exists_with_required_sections) ... ok
+test_state_authority_states_match_state_schema (tests.test_static_contracts.StaticContractsTest.test_state_authority_st
+ates_match_state_schema) ... ok
+
+----------------------------------------------------------------------
+Ran 18 tests in 0.332s
+
+OK (skipped=1)

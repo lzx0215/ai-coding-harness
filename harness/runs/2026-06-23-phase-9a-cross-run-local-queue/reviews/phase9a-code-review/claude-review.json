@@ -1,0 +1,16 @@
+{
+  "status": "failed",
+  "run_id": "phase9a-cross-run-local-queue-code-review",
+  "completed": false,
+  "harness_version": "0.2.0",
+  "adapter_version": "0.1.0",
+  "prompt_version": "0.2.0",
+  "reviewer": "claude-code",
+  "reviewer_model": null,
+  "reviewer_model_version": null,
+  "reviewer_cli_version": "2.1.168 (Claude Code)",
+  "output_file": "C:\\ai\\ai-coding-harness\\harness\\runs\\2026-06-23-phase-9a-cross-run-local-queue\\reviews\\phase9a-code-review\\claude-review.json",
+  "raw_log_file": "C:\\ai\\ai-coding-harness\\harness\\runs\\2026-06-23-phase-9a-cross-run-local-queue\\reviews\\phase9a-code-review\\claude-review.raw.log",
+  "exit_code": 1,
+  "duration_seconds": 270.422
+}

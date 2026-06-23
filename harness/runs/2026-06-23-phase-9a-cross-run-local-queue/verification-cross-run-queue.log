@@ -1,0 +1,56 @@
+python : test_module_entrypoint_creates_and_runs_cross_run_queue_entry (tests.test_cross_run_queue.CrossRunQueueCliTest
+.test_module_entrypoint_creates_and_runs_cross_run_queue_entry) ... ok
+At line:3 char:1
++ python -m unittest tests.test_cross_run_queue -v *> "$run\verificatio ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (test_module_ent...e_entry) ... ok:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+
+test_create_cross_run_queue_entry_references_existing_queued_job (tests.test_cross_run_queue.CrossRunQueueCreationTest.
+test_create_cross_run_queue_entry_references_existing_queued_job) ... ok
+test_create_cross_run_queue_entry_rejects_missing_job (tests.test_cross_run_queue.CrossRunQueueCreationTest.test_create
+_cross_run_queue_entry_rejects_missing_job) ... ok
+test_cross_run_queue_run_once_executes_authorized_entry_once (tests.test_cross_run_queue.CrossRunQueueExecutionTest.tes
+t_cross_run_queue_run_once_executes_authorized_entry_once) ... ok
+test_cross_run_queue_run_once_marks_invalid_referenced_job_failed_without_stranding_lock (tests.test_cross_run_queue.Cr
+ossRunQueueExecutionTest.test_cross_run_queue_run_once_marks_invalid_referenced_job_failed_without_stranding_lock) ...
+ok
+test_cross_run_queue_run_once_marks_unclaimable_referenced_job_failed_without_stranding_lock (tests.test_cross_run_queu
+e.CrossRunQueueExecutionTest.test_cross_run_queue_run_once_marks_unclaimable_referenced_job_failed_without_stranding_lo
+ck) ... ok
+test_cross_run_queue_run_once_marks_unloadable_referenced_job_failed_without_stranding_lock (tests.test_cross_run_queue
+.CrossRunQueueExecutionTest.test_cross_run_queue_run_once_marks_unloadable_referenced_job_failed_without_stranding_lock
+) ... ok
+test_cross_run_queue_run_once_mirrors_already_terminal_referenced_job (tests.test_cross_run_queue.CrossRunQueueExecutio
+nTest.test_cross_run_queue_run_once_mirrors_already_terminal_referenced_job) ... ok
+test_cross_run_queue_run_once_preserves_cancelled_referenced_job_status (tests.test_cross_run_queue.CrossRunQueueExecut
+ionTest.test_cross_run_queue_run_once_preserves_cancelled_referenced_job_status) ... ok
+test_cross_run_queue_run_once_releases_queue_claim_after_unexpected_execution_error (tests.test_cross_run_queue.CrossRu
+nQueueExecutionTest.test_cross_run_queue_run_once_releases_queue_claim_after_unexpected_execution_error) ... ok
+test_cross_run_queue_run_once_releases_queue_claim_when_terminal_marking_fails (tests.test_cross_run_queue.CrossRunQueu
+eExecutionTest.test_cross_run_queue_run_once_releases_queue_claim_when_terminal_marking_fails) ... ok
+test_worker_group_must_be_authorized_to_claim_queue_entry (tests.test_cross_run_queue.CrossRunQueueExecutionTest.test_w
+orker_group_must_be_authorized_to_claim_queue_entry) ... ok
+test_worker_id_must_be_authorized_to_claim_queue_entry (tests.test_cross_run_queue.CrossRunQueueExecutionTest.test_work
+er_id_must_be_authorized_to_claim_queue_entry) ... ok
+test_cleanup_terminal_entry_does_not_delete_run_local_artifacts (tests.test_cross_run_queue.CrossRunQueueRecoveryCleanu
+pTest.test_cleanup_terminal_entry_does_not_delete_run_local_artifacts) ... ok
+test_recover_abandon_records_audit_and_clears_claim (tests.test_cross_run_queue.CrossRunQueueRecoveryCleanupTest.test_r
+ecover_abandon_records_audit_and_clears_claim) ... ok
+test_recover_claimed_cross_run_entry_requires_confirmation (tests.test_cross_run_queue.CrossRunQueueRecoveryCleanupTest
+.test_recover_claimed_cross_run_entry_requires_confirmation) ... ok
+test_recover_requeue_requires_referenced_job_to_be_queued (tests.test_cross_run_queue.CrossRunQueueRecoveryCleanupTest.
+test_recover_requeue_requires_referenced_job_to_be_queued) ... ok
+test_cross_run_queue_entry_schema_accepts_minimal_queued_entry (tests.test_cross_run_queue.CrossRunQueueSchemaTest.test
+_cross_run_queue_entry_schema_accepts_minimal_queued_entry) ... ok
+test_cross_run_queue_entry_schema_rejects_path_traversal_run_dir (tests.test_cross_run_queue.CrossRunQueueSchemaTest.te
+st_cross_run_queue_entry_schema_rejects_path_traversal_run_dir) ... ok
+test_cross_run_queue_entry_schema_rejects_unknown_status (tests.test_cross_run_queue.CrossRunQueueSchemaTest.test_cross
+_run_queue_entry_schema_rejects_unknown_status) ... ok
+test_cross_run_queue_event_schema_accepts_minimal_event (tests.test_cross_run_queue.CrossRunQueueSchemaTest.test_cross_
+run_queue_event_schema_accepts_minimal_event) ... ok
+
+----------------------------------------------------------------------
+Ran 21 tests in 1.922s
+
+OK

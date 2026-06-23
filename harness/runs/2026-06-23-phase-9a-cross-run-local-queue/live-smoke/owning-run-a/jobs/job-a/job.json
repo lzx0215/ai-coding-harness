@@ -1,0 +1,25 @@
+{
+  "job_id": "job-a",
+  "run_id": "phase9a-live-owning-run-a",
+  "agent": "generic-test-agent",
+  "adapter": "generic-cli-agent",
+  "status": "succeeded",
+  "input_file": "input.json",
+  "output_file": "output.json",
+  "raw_log_file": "raw.log",
+  "created_at": "2026-06-23T04:40:58Z",
+  "started_at": "2026-06-23T04:40:59Z",
+  "completed_at": "2026-06-23T04:40:59Z",
+  "updated_at": "2026-06-23T04:40:59Z",
+  "worker_id": "phase9a-local-worker",
+  "timeout_seconds": 1800,
+  "error_reason": null,
+  "provenance": {
+    "agent": "generic-test-agent",
+    "adapter_version": "0.1.0",
+    "runtime": "local-cli"
+  },
+  "claim_token": "627a2bf2fb1346eeb8baa2324fcea16f",
+  "claim_started_at": "2026-06-23T04:40:59Z",
+  "claim_updated_at": "2026-06-23T04:40:59Z"
+}

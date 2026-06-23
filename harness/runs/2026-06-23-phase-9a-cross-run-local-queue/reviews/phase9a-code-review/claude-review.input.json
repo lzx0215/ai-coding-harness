@@ -1,0 +1,26 @@
+{
+    "run_id":  "phase9a-cross-run-local-queue-code-review",
+    "harness_version":  "0.2.0",
+    "prompt_version":  "0.2.0",
+    "artifact_dir":  "harness\\runs\\2026-06-23-phase-9a-cross-run-local-queue\\reviews\\phase9a-code-review",
+    "task_file":  "harness\\runs\\2026-06-23-phase-9a-cross-run-local-queue\\task.md",
+    "plan_file":  "docs/superpowers/plans/2026-06-23-phase-9a-cross-run-local-queue-implementation.md",
+    "diff_file":  "harness\\runs\\2026-06-23-phase-9a-cross-run-local-queue\\reviews\\phase9a-code-review\\diff.patch",
+    "diff_meta_file":  "harness\\runs\\2026-06-23-phase-9a-cross-run-local-queue\\reviews\\phase9a-code-review\\diff.meta.json",
+    "changed_files_file":  "harness\\runs\\2026-06-23-phase-9a-cross-run-local-queue\\reviews\\phase9a-code-review\\changed-files.txt",
+    "verification_file":  "harness\\runs\\2026-06-23-phase-9a-cross-run-local-queue\\reviews\\phase9a-code-review\\verification-summary.md",
+    "review_scope":  [
+                         "Phase 9A local cross-run queue correctness",
+                         "queue versus run state authority boundaries",
+                         "worker authorization, claim locking, and duplicate execution risk",
+                         "recovery and cleanup audit behavior",
+                         "schema, CLI, smoke, and verification coverage"
+                     ],
+    "output_file":  "harness\\runs\\2026-06-23-phase-9a-cross-run-local-queue\\reviews\\phase9a-code-review\\claude-review.json",
+    "review_file":  "harness\\runs\\2026-06-23-phase-9a-cross-run-local-queue\\reviews\\phase9a-code-review\\claude-review.evidence.json",
+    "raw_log_file":  "harness\\runs\\2026-06-23-phase-9a-cross-run-local-queue\\reviews\\phase9a-code-review\\claude-review.raw.log",
+    "timeout_seconds":  600,
+    "max_input_chars":  320000,
+    "max_files":  40,
+    "max_diff_lines":  5000
+}

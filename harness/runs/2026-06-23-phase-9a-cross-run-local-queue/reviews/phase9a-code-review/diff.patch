@@ -1,0 +1,1511 @@
+diff --git a/docs/INDEX.md b/docs/INDEX.md
+index d930d53..638dec4 100644
+--- a/docs/INDEX.md
++++ b/docs/INDEX.md
+@@ -14,7 +14,7 @@
+ - Phase 6 bounded local scheduler watch mode is exercised by `harness/runs/2026-06-22-phase-6-scheduler-watch-mode/`, covering `queue-generic-agent`, bounded `run-scheduler --watch`, scheduler `worker.json` / `heartbeat.json` / JSONL `events.log`, `stop-scheduler`, and `aggregate-jobs`. External Claude review is indexed with no medium/high/critical findings remaining. Residual risks: heartbeat is observational only, stop is cooperative, remote Actions has not run for this branch, and double-claim risk remains without multi-worker claim locking.
+ - Phase 7 stale-running detection is implemented in source: scheduler-claimed jobs record `worker_id` / `updated_at`, `detect-stale-jobs` classifies active/recent/stale/invalid running jobs using heartbeat timeout and job timestamps, and `recover-stale-job` requires explicit confirmation plus `job-recovery` audit artifacts before requeueing or failing stale jobs. Phase 7.1 adds local multi-worker claim locking with `claim.lock/owner.json` and a real scheduler process-kill crash smoke. Residual risks: recovery is manual, partial artifacts require user correction before requeue, claim locking is local-filesystem only, and remote Actions has not run for this branch.
+ - Phase 8 multi-worker concurrency hardening adds claim tokens, lease diagnostics, claim-aware job writes, artifact overwrite guards, and a live multi-worker scheduler smoke for local filesystem workers.
+-- Phase 9 Cross-Run / Cloud Queue is defined as a Strict gated phase in `docs/superpowers/specs/2026-06-23-phase-9-cross-run-cloud-queue-design.md`. Entry gates are closed by `harness/runs/2026-06-23-phase-9-entry-gate-local-scheduler-closure/` plus successful remote CI run `27999826047` at `c2f2299ee5803e770e2e1db6ed71c22d2397abe6`; the next implementable slice is Phase 9A local cross-run queue, while cloud queue adapters remain future work.
++- Phase 9 Cross-Run / Cloud Queue is defined as a Strict gated phase in `docs/superpowers/specs/2026-06-23-phase-9-cross-run-cloud-queue-design.md`. Entry gates are closed by `harness/runs/2026-06-23-phase-9-entry-gate-local-scheduler-closure/` plus successful remote CI run `27999826047` at `c2f2299ee5803e770e2e1db6ed71c22d2397abe6`. Phase 9A local cross-run queue is implemented by `harness/runs/2026-06-23-phase-9a-cross-run-local-queue/`, covering local queue schemas, entry creation, worker authorization, queue claims, run-local job execution, recovery audit, cleanup audit, CLI entrypoints, and source-controlled live smoke evidence. Cloud queue adapters remain future work.
+ - Team-repeatable validation is now defined by `.github/workflows/ci.yml` and `pyproject.toml` with editable tests, non-editable package smoke, packaged console-script run validation, and merge-base scoped whitespace checks.
+
+ ## Specs
+@@ -54,6 +54,6 @@
+ - `harness/core/run-lifecycle-sop.md` - SOP for creating runs, advancing state, indexing evidence, and completing handoff before considering a reusable skill.
+ - `harness/adapters/` - Agent-specific adapter rules.
+ - `harness/templates/` - Copyable task and evidence templates.
+-- `harness/schemas/` - JSON schemas for machine-checkable artifacts, including run state, async jobs, claim owners, agent results, recovery, and aggregation.
++- `harness/schemas/` - JSON schemas for machine-checkable artifacts, including run state, async jobs, claim owners, agent results, recovery, aggregation, and Phase 9A cross-run queue control records.
+ - `harness/memory/` - Curated long-term memory.
+ - `harness/runs/` - Per-task run records and evidence.
+diff --git a/harness/cli.py b/harness/cli.py
+index 07dd852..5472f2c 100644
+--- a/harness/cli.py
++++ b/harness/cli.py
+@@ -31,6 +31,7 @@ CLAIM_OWNER_SCHEMA = SCHEMA_DIR / "claim-owner.schema.json"
+ CODEX_ACTOR = "codex"
+ HARNESS_VERSION = "0.2.0"
+ GENERIC_ADAPTER_VERSION = "0.1.0"
++CROSS_RUN_QUEUE_ENTRY_VERSION = "0.1.0"
+ SCHEDULER_DIR_NAME = "scheduler"
+ CLAIM_LOCK_DIR_NAME = "claim.lock"
+ DEFAULT_CLAIM_LEASE_SECONDS = 60.0
+@@ -88,6 +89,8 @@ JOB_RECOVERY_SCHEMA = SCHEMA_DIR / "job-recovery.schema.json"
+ AGGREGATION_SCHEMA = SCHEMA_DIR / "aggregation.schema.json"
+ AGENT_RESULT_SCHEMA = SCHEMA_DIR / "agent-result.schema.json"
+ REVIEW_DECISION_SCHEMA = SCHEMA_DIR / "review-decision.schema.json"
++CROSS_RUN_QUEUE_ENTRY_SCHEMA = SCHEMA_DIR / "cross-run-queue-entry.schema.json"
++CROSS_RUN_QUEUE_EVENT_SCHEMA = SCHEMA_DIR / "cross-run-queue-event.schema.json"
+ REVIEW_DECISION_FILENAME = "review-decision.json"
+ REVIEW_DECISION_SOURCE_REQUIRED_DISPOSITIONS = frozenset(
+     {"passed", "findings-triaged", "waived", "risk-accepted", "blocked"},
+@@ -1134,6 +1137,13 @@ def validate_json_artifact(
+     return payload, []
+
+
++def validate_json_payload(payload: dict[str, Any], schema_path: Path, prefix: str) -> None:
++    schema = load_json(schema_path)
++    errors = format_schema_errors(prefix, Draft202012Validator(schema).iter_errors(payload))
++    if errors:
++        raise HarnessCliError(format_errors(errors))
++
++
+ def evidence_path_candidates(raw_path: str, *, root: Path, run_dir: Path) -> list[Path]:
+     evidence_path = Path(raw_path)
+     candidates = [evidence_path]
+@@ -2100,6 +2110,650 @@ def claim_lock_relative_path(job_id: str) -> str:
+     return f"jobs/{job_id}/{CLAIM_LOCK_DIR_NAME}"
+
+
++def cross_run_queue_entries_dir(queue_dir: Path | str) -> Path:
++    return Path(queue_dir) / "entries"
++
++
++def cross_run_queue_entry_dir(queue_dir: Path | str, entry_id: str) -> Path:
++    validate_generic_agent_job_id(entry_id)
++    return cross_run_queue_entries_dir(queue_dir) / entry_id
++
++
++def cross_run_queue_entry_path(queue_dir: Path | str, entry_id: str) -> Path:
++    return cross_run_queue_entry_dir(queue_dir, entry_id) / "entry.json"
++
++
++def cross_run_queue_claim_lock_dir(queue_dir: Path | str, entry_id: str) -> Path:
++    return cross_run_queue_entry_dir(queue_dir, entry_id) / CLAIM_LOCK_DIR_NAME
++
++
++def cross_run_queue_claim_owner_path(queue_dir: Path | str, entry_id: str) -> Path:
++    return cross_run_queue_claim_lock_dir(queue_dir, entry_id) / "owner.json"
++
++
++def cross_run_queue_claim_lock_relative_path(entry_id: str) -> str:
++    return f"entries/{entry_id}/{CLAIM_LOCK_DIR_NAME}"
++
++
++def cross_run_queue_events_path(queue_dir: Path | str) -> Path:
++    return Path(queue_dir) / "events.log"
++
++
++def cross_run_queue_manifest_path(queue_dir: Path | str) -> Path:
++    return Path(queue_dir) / "queue.json"
++
++
++def queue_id_for_dir(queue_dir: Path | str) -> str:
++    return Path(queue_dir).name or "local-cross-run-queue"
++
++
++def ensure_cross_run_queue(queue_dir: Path | str) -> str:
++    queue_path = Path(queue_dir)
++    queue_id = queue_id_for_dir(queue_path)
++    manifest_path = cross_run_queue_manifest_path(queue_path)
++    if manifest_path.exists():
++        manifest = load_json(manifest_path)
++        existing_queue_id = manifest.get("queue_id")
++        if existing_queue_id != queue_id:
++            raise HarnessCliError(
++                f"cross-run queue id mismatch: expected {queue_id}, got {existing_queue_id}",
++            )
++        return queue_id
++
++    created_at = utc_now()
++    manifest = {
++        "schema_version": CROSS_RUN_QUEUE_ENTRY_VERSION,
++        "queue_id": queue_id,
++        "created_at": created_at,
++        "updated_at": created_at,
++    }
++    validate_non_empty_string(queue_id, "queue_id")
++    write_json_atomic(manifest_path, manifest)
++    append_cross_run_queue_event(
++        queue_path,
++        queue_id=queue_id,
++        entry_id=None,
++        event="queue_initialized",
++        actor=CODEX_ACTOR,
++        details={},
++    )
++    return queue_id
++
++
++def append_cross_run_queue_event(
++    queue_dir: Path | str,
++    *,
++    queue_id: str,
++    entry_id: str | None,
++    event: str,
++    actor: str,
++    details: dict[str, Any],
++) -> dict[str, Any]:
++    payload = {
++        "schema_version": CROSS_RUN_QUEUE_ENTRY_VERSION,
++        "queue_id": queue_id,
++        "entry_id": entry_id,
++        "event": event,
++        "actor": actor,
++        "created_at": utc_now(),
++        "details": details,
++    }
++    validate_json_payload(payload, CROSS_RUN_QUEUE_EVENT_SCHEMA, "cross-run-queue-event")
++    events_path = cross_run_queue_events_path(queue_dir)
++    events_path.parent.mkdir(parents=True, exist_ok=True)
++    with events_path.open("a", encoding="utf-8", newline="\n") as handle:
++        handle.write(json.dumps(payload, sort_keys=True) + "\n")
++    return payload
++
++
++def load_cross_run_queue_entry(queue_dir: Path | str, entry_id: str) -> dict[str, Any]:
++    entry_path = cross_run_queue_entry_path(queue_dir, entry_id)
++    entry, errors = validate_json_artifact(
++        entry_path,
++        CROSS_RUN_QUEUE_ENTRY_SCHEMA,
++        "cross-run-queue-entry",
++    )
++    if errors:
++        raise HarnessCliError(format_errors(errors))
++    if entry is None:
++        raise HarnessCliError(f"cross-run queue entry cannot be loaded: {entry_path}")
++    return entry
++
++
++def write_cross_run_queue_entry(
++    queue_dir: Path | str,
++    entry_id: str,
++    entry: dict[str, Any],
++) -> None:
++    validate_json_payload(entry, CROSS_RUN_QUEUE_ENTRY_SCHEMA, "cross-run-queue-entry")
++    write_json_atomic(cross_run_queue_entry_path(queue_dir, entry_id), entry)
++
++
++def repository_relative_path(path: Path, *, root: Path) -> str:
++    resolved_path = path.resolve(strict=False)
++    resolved_root = root.resolve(strict=False)
++    if not is_within_path(resolved_path, resolved_root):
++        raise HarnessCliError(f"path is outside repository root: {path}")
++    return str(resolved_path.relative_to(resolved_root)).replace("\\", "/")
++
++
++def create_cross_run_queue_entry(
++    queue_dir: Path | str,
++    entry_id: str,
++    *,
++    run_dir: Path | str,
++    job_id: str,
++    creator: str,
++    allowed_worker_id: str | None,
++    allowed_worker_groups: list[str],
++    root: Path | str | None = None,
++) -> dict[str, Any]:
++    validate_generic_agent_job_id(entry_id)
++    validate_generic_agent_job_id(job_id)
++    validate_non_empty_string(creator, "creator")
++    if allowed_worker_id is not None:
++        validate_non_empty_string(allowed_worker_id, "allowed_worker_id")
++    for group in allowed_worker_groups:
++        validate_non_empty_string(group, "allowed_worker_group")
++    if allowed_worker_id is None and not allowed_worker_groups:
++        raise HarnessCliError("cross-run queue entry requires allowed_worker_id or allowed_worker_groups")
++
++    resolved_run_dir = Path(run_dir).resolve(strict=False)
++    repo_root = resolve_repository_root(resolved_run_dir, root=root)
++    before = validate_run(resolved_run_dir, root=repo_root)
++    if not before.ok:
++        raise HarnessCliError(format_errors(before.errors))
++
++    state = load_json(state_path(resolved_run_dir))
++    job_path = resolved_run_dir / "jobs" / job_id / "job.json"
++    if not job_path.exists():
++        raise HarnessCliError(f"referenced job does not exist: {job_id}")
++    job = load_job_payload(job_path)
++    if job.get("status") != "queued":
++        raise HarnessCliError(f"referenced job must be queued, got {job.get('status')}")
++
++    queue_path = Path(queue_dir)
++    queue_id = ensure_cross_run_queue(queue_path)
++    entry_dir = cross_run_queue_entry_dir(queue_path, entry_id)
++    entry_path = entry_dir / "entry.json"
++    try:
++        entry_dir.mkdir(parents=True, exist_ok=False)
++    except FileExistsError as exc:
++        raise HarnessCliError(f"cross-run queue entry already exists: {entry_id}") from exc
++    except OSError as exc:
++        raise HarnessCliError(f"failed to create cross-run queue entry directory: {exc}") from exc
++
++    created_at = utc_now()
++    entry = {
++        "schema_version": CROSS_RUN_QUEUE_ENTRY_VERSION,
++        "queue_id": queue_id,
++        "entry_id": entry_id,
++        "run_id": state["run_id"],
++        "run_dir": repository_relative_path(resolved_run_dir, root=repo_root),
++        "job_id": job_id,
++        "agent": job["agent"],
++        "adapter": job["adapter"],
++        "creator": creator,
++        "allowed_worker_id": allowed_worker_id,
++        "allowed_worker_groups": allowed_worker_groups,
++        "status": "queued",
++        "created_at": created_at,
++        "updated_at": created_at,
++        "claim_owner": None,
++        "claim_token": None,
++        "claim_started_at": None,
++        "claim_updated_at": None,
++        "lease_expires_at": None,
++        "terminal_job_status": None,
++        "recovery": [],
++        "cleanup": [],
++    }
++    try:
++        validate_json_payload(entry, CROSS_RUN_QUEUE_ENTRY_SCHEMA, "cross-run-queue-entry")
++        write_json_atomic(entry_path, entry)
++        append_cross_run_queue_event(
++            queue_path,
++            queue_id=queue_id,
++            entry_id=entry_id,
++            event="entry_created",
++            actor=creator,
++            details={"run_id": state["run_id"], "job_id": job_id},
++        )
++    except Exception:
++        shutil.rmtree(entry_dir, ignore_errors=True)
++        raise
++    return entry
++
++
++def cross_run_queue_worker_authorized(
++    entry: dict[str, Any],
++    *,
++    worker_id: str,
++    worker_groups: list[str],
++) -> bool:
++    allowed_worker_id = entry.get("allowed_worker_id")
++    if allowed_worker_id is not None and allowed_worker_id == worker_id:
++        return True
++    allowed_worker_groups = set(entry.get("allowed_worker_groups", []))
++    return bool(allowed_worker_groups.intersection(worker_groups))
++
++
++def build_cross_run_queue_claim_owner(
++    *,
++    queue_id: str,
++    entry_id: str,
++    worker_id: str,
++    worker_groups: list[str],
++    claim_token: str,
++    claimed_at: datetime,
++    lease_seconds: float = DEFAULT_CLAIM_LEASE_SECONDS,
++) -> dict[str, Any]:
++    formatted_claimed_at = format_datetime(claimed_at)
++    return {
++        "schema_version": 1,
++        "queue_id": queue_id,
++        "entry_id": entry_id,
++        "worker_id": worker_id,
++        "worker_groups": worker_groups,
++        "claim_token": claim_token,
++        "claimed_at": formatted_claimed_at,
++        "lease_started_at": formatted_claimed_at,
++        "lease_heartbeat_at": formatted_claimed_at,
++        "lease_expires_at": format_datetime(add_seconds(claimed_at, lease_seconds)),
++        "lock_path": cross_run_queue_claim_lock_relative_path(entry_id),
++    }
++
++
++def release_cross_run_queue_claim(queue_dir: Path | str, entry_id: str) -> None:
++    entry_dir = cross_run_queue_entry_dir(queue_dir, entry_id)
++    remove_claim_lock_dir(cross_run_queue_claim_lock_dir(queue_dir, entry_id), entry_dir)
++
++
++def try_claim_cross_run_queue_entry(
++    queue_dir: Path | str,
++    entry_id: str,
++    *,
++    worker_id: str,
++    worker_groups: list[str],
++    root: Path | str | None = None,
++) -> dict[str, Any] | None:
++    validate_generic_agent_job_id(entry_id)
++    validate_non_empty_string(worker_id, "worker_id")
++    for group in worker_groups:
++        validate_non_empty_string(group, "worker_group")
++
++    queue_path = Path(queue_dir)
++    entry = load_cross_run_queue_entry(queue_path, entry_id)
++    if entry["status"] != "queued":
++        return None
++    if not cross_run_queue_worker_authorized(
++        entry,
++        worker_id=worker_id,
++        worker_groups=worker_groups,
++    ):
++        return None
++
++    entry_dir = cross_run_queue_entry_dir(queue_path, entry_id)
++    lock_dir = cross_run_queue_claim_lock_dir(queue_path, entry_id)
++    claim_token = new_claim_token()
++    claimed_at = datetime.now(timezone.utc)
++    owner = build_cross_run_queue_claim_owner(
++        queue_id=entry["queue_id"],
++        entry_id=entry_id,
++        worker_id=worker_id,
++        worker_groups=worker_groups,
++        claim_token=claim_token,
++        claimed_at=claimed_at,
++    )
++    if not acquire_claim_lock_dir(entry_dir, lock_dir, owner):
++        return None
++
++    try:
++        entry = load_cross_run_queue_entry(queue_path, entry_id)
++        if entry["status"] != "queued" or not cross_run_queue_worker_authorized(
++            entry,
++            worker_id=worker_id,
++            worker_groups=worker_groups,
++        ):
++            release_cross_run_queue_claim(queue_path, entry_id)
++            return None
++
++        claimed_at_text = owner["claimed_at"]
++        entry["status"] = "claimed"
++        entry["claim_owner"] = worker_id
++        entry["claim_token"] = claim_token
++        entry["claim_started_at"] = claimed_at_text
++        entry["claim_updated_at"] = claimed_at_text
++        entry["lease_expires_at"] = owner["lease_expires_at"]
++        entry["updated_at"] = claimed_at_text
++        write_cross_run_queue_entry(queue_path, entry_id, entry)
++        append_cross_run_queue_event(
++            queue_path,
++            queue_id=entry["queue_id"],
++            entry_id=entry_id,
++            event="entry_claimed",
++            actor=worker_id,
++            details={"worker_groups": worker_groups},
++        )
++        return entry
++    except Exception:
++        if lock_dir.exists():
++            try:
++                release_cross_run_queue_claim(queue_path, entry_id)
++            except HarnessCliError:
++                pass
++        raise
++
++
++def mark_cross_run_queue_entry_running(
++    queue_dir: Path | str,
++    entry: dict[str, Any],
++    *,
++    worker_id: str,
++) -> dict[str, Any]:
++    updated_at = utc_now()
++    entry["status"] = "running"
++    entry["claim_updated_at"] = updated_at
++    entry["updated_at"] = updated_at
++    write_cross_run_queue_entry(queue_dir, entry["entry_id"], entry)
++    append_cross_run_queue_event(
++        queue_dir,
++        queue_id=entry["queue_id"],
++        entry_id=entry["entry_id"],
++        event="entry_executing_job",
++        actor=worker_id,
++        details={"run_id": entry["run_id"], "job_id": entry["job_id"]},
++    )
++    return entry
++
++
++def mark_cross_run_queue_entry_terminal(
++    queue_dir: Path | str,
++    entry: dict[str, Any],
++    *,
++    status: str,
++    terminal_job_status: str | None,
++    worker_id: str,
++    details: dict[str, Any] | None = None,
++) -> dict[str, Any]:
++    updated_at = utc_now()
++    entry["status"] = status
++    entry["terminal_job_status"] = terminal_job_status
++    entry["claim_updated_at"] = updated_at
++    entry["updated_at"] = updated_at
++    write_cross_run_queue_entry(queue_dir, entry["entry_id"], entry)
++    event = "entry_completed" if status == "succeeded" else "entry_failed"
++    append_cross_run_queue_event(
++        queue_dir,
++        queue_id=entry["queue_id"],
++        entry_id=entry["entry_id"],
++        event=event,
++        actor=worker_id,
++        details=details or {"terminal_job_status": terminal_job_status},
++    )
++    return entry
++
++
++def cross_run_queue_run_once(
++    queue_dir: Path | str,
++    *,
++    worker_id: str,
++    worker_groups: list[str],
++    root: Path | str | None = None,
++) -> dict[str, Any]:
++    validate_non_empty_string(worker_id, "worker_id")
++    for group in worker_groups:
++        validate_non_empty_string(group, "worker_group")
++
++    queue_path = Path(queue_dir)
++    repo_root = resolve_repository_root(queue_path, root=root)
++    executed_entries: list[str] = []
++    skipped_entries: list[str] = []
++    entries_dir = cross_run_queue_entries_dir(queue_path)
++    if not entries_dir.exists():
++        return {"executed_entries": executed_entries, "skipped_entries": skipped_entries}
++
++    for entry_path in sorted(entries_dir.glob("*/entry.json")):
++        entry_id = entry_path.parent.name
++        claimed_entry = try_claim_cross_run_queue_entry(
++            queue_path,
++            entry_id,
++            worker_id=worker_id,
++            worker_groups=worker_groups,
++            root=repo_root,
++        )
++        if claimed_entry is None:
++            skipped_entries.append(entry_id)
++            continue
++
++        release_queue_claim = False
++        try:
++            run_dir = repo_root / claimed_entry["run_dir"]
++            before = validate_run(run_dir, root=repo_root)
++            if not before.ok:
++                raise HarnessCliError(format_errors(before.errors))
++
++            claimed_entry = mark_cross_run_queue_entry_running(
++                queue_path,
++                claimed_entry,
++                worker_id=worker_id,
++            )
++            job_claim = try_claim_job(
++                run_dir,
++                claimed_entry["job_id"],
++                worker_id=worker_id,
++                root=repo_root,
++            )
++            if job_claim is None:
++                current_job = load_job_payload(run_dir / "jobs" / claimed_entry["job_id"] / "job.json")
++                if current_job["status"] in TERMINAL_JOB_STATUSES:
++                    terminal_job_status = current_job["status"]
++                    terminal_entry_status = (
++                        "succeeded" if terminal_job_status == "succeeded" else "failed"
++                    )
++                    mark_cross_run_queue_entry_terminal(
++                        queue_path,
++                        claimed_entry,
++                        status=terminal_entry_status,
++                        terminal_job_status=terminal_job_status,
++                        worker_id=worker_id,
++                        details={
++                            "terminal_job_status": terminal_job_status,
++                            "reason": "referenced job was already terminal",
++                        },
++                    )
++                    skipped_entries.append(entry_id)
++                    release_queue_claim = True
++                    continue
++                mark_cross_run_queue_entry_terminal(
++                    queue_path,
++                    claimed_entry,
++                    status="failed",
++                    terminal_job_status=None,
++                    worker_id=worker_id,
++                    details={"reason": "referenced job could not be claimed"},
++                )
++                skipped_entries.append(entry_id)
++                release_queue_claim = True
++                continue
++
++            write_scheduler_worker(
++                run_dir,
++                worker_id=worker_id,
++                poll_interval_seconds=0.1,
++                max_iterations=1,
++                max_seconds=None,
++                root=repo_root,
++            )
++            write_scheduler_heartbeat(
++                run_dir,
++                worker_id=worker_id,
++                iteration=1,
++                status="running-job",
++                current_job_id=claimed_entry["job_id"],
++            )
++            executed_job = execute_claimed_generic_agent_job(
++                run_dir,
++                job_claim,
++                iteration=1,
++                poll_interval_seconds=0.1,
++                root=repo_root,
++            )
++            terminal_job_status = executed_job["status"]
++            terminal_entry_status = (
++                "succeeded" if terminal_job_status == "succeeded" else "failed"
++            )
++            mark_cross_run_queue_entry_terminal(
++                queue_path,
++                claimed_entry,
++                status=terminal_entry_status,
++                terminal_job_status=terminal_job_status,
++                worker_id=worker_id,
++            )
++            executed_entries.append(entry_id)
++            release_queue_claim = True
++        finally:
++            if release_queue_claim:
++                release_cross_run_queue_claim(queue_path, entry_id)
++
++    return {"executed_entries": executed_entries, "skipped_entries": skipped_entries}
++
++
++def recover_cross_run_queue_entry(
++    queue_dir: Path | str,
++    entry_id: str,
++    *,
++    action: str,
++    reason: str,
++    confirm: bool,
++    actor: str,
++    root: Path | str | None = None,
++) -> dict[str, Any]:
++    validate_generic_agent_job_id(entry_id)
++    validate_non_empty_string(reason, "reason")
++    validate_non_empty_string(actor, "actor")
++    if action not in {"requeue", "abandon"}:
++        raise HarnessCliError("action must be one of: requeue, abandon")
++    if not confirm:
++        raise HarnessCliError("cross-run queue recovery requires --confirm")
++
++    queue_path = Path(queue_dir)
++    entry = load_cross_run_queue_entry(queue_path, entry_id)
++    if entry["status"] not in {"claimed", "running", "failed"}:
++        raise HarnessCliError(f"entry {entry_id} is {entry['status']}, not recoverable")
++
++    repo_root = resolve_repository_root(queue_path, root=root)
++    run_dir = repo_root / entry["run_dir"]
++    before = validate_run(run_dir, root=repo_root)
++    if not before.ok:
++        raise HarnessCliError(format_errors(before.errors))
++    if action == "requeue":
++        referenced_job = load_job_payload(run_dir / "jobs" / entry["job_id"] / "job.json")
++        if referenced_job["status"] != "queued":
++            raise HarnessCliError(
++                "cross-run queue requeue requires the referenced run-local job "
++                "to be queued; recover the run-local job first",
++            )
++
++    created_at = utc_now()
++    timestamp = recovery_timestamp_fragment(created_at)
++    recovery_path = (
++        cross_run_queue_entry_dir(queue_path, entry_id)
++        / "recovery"
++        / f"{timestamp}-{action}.json"
++    )
++    recovery = {
++        "entry_id": entry_id,
++        "run_id": entry["run_id"],
++        "job_id": entry["job_id"],
++        "action": action,
++        "reason": reason,
++        "actor": actor,
++        "created_at": created_at,
++        "previous_status": entry["status"],
++    }
++    write_json_atomic(recovery_path, recovery)
++
++    entry["status"] = "queued" if action == "requeue" else "abandoned"
++    entry["claim_owner"] = None
++    entry["claim_token"] = None
++    entry["claim_started_at"] = None
++    entry["claim_updated_at"] = None
++    entry["lease_expires_at"] = None
++    if action == "requeue":
++        entry["terminal_job_status"] = None
++    entry["updated_at"] = created_at
++    entry["recovery"].append(str(recovery_path.relative_to(queue_path)).replace("\\", "/"))
++    write_cross_run_queue_entry(queue_path, entry_id, entry)
++    release_cross_run_queue_claim(queue_path, entry_id)
++    append_cross_run_queue_event(
++        queue_path,
++        queue_id=entry["queue_id"],
++        entry_id=entry_id,
++        event="entry_requeued" if action == "requeue" else "entry_abandoned",
++        actor=actor,
++        details={"reason": reason},
++    )
++    return {"entry": entry, "recovery_path": recovery_path}
++
++
++def cleanup_cross_run_queue_entry(
++    queue_dir: Path | str,
++    entry_id: str,
++    *,
++    confirm: bool,
++    actor: str,
++    root: Path | str | None = None,
++) -> dict[str, Any]:
++    validate_generic_agent_job_id(entry_id)
++    validate_non_empty_string(actor, "actor")
++    if not confirm:
++        raise HarnessCliError("cross-run queue cleanup requires --confirm")
++
++    queue_path = Path(queue_dir)
++    entry = load_cross_run_queue_entry(queue_path, entry_id)
++    if entry["status"] not in {"succeeded", "failed", "abandoned"}:
++        raise HarnessCliError(f"entry {entry_id} is {entry['status']}, not terminal")
++
++    repo_root = resolve_repository_root(queue_path, root=root)
++    run_dir = repo_root / entry["run_dir"]
++    before = validate_run(run_dir, root=repo_root)
++    if not before.ok:
++        raise HarnessCliError(format_errors(before.errors))
++
++    created_at = utc_now()
++    timestamp = recovery_timestamp_fragment(created_at)
++    cleanup_path = (
++        cross_run_queue_entry_dir(queue_path, entry_id)
++        / "cleanup"
++        / f"{timestamp}-cleanup.json"
++    )
++    cleanup = {
++        "entry_id": entry_id,
++        "run_id": entry["run_id"],
++        "job_id": entry["job_id"],
++        "actor": actor,
++        "created_at": created_at,
++        "retained_run_dir": entry["run_dir"],
++        "retained_job_id": entry["job_id"],
++    }
++    write_json_atomic(cleanup_path, cleanup)
++
++    cleanup_record = str(cleanup_path.relative_to(queue_path)).replace("\\", "/")
++    entry["cleanup"].append(cleanup_record)
++    entry["updated_at"] = created_at
++    write_cross_run_queue_entry(queue_path, entry_id, entry)
++    append_cross_run_queue_event(
++        queue_path,
++        queue_id=entry["queue_id"],
++        entry_id=entry_id,
++        event="entry_cleanup_recorded",
++        actor=actor,
++        details={"cleanup": cleanup_record},
++    )
++    return {"entry": entry, "cleanup_record": cleanup_record}
++
++
+ def new_claim_token() -> str:
+     return uuid.uuid4().hex
+
+@@ -4325,6 +4979,28 @@ def build_parser() -> argparse.ArgumentParser:
+     queue_generic.add_argument("--timeout-seconds", type=int, default=1800)
+     queue_generic.add_argument("agent_command", nargs=argparse.REMAINDER)
+
++    cross_run_queue = subparsers.add_parser(
++        "queue-cross-run-job",
++        help="Create a local cross-run queue entry for an existing queued run-local job.",
++    )
++    cross_run_queue.add_argument("queue_dir")
++    cross_run_queue.add_argument("entry_id")
++    cross_run_queue.add_argument("--run-dir", required=True)
++    cross_run_queue.add_argument("--job-id", required=True)
++    cross_run_queue.add_argument("--creator", default=CODEX_ACTOR)
++    cross_run_queue.add_argument("--worker-id")
++    cross_run_queue.add_argument("--worker-group", action="append", default=[])
++
++    run_cross_run_queue = subparsers.add_parser(
++        "run-cross-run-queue",
++        help="Run local cross-run queue entries without mutating Harness state.",
++    )
++    run_cross_run_queue.add_argument("queue_dir")
++    run_cross_run_mode = run_cross_run_queue.add_mutually_exclusive_group(required=True)
++    run_cross_run_mode.add_argument("--once", action="store_true")
++    run_cross_run_queue.add_argument("--worker-id", required=True)
++    run_cross_run_queue.add_argument("--worker-group", action="append", default=[])
++
+     scheduler = subparsers.add_parser(
+         "run-scheduler",
+         help="Run the local async scheduler for queued jobs.",
+@@ -4497,6 +5173,36 @@ def main(argv: list[str] | None = None) -> int:
+             print(f"queued generic-agent: {job['run_id']}/{job['job_id']}")
+             return 0
+
++        if args.command == "queue-cross-run-job":
++            entry = create_cross_run_queue_entry(
++                args.queue_dir,
++                args.entry_id,
++                run_dir=args.run_dir,
++                job_id=args.job_id,
++                creator=args.creator,
++                allowed_worker_id=args.worker_id,
++                allowed_worker_groups=args.worker_group,
++            )
++            print(
++                f"queued cross-run job: "
++                f"{entry['queue_id']}/{entry['entry_id']} -> "
++                f"{entry['run_id']}/{entry['job_id']}",
++            )
++            return 0
++
++        if args.command == "run-cross-run-queue":
++            summary = cross_run_queue_run_once(
++                args.queue_dir,
++                worker_id=args.worker_id,
++                worker_groups=args.worker_group,
++            )
++            print(
++                "cross-run queue: "
++                f"executed={len(summary['executed_entries'])} "
++                f"skipped={len(summary['skipped_entries'])}",
++            )
++            return 0
++
+         if args.command == "run-scheduler":
+             if args.once:
+                 summary = scheduler_run_once(args.run_dir, worker_id=args.worker_id)
+diff --git a/harness/core/evidence.md b/harness/core/evidence.md
+index e11b8b0..1c22db9 100644
+--- a/harness/core/evidence.md
++++ b/harness/core/evidence.md
+@@ -66,3 +66,16 @@ valid.
+
+ Claim tokens and lease timestamps are control metadata, not evidence. They must
+ not be auto-indexed.
++
++## Cross-Run Queue Control Files
++
++Phase 9A local cross-run queue files are control and audit artifacts, not
++completion evidence. This includes queue manifests, `events.log`,
++`entries/<entry-id>/entry.json`, `entries/<entry-id>/claim.lock/owner.json`,
++`entries/<entry-id>/recovery/*.json`, and
++`entries/<entry-id>/cleanup/*.json`.
++
++Queue entries may help Codex decide what happened, but they must not be
++auto-indexed into any owning run's `state.json.evidence[]`. Terminal run-local
++`agent-job`, `agent-result`, and `aggregation` artifacts remain under the owning
++run and must still be explicitly indexed by Codex when consumed.
+diff --git a/harness/core/state-authority.md b/harness/core/state-authority.md
+index 7166205..297c899 100644
+--- a/harness/core/state-authority.md
++++ b/harness/core/state-authority.md
+@@ -86,3 +86,28 @@ job. A fresh matching lease blocks stale recovery because it may represent an
+ active worker whose run-level scheduler heartbeat was overwritten by another
+ worker. Claimed job state transitions must compare `worker_id` and
+ `claim_token` before writing `job.json`.
++
++## Cross-Run Queue Records
++
++Local cross-run queue entries are coordination records, not state authority.
++They may reference existing run-local queued jobs, but they do not own the
++referenced run's `state.json`, evidence index, review decision, verification, or
++handoff.
++
++A cross-run queue worker must claim a queue entry before it attempts to claim
++the referenced run-local job. The owning run-local job remains protected by the
++normal `jobs/<job-id>/claim.lock` and claim-token contract. Queue entries may
++record routing status such as `queued`, `claimed`, `running`, `succeeded`,
++`failed`, or `abandoned`, but those statuses do not advance the owning Harness
++run.
++
++Cross-run queue recovery and cleanup are explicit operator actions. Recovery may
++requeue or abandon a queue entry with an audit artifact; cleanup records that a
++terminal queue entry was handled. Neither action may silently rewrite or delete
++owning run-local `job.json`, `raw.log`, or `output.json` artifacts.
++
++Phase 9A queue-entry leases are diagnostic only. The local queue does not
++automatically steal or reap expired `claimed` / `running` entries. If a queue
++worker dies after claiming the referenced run-local job, the run-local stale-job
++recovery contract must make that job safe before the queue entry can be
++requeued.
+diff --git a/harness/memory/progress.md b/harness/memory/progress.md
+index 2cd8f1d..9d990c0 100644
+--- a/harness/memory/progress.md
++++ b/harness/memory/progress.md
+@@ -26,7 +26,7 @@ Phase 7 stale-running detection and explicit recovery are implemented in source.
+
+ Phase 8 multi-worker concurrency hardening is implemented in source. Local filesystem workers now use claim tokens, claim lease diagnostics, claim-aware job writes, guarded raw/output artifact publishing, recovery safeguards for fresh matching leases, and a live multi-worker scheduler smoke for local filesystem workers.
+
+-Phase 9 Cross-Run / Cloud Queue is a Strict gated phase. The local scheduler entry gates are closed by `harness/runs/2026-06-23-phase-9-entry-gate-local-scheduler-closure` plus successful remote CI run `27999826047` for commit `c2f2299ee5803e770e2e1db6ed71c22d2397abe6`. Phase 9A must start with the local cross-run queue slice in `docs/superpowers/plans/2026-06-23-phase-9a-cross-run-local-queue-implementation.md`; cloud queue adapters are later work requiring explicit provider, credential, cost, cleanup, and audit approval.
++Phase 9 Cross-Run / Cloud Queue is a Strict gated phase. The local scheduler entry gates are closed by `harness/runs/2026-06-23-phase-9-entry-gate-local-scheduler-closure` plus successful remote CI run `27999826047` for commit `c2f2299ee5803e770e2e1db6ed71c22d2397abe6`. Phase 9A local cross-run queue is implemented in source and recorded by `harness/runs/2026-06-23-phase-9a-cross-run-local-queue`: queue entries reference existing run-local jobs, local workers claim queue entries before claiming the owning run-local job, terminal job artifacts remain under the owning run, and queue recovery/cleanup decisions are explicit audit records. Cloud queue adapters are later work requiring explicit provider, credential, cost, cleanup, and audit approval.
+
+ The Phase 5.2 `master` baseline also adds team-repeatable validation entrypoints and packaged CLI hardening:
+
+@@ -49,4 +49,4 @@ Follow-up Phase 3 provenance hardening now rejects empty `source_evidence` for r
+
+ ## Next Step
+
+-Execute `docs/superpowers/plans/2026-06-23-phase-9a-cross-run-local-queue-implementation.md` for Phase 9A local cross-run queue. Do not start Phase 9B cloud queue work until Phase 9A is proven and the user approves provider, credential, cost, cleanup, and audit boundaries.
++Close Phase 9A review/CI and merge the local cross-run queue branch when verification remains green. Do not start Phase 9B cloud queue work until the user approves provider, credential, cost, cleanup, and audit boundaries.
+diff --git a/harness/schemas/cross-run-queue-entry.schema.json b/harness/schemas/cross-run-queue-entry.schema.json
+new file mode 100644
+index 0000000..cefb3f6
+--- /dev/null
++++ b/harness/schemas/cross-run-queue-entry.schema.json
+@@ -0,0 +1,68 @@
++{
++  "$schema": "https://json-schema.org/draft/2020-12/schema",
++  "$id": "https://ai-coding-harness.local/schemas/cross-run-queue-entry.schema.json",
++  "type": "object",
++  "additionalProperties": false,
++  "required": [
++    "schema_version",
++    "queue_id",
++    "entry_id",
++    "run_id",
++    "run_dir",
++    "job_id",
++    "agent",
++    "adapter",
++    "creator",
++    "allowed_worker_id",
++    "allowed_worker_groups",
++    "status",
++    "created_at",
++    "updated_at",
++    "claim_owner",
++    "claim_token",
++    "claim_started_at",
++    "claim_updated_at",
++    "lease_expires_at",
++    "terminal_job_status",
++    "recovery",
++    "cleanup"
++  ],
++  "properties": {
++    "schema_version": { "type": "string", "const": "0.1.0" },
++    "queue_id": { "type": "string", "pattern": "^[A-Za-z0-9_.-]+$" },
++    "entry_id": { "type": "string", "pattern": "^[A-Za-z0-9_.-]+$" },
++    "run_id": { "type": "string", "minLength": 1 },
++    "run_dir": {
++      "type": "string",
++      "minLength": 1,
++      "not": { "pattern": "(^/|^[A-Za-z]:|(^|/)\\.\\.(/|$)|\\\\)" }
++    },
++    "job_id": { "type": "string", "pattern": "^[A-Za-z0-9_.-]+$" },
++    "agent": { "type": "string", "minLength": 1 },
++    "adapter": { "type": "string", "minLength": 1 },
++    "creator": { "type": "string", "minLength": 1 },
++    "allowed_worker_id": { "type": ["string", "null"], "minLength": 1 },
++    "allowed_worker_groups": {
++      "type": "array",
++      "items": { "type": "string", "minLength": 1 },
++      "uniqueItems": true
++    },
++    "status": {
++      "type": "string",
++      "enum": ["queued", "claimed", "running", "succeeded", "failed", "abandoned"]
++    },
++    "created_at": { "type": "string", "pattern": "Z$" },
++    "updated_at": { "type": "string", "pattern": "Z$" },
++    "claim_owner": { "type": ["string", "null"], "minLength": 1 },
++    "claim_token": { "type": ["string", "null"], "pattern": "^[0-9a-f]{32}$" },
++    "claim_started_at": { "type": ["string", "null"], "pattern": "Z$" },
++    "claim_updated_at": { "type": ["string", "null"], "pattern": "Z$" },
++    "lease_expires_at": { "type": ["string", "null"], "pattern": "Z$" },
++    "terminal_job_status": {
++      "type": ["string", "null"],
++      "enum": ["succeeded", "failed", "timeout", "cancelled", null]
++    },
++    "recovery": { "type": "array", "items": { "type": "string", "minLength": 1 } },
++    "cleanup": { "type": "array", "items": { "type": "string", "minLength": 1 } }
++  }
++}
+diff --git a/harness/schemas/cross-run-queue-event.schema.json b/harness/schemas/cross-run-queue-event.schema.json
+new file mode 100644
+index 0000000..fdf4481
+--- /dev/null
++++ b/harness/schemas/cross-run-queue-event.schema.json
+@@ -0,0 +1,29 @@
++{
++  "$schema": "https://json-schema.org/draft/2020-12/schema",
++  "$id": "https://ai-coding-harness.local/schemas/cross-run-queue-event.schema.json",
++  "type": "object",
++  "additionalProperties": false,
++  "required": ["schema_version", "queue_id", "entry_id", "event", "actor", "created_at", "details"],
++  "properties": {
++    "schema_version": { "type": "string", "const": "0.1.0" },
++    "queue_id": { "type": "string", "pattern": "^[A-Za-z0-9_.-]+$" },
++    "entry_id": { "type": ["string", "null"], "pattern": "^[A-Za-z0-9_.-]+$" },
++    "event": {
++      "type": "string",
++      "enum": [
++        "queue_initialized",
++        "entry_created",
++        "entry_claimed",
++        "entry_executing_job",
++        "entry_completed",
++        "entry_failed",
++        "entry_requeued",
++        "entry_abandoned",
++        "entry_cleanup_recorded"
++      ]
++    },
++    "actor": { "type": "string", "minLength": 1 },
++    "created_at": { "type": "string", "pattern": "Z$" },
++    "details": { "type": "object" }
++  }
++}
+diff --git a/tests/test_cross_run_queue.py b/tests/test_cross_run_queue.py
+new file mode 100644
+index 0000000..587e6f1
+--- /dev/null
++++ b/tests/test_cross_run_queue.py
+@@ -0,0 +1,514 @@
++import json
++import subprocess
++import sys
++import tempfile
++import unittest
++from pathlib import Path
++
++from jsonschema import Draft202012Validator
++
++from harness import cli
++
++
++ROOT = Path(__file__).resolve().parents[1]
++ENTRY_SCHEMA = ROOT / "harness" / "schemas" / "cross-run-queue-entry.schema.json"
++EVENT_SCHEMA = ROOT / "harness" / "schemas" / "cross-run-queue-event.schema.json"
++
++
++def load_schema(path: Path) -> dict:
++    return json.loads(path.read_text(encoding="utf-8"))
++
++
++def valid_entry() -> dict:
++    return {
++        "schema_version": "0.1.0",
++        "queue_id": "phase9a-local",
++        "entry_id": "entry-one",
++        "run_id": "run-one",
++        "run_dir": "harness/runs/run-one",
++        "job_id": "job-one",
++        "agent": "generic-test-agent",
++        "adapter": "generic-cli-agent",
++        "creator": "codex",
++        "allowed_worker_id": None,
++        "allowed_worker_groups": ["local"],
++        "status": "queued",
++        "created_at": "2026-06-23T00:00:00Z",
++        "updated_at": "2026-06-23T00:00:00Z",
++        "claim_owner": None,
++        "claim_token": None,
++        "claim_started_at": None,
++        "claim_updated_at": None,
++        "lease_expires_at": None,
++        "terminal_job_status": None,
++        "recovery": [],
++        "cleanup": [],
++    }
++
++
++def write_json(path: Path, payload: dict) -> None:
++    path.parent.mkdir(parents=True, exist_ok=True)
++    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
++
++
++def minimal_state(run_id: str) -> dict:
++    return {
++        "run_id": run_id,
++        "harness_version": "0.2.0",
++        "state_schema_version": "0.2.0",
++        "status": "verified",
++        "track": "Standard",
++        "current_workflow": "standard-agent-adapter-change",
++        "owner": "codex",
++        "base_commit": "HEAD",
++        "created_at": "2026-06-23T00:00:00Z",
++        "updated_at": "2026-06-23T00:00:00Z",
++        "external_agents": [],
++        "evidence": [],
++    }
++
++
++def successful_agent_command() -> list[str]:
++    script = (
++        "import json, os; "
++        "from pathlib import Path; "
++        "payload = {"
++        "'run_id': os.environ['HARNESS_RUN_ID'], "
++        "'job_id': os.environ['HARNESS_JOB_ID'], "
++        "'agent': os.environ['HARNESS_AGENT'], "
++        "'adapter': os.environ['HARNESS_AGENT_ADAPTER'], "
++        "'status': 'passed', "
++        "'summary': 'cross-run queue smoke passed', "
++        "'findings': [], "
++        "'evidence': [], "
++        "'not_tested': [], "
++        "'residual_risks': [], "
++        "'generated_at': '2026-06-23T00:00:00Z'"
++        "}; "
++        "Path(os.environ['HARNESS_AGENT_OUTPUT_FILE']).write_text("
++        "json.dumps(payload, indent=2) + '\\n', encoding='utf-8'"
++        ")"
++    )
++    return [sys.executable, "-c", script]
++
++
++def build_queued_entry_fixture(
++    base: Path,
++    *,
++    allowed_groups: list[str],
++    allowed_worker_id: str | None = None,
++) -> tuple[Path, Path]:
++    run_dir = base / "harness" / "runs" / "run-a"
++    queue_dir = base / "queue"
++    write_json(run_dir / "state.json", minimal_state("run-a"))
++    cli.create_generic_agent_job(
++        run_dir,
++        "job-a",
++        agent="generic-test-agent",
++        command=successful_agent_command(),
++        root=base,
++    )
++    cli.create_cross_run_queue_entry(
++        queue_dir,
++        "entry-a",
++        run_dir=run_dir,
++        job_id="job-a",
++        creator="codex",
++        allowed_worker_id=allowed_worker_id,
++        allowed_worker_groups=allowed_groups,
++        root=base,
++    )
++    return run_dir, queue_dir
++
++
++def build_run_with_queued_job(base: Path) -> tuple[Path, Path]:
++    run_dir = base / "harness" / "runs" / "run-a"
++    queue_dir = base / "queue"
++    write_json(run_dir / "state.json", minimal_state("run-a"))
++    cli.create_generic_agent_job(
++        run_dir,
++        "job-a",
++        agent="generic-test-agent",
++        command=successful_agent_command(),
++        root=base,
++    )
++    return run_dir, queue_dir
++
++
++class CrossRunQueueSchemaTest(unittest.TestCase):
++    def test_cross_run_queue_entry_schema_accepts_minimal_queued_entry(self):
++        Draft202012Validator(load_schema(ENTRY_SCHEMA)).validate(valid_entry())
++
++    def test_cross_run_queue_entry_schema_rejects_path_traversal_run_dir(self):
++        entry = valid_entry()
++        entry["run_dir"] = "../outside"
++
++        errors = list(Draft202012Validator(load_schema(ENTRY_SCHEMA)).iter_errors(entry))
++
++        self.assertTrue(errors)
++
++    def test_cross_run_queue_entry_schema_rejects_unknown_status(self):
++        entry = valid_entry()
++        entry["status"] = "invented"
++
++        errors = list(Draft202012Validator(load_schema(ENTRY_SCHEMA)).iter_errors(entry))
++
++        self.assertTrue(errors)
++
++    def test_cross_run_queue_event_schema_accepts_minimal_event(self):
++        event = {
++            "schema_version": "0.1.0",
++            "queue_id": "phase9a-local",
++            "entry_id": "entry-one",
++            "event": "entry_created",
++            "actor": "codex",
++            "created_at": "2026-06-23T00:00:00Z",
++            "details": {},
++        }
++
++        Draft202012Validator(load_schema(EVENT_SCHEMA)).validate(event)
++
++
++class CrossRunQueueCreationTest(unittest.TestCase):
++    def test_create_cross_run_queue_entry_references_existing_queued_job(self):
++        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
++            base = Path(raw)
++            run_dir = base / "harness" / "runs" / "run-a"
++            queue_dir = base / "queue"
++            write_json(run_dir / "state.json", minimal_state("run-a"))
++            cli.create_generic_agent_job(
++                run_dir,
++                "job-a",
++                agent="generic-test-agent",
++                command=["python", "-c", "print('ok')"],
++                root=base,
++            )
++
++            entry = cli.create_cross_run_queue_entry(
++                queue_dir,
++                "entry-a",
++                run_dir=run_dir,
++                job_id="job-a",
++                creator="codex",
++                allowed_worker_id=None,
++                allowed_worker_groups=["local"],
++                root=base,
++            )
++
++            saved = json.loads(
++                (queue_dir / "entries" / "entry-a" / "entry.json").read_text(
++                    encoding="utf-8",
++                )
++            )
++            self.assertEqual(entry["entry_id"], "entry-a")
++            self.assertEqual(saved["run_id"], "run-a")
++            self.assertEqual(saved["job_id"], "job-a")
++            self.assertEqual(saved["status"], "queued")
++            self.assertEqual(saved["allowed_worker_groups"], ["local"])
++
++    def test_create_cross_run_queue_entry_rejects_missing_job(self):
++        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
++            base = Path(raw)
++            run_dir = base / "harness" / "runs" / "run-a"
++            queue_dir = base / "queue"
++            write_json(run_dir / "state.json", minimal_state("run-a"))
++
++            with self.assertRaises(cli.HarnessCliError) as raised:
++                cli.create_cross_run_queue_entry(
++                    queue_dir,
++                    "entry-a",
++                    run_dir=run_dir,
++                    job_id="missing",
++                    creator="codex",
++                    allowed_worker_id=None,
++                    allowed_worker_groups=["local"],
++                    root=base,
++                )
++
++            self.assertIn("referenced job does not exist", str(raised.exception))
++
++
++class CrossRunQueueExecutionTest(unittest.TestCase):
++    def test_worker_id_must_be_authorized_to_claim_queue_entry(self):
++        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
++            base = Path(raw)
++            _, queue_dir = build_queued_entry_fixture(
++                base,
++                allowed_groups=[],
++                allowed_worker_id="worker-a",
++            )
++
++            unauthorized = cli.try_claim_cross_run_queue_entry(
++                queue_dir,
++                "entry-a",
++                worker_id="worker-b",
++                worker_groups=[],
++                root=base,
++            )
++            authorized = cli.try_claim_cross_run_queue_entry(
++                queue_dir,
++                "entry-a",
++                worker_id="worker-a",
++                worker_groups=[],
++                root=base,
++            )
++
++            self.assertIsNone(unauthorized)
++            self.assertIsNotNone(authorized)
++            self.assertEqual(authorized["claim_owner"], "worker-a")
++
++    def test_worker_group_must_be_authorized_to_claim_queue_entry(self):
++        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
++            base = Path(raw)
++            _, queue_dir = build_queued_entry_fixture(base, allowed_groups=["local"])
++
++            claimed = cli.try_claim_cross_run_queue_entry(
++                queue_dir,
++                "entry-a",
++                worker_id="worker-a",
++                worker_groups=["remote"],
++                root=base,
++            )
++
++            entry = json.loads(
++                (queue_dir / "entries" / "entry-a" / "entry.json").read_text(
++                    encoding="utf-8",
++                )
++            )
++            self.assertIsNone(claimed)
++            self.assertEqual(entry["status"], "queued")
++            self.assertFalse((queue_dir / "entries" / "entry-a" / "claim.lock").exists())
++
++    def test_cross_run_queue_run_once_executes_authorized_entry_once(self):
++        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
++            base = Path(raw)
++            run_dir, queue_dir = build_queued_entry_fixture(base, allowed_groups=["local"])
++            before_state = (run_dir / "state.json").read_text(encoding="utf-8")
++
++            summary = cli.cross_run_queue_run_once(
++                queue_dir,
++                worker_id="worker-a",
++                worker_groups=["local"],
++                root=base,
++            )
++            second_summary = cli.cross_run_queue_run_once(
++                queue_dir,
++                worker_id="worker-b",
++                worker_groups=["local"],
++                root=base,
++            )
++
++            job = json.loads((run_dir / "jobs" / "job-a" / "job.json").read_text(encoding="utf-8"))
++            entry = json.loads(
++                (queue_dir / "entries" / "entry-a" / "entry.json").read_text(
++                    encoding="utf-8",
++                )
++            )
++            self.assertEqual(summary["executed_entries"], ["entry-a"])
++            self.assertEqual(summary["skipped_entries"], [])
++            self.assertEqual(second_summary["executed_entries"], [])
++            self.assertEqual(second_summary["skipped_entries"], ["entry-a"])
++            self.assertEqual(job["status"], "succeeded")
++            self.assertEqual(entry["status"], "succeeded")
++            self.assertEqual(entry["terminal_job_status"], "succeeded")
++            self.assertTrue((run_dir / "jobs" / "job-a" / "output.json").exists())
++            self.assertEqual((run_dir / "state.json").read_text(encoding="utf-8"), before_state)
++
++    def test_cross_run_queue_run_once_mirrors_already_terminal_referenced_job(self):
++        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
++            base = Path(raw)
++            run_dir, queue_dir = build_queued_entry_fixture(base, allowed_groups=["local"])
++            scheduler_summary = cli.scheduler_run_once(
++                run_dir,
++                worker_id="run-local-worker",
++                root=base,
++            )
++
++            summary = cli.cross_run_queue_run_once(
++                queue_dir,
++                worker_id="worker-a",
++                worker_groups=["local"],
++                root=base,
++            )
++
++            entry = json.loads(
++                (queue_dir / "entries" / "entry-a" / "entry.json").read_text(
++                    encoding="utf-8",
++                )
++            )
++            self.assertEqual(scheduler_summary["executed_jobs"], ["job-a"])
++            self.assertEqual(summary["executed_entries"], [])
++            self.assertEqual(summary["skipped_entries"], ["entry-a"])
++            self.assertEqual(entry["status"], "succeeded")
++            self.assertEqual(entry["terminal_job_status"], "succeeded")
++
++
++class CrossRunQueueCliTest(unittest.TestCase):
++    def test_module_entrypoint_creates_and_runs_cross_run_queue_entry(self):
++        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
++            base = Path(raw)
++            run_dir, queue_dir = build_run_with_queued_job(base)
++            entry_path = queue_dir / "entries" / "entry-b" / "entry.json"
++
++            create_result = subprocess.run(
++                [
++                    sys.executable,
++                    "-m",
++                    "harness.cli",
++                    "queue-cross-run-job",
++                    str(queue_dir),
++                    "entry-b",
++                    "--run-dir",
++                    str(run_dir),
++                    "--job-id",
++                    "job-a",
++                    "--creator",
++                    "codex",
++                    "--worker-group",
++                    "local",
++                ],
++                cwd=ROOT,
++                text=True,
++                capture_output=True,
++                check=False,
++            )
++            run_result = subprocess.run(
++                [
++                    sys.executable,
++                    "-m",
++                    "harness.cli",
++                    "run-cross-run-queue",
++                    str(queue_dir),
++                    "--once",
++                    "--worker-id",
++                    "worker-a",
++                    "--worker-group",
++                    "local",
++                ],
++                cwd=ROOT,
++                text=True,
++                capture_output=True,
++                check=False,
++            )
++
++            self.assertEqual(create_result.returncode, 0, create_result.stderr + create_result.stdout)
++            self.assertTrue(entry_path.exists())
++            self.assertEqual(run_result.returncode, 0, run_result.stderr + run_result.stdout)
++            self.assertIn("cross-run queue: executed=1", run_result.stdout)
++
++
++class CrossRunQueueRecoveryCleanupTest(unittest.TestCase):
++    def test_recover_claimed_cross_run_entry_requires_confirmation(self):
++        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
++            base = Path(raw)
++            _, queue_dir = build_queued_entry_fixture(base, allowed_groups=["local"])
++            claimed = cli.try_claim_cross_run_queue_entry(
++                queue_dir,
++                "entry-a",
++                worker_id="worker-a",
++                worker_groups=["local"],
++                root=base,
++            )
++            self.assertIsNotNone(claimed)
++
++            with self.assertRaises(cli.HarnessCliError) as raised:
++                cli.recover_cross_run_queue_entry(
++                    queue_dir,
++                    "entry-a",
++                    action="requeue",
++                    reason="stale worker",
++                    confirm=False,
++                    actor="codex",
++                    root=base,
++                )
++
++            self.assertIn("requires --confirm", str(raised.exception))
++
++    def test_recover_requeue_requires_referenced_job_to_be_queued(self):
++        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
++            base = Path(raw)
++            run_dir, queue_dir = build_queued_entry_fixture(base, allowed_groups=["local"])
++            claimed = cli.try_claim_cross_run_queue_entry(
++                queue_dir,
++                "entry-a",
++                worker_id="worker-a",
++                worker_groups=["local"],
++                root=base,
++            )
++            self.assertIsNotNone(claimed)
++            job_claim = cli.try_claim_job(
++                run_dir,
++                "job-a",
++                worker_id="worker-a",
++                root=base,
++            )
++            self.assertIsNotNone(job_claim)
++            cli.mark_claimed_job_running(job_claim, started_at=cli.utc_now())
++
++            with self.assertRaises(cli.HarnessCliError) as raised:
++                cli.recover_cross_run_queue_entry(
++                    queue_dir,
++                    "entry-a",
++                    action="requeue",
++                    reason="stale worker",
++                    confirm=True,
++                    actor="codex",
++                    root=base,
++                )
++
++            self.assertIn("recover the run-local job first", str(raised.exception))
++
++    def test_recover_abandon_records_audit_and_clears_claim(self):
++        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
++            base = Path(raw)
++            _, queue_dir = build_queued_entry_fixture(base, allowed_groups=["local"])
++            claimed = cli.try_claim_cross_run_queue_entry(
++                queue_dir,
++                "entry-a",
++                worker_id="worker-a",
++                worker_groups=["local"],
++                root=base,
++            )
++            self.assertIsNotNone(claimed)
++
++            result = cli.recover_cross_run_queue_entry(
++                queue_dir,
++                "entry-a",
++                action="abandon",
++                reason="operator abandoned stale route",
++                confirm=True,
++                actor="codex",
++                root=base,
++            )
++
++            self.assertEqual(result["entry"]["status"], "abandoned")
++            self.assertIsNone(result["entry"]["claim_owner"])
++            self.assertTrue(result["recovery_path"].exists())
++            self.assertFalse((queue_dir / "entries" / "entry-a" / "claim.lock").exists())
++
++    def test_cleanup_terminal_entry_does_not_delete_run_local_artifacts(self):
++        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
++            base = Path(raw)
++            run_dir, queue_dir = build_queued_entry_fixture(base, allowed_groups=["local"])
++            cli.cross_run_queue_run_once(
++                queue_dir,
++                worker_id="worker-a",
++                worker_groups=["local"],
++                root=base,
++            )
++
++            result = cli.cleanup_cross_run_queue_entry(
++                queue_dir,
++                "entry-a",
++                confirm=True,
++                actor="codex",
++                root=base,
++            )
++
++            self.assertTrue(result["cleanup_record"].endswith("-cleanup.json"))
++            self.assertTrue((run_dir / "jobs" / "job-a" / "job.json").exists())
++            self.assertTrue((run_dir / "jobs" / "job-a" / "output.json").exists())
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/tests/test_static_contracts.py b/tests/test_static_contracts.py
+index 84013a1..976c210 100644
+--- a/tests/test_static_contracts.py
++++ b/tests/test_static_contracts.py
+@@ -161,6 +161,32 @@ class StaticContractsTest(unittest.TestCase):
+         ]:
+             self.assertIn(heading, text)
+
++    def test_phase9a_cross_run_queue_schemas_exist(self):
++        for relative_path in [
++            "harness/schemas/cross-run-queue-entry.schema.json",
++            "harness/schemas/cross-run-queue-event.schema.json",
++        ]:
++            with self.subTest(relative_path=relative_path):
++                schema = json.loads((ROOT / relative_path).read_text(encoding="utf-8"))
++                Draft202012Validator.check_schema(schema)
++                self.assertEqual(
++                    schema["$schema"],
++                    "https://json-schema.org/draft/2020-12/schema",
++                )
++
++    def test_phase9a_cross_run_queue_cli_commands_exist(self):
++        result = subprocess.run(
++            [sys.executable, "-m", "harness.cli", "--help"],
++            cwd=ROOT,
++            text=True,
++            capture_output=True,
++            check=False,
++        )
++
++        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
++        self.assertIn("queue-cross-run-job", result.stdout)
++        self.assertIn("run-cross-run-queue", result.stdout)
++
+     def test_evidence_contract_matches_aggregation_incomplete_semantics(self):
+         text = read_text(EVIDENCE_CONTRACT)

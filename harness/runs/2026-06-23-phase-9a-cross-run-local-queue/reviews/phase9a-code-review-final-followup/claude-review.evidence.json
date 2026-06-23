@@ -1,0 +1,75 @@
+{
+  "run_id": "phase9a-cross-run-local-queue-final-followup-review",
+  "status": "findings",
+  "reviewer": "claude-code",
+  "reviewer_model": "glm-5.2[1m]",
+  "reviewer_model_version": null,
+  "reviewer_cli_version": "2.1.168 (Claude Code)",
+  "reviewer_provenance": {
+    "schema_version": "0.2.0",
+    "reviewer": "claude-code",
+    "cli": {
+      "name": "Claude Code",
+      "raw_version": "2.1.168 (Claude Code)",
+      "version": "2.1.168"
+    },
+    "models": [
+      {
+        "name": "glm-5.2[1m]",
+        "version": null,
+        "source": "modelUsage",
+        "usage": {
+          "input_tokens": null,
+          "output_tokens": null
+        },
+        "raw_usage": {
+          "inputTokens": 33099,
+          "outputTokens": 11891,
+          "cacheReadInputTokens": 21376,
+          "cacheCreationInputTokens": 0,
+          "webSearchRequests": 0,
+          "costUSD": 0.473458,
+          "contextWindow": 1000000,
+          "maxOutputTokens": 32000
+        }
+      }
+    ],
+    "primary_model": "glm-5.2[1m]",
+    "unknowns": [
+      "model_version",
+      "token_usage"
+    ]
+  },
+  "summary": "The final Phase 9A follow-up correctly (1) extends the queue entry schema, the cleanup terminal set, and the state-authority doc to permit `timeout`/`cancelled`; (2) adds `cross_run_queue_status_for_terminal_job()` to preserve the owning job's true terminal status instead of collapsing every non-`succeeded` outcome to `failed`; and (3) wraps referenced-job claim/load in try/except that marks the entry terminal `failed`, releases the queue claim, and reports the entry as skipped instead of stranding it as `claimed`. New tests cover cancelled-status mirroring and a malformed/invalid referenced job whose claim.lock is released. No high/critical defects were found in the in-scope changes. The notable residual concern is that the new handlers catch only `HarnessCliError`, so unexpected exception types during claim/load (and any exception during execution, which is not wrapped by this diff) can still leave the queue entry stranded as `claimed`/`running`; per state-authority.md, recovery of such entries is a manual operator action.",
+  "findings": [
+    {
+      "severity": "medium",
+      "title": "Queue claim can still strand on non-HarnessCliError exceptions during referenced-job claim/load",
+      "evidence": "Both new try/except blocks in cross_run_queue_run_once catch only `HarnessCliError` (the diff shows `except HarnessCliError as exc:` wrapping try_claim_job and load_job_payload, each setting `release_queue_claim = True` only inside that handler before `continue`). The claim release is therefore conditional on reaching those handlers. If try_claim_job or load_job_payload raises a different exception type (e.g., OSError/PermissionError for filesystem problems, or an unexpected KeyError/TypeError), the exception propagates without marking the entry terminal or setting release_queue_claim, leaving the entry in `claimed`/`running` with claim.lock present. This is the same stranding class the follow-up intends to eliminate, but only for the harness's canonical error type. The new test exercises the HarnessCliError path (malformed JSON -> failed + lock released) but no test covers non-HarnessCliError exceptions, so the gap is unverified. Impact is mitigated because stranded entries are recoverable via the explicit operator recovery action described in state-authority.md.",
+      "recommendation": "Make claim release unconditional for any terminal/failed outcome: either broaden the handlers to `except Exception` (record the repr/message in the audit details) or use a try/finally that guarantees claim-lock release whenever the entry reaches a terminal state, so no exception type can strand the claim. Add a regression test that injects a non-HarnessCliError (e.g., monkeypatch load_job_payload to raise OSError) and asserts the entry is marked failed and claim.lock is removed.",
+      "file": "harness/cli.py",
+      "line": 2546
+    }
+  ],
+  "tested": [
+    "Terminal status preservation for `cancelled`: new test asserts entry status == cancelled and terminal_job_status == cancelled (tests/test_cross_run_queue.py, test_cross_run_queue_run_once_preserves_cancelled_referenced_job_status).",
+    "No-strand on invalid referenced job: new test writes malformed job.json and asserts entry -> failed, terminal_job_status None, and claim.lock no longer exists (tests/test_cross_run_queue.py, test_cross_run_queue_run_once_marks_invalid_referenced_job_failed_without_stranding_lock).",
+    "Schema enum now includes timeout and cancelled alongside succeeded/failed/abandoned (cross-run-queue-entry.schema.json).",
+    "Cleanup terminal set expanded to TERMINAL_JOB_STATUSES.union({'abandoned'}), consistent with the new schema enum (harness/cli.py cleanup_cross_run_queue_entry).",
+    "cross_run_queue_status_for_terminal_job validates membership in TERMINAL_JOB_STATUSES and returns the status unchanged, replacing the old succeeded-or-failed collapse in both terminal-detection sites (harness/cli.py).",
+    "state-authority.md updated to list timeout/cancelled as routing statuses that do not advance the owning run.",
+    "Verification summary reports 17 cross_run_queue tests OK and 18 static contract tests OK (1 skipped)."
+  ],
+  "not_tested": [
+    "`timeout` terminal status: it is schema-allowed and preserved by the new helper, but only `cancelled` is directly exercised; no test asserts a `timeout` entry outcome through either the pre-terminal-detection path or the execution-result path.",
+    "The exact control flow that consumes `release_queue_claim` after `continue` (the finally/release site) is not visible in the diff; confidence that the lock is released relies on the passing malformed-job test.",
+    "Behavior of the new error handlers for non-HarnessCliError exceptions (e.g., OSError/PermissionError/KeyError) during try_claim_job or load_job_payload.",
+    "The execution-result call site's use of cross_run_queue_status_for_terminal_job for timeout/cancelled outcomes (prior tests only exercise `succeeded` on that path)."
+  ],
+  "residual_risks": [
+    "Exceptions raised by execute_claimed_generic_agent_job are not wrapped by this diff; an execution-phase failure can still strand the queue entry as claimed/running. This is outside the stated claim/load scope of this follow-up but is a related stranding vector.",
+    "Local atomic claim.lock coordination is not robust across non-local/cloud filesystems (documented plan risk); the fixes do not change that boundary.",
+    "Queue records remain control/audit artifacts only; any stranded entry requires manual operator recovery/requeue per state-authority.md, so strand recovery is not automatic.",
+    "The exact membership of TERMINAL_JOB_STATUSES cannot be confirmed from the diff alone (it is referenced but not defined here); schema/doc/helper consistency depends on it including timeout and cancelled."
+  ]
+}

@@ -1,0 +1,92 @@
+{
+  "run_id": "phase9a-cross-run-local-queue-claim-coverage-followup-review",
+  "status": "findings",
+  "reviewer": "claude-code",
+  "reviewer_model": "glm-5.2[1m]",
+  "reviewer_model_version": null,
+  "reviewer_cli_version": "2.1.168 (Claude Code)",
+  "reviewer_provenance": {
+    "schema_version": "0.2.0",
+    "reviewer": "claude-code",
+    "cli": {
+      "name": "Claude Code",
+      "raw_version": "2.1.168 (Claude Code)",
+      "version": "2.1.168"
+    },
+    "models": [
+      {
+        "name": "glm-5.2[1m]",
+        "version": null,
+        "source": "modelUsage",
+        "usage": {
+          "input_tokens": null,
+          "output_tokens": null
+        },
+        "raw_usage": {
+          "inputTokens": 18624,
+          "outputTokens": 13852,
+          "cacheReadInputTokens": 4992,
+          "cacheCreationInputTokens": 0,
+          "webSearchRequests": 0,
+          "costUSD": 0.44191600000000003,
+          "contextWindow": 1000000,
+          "maxOutputTokens": 32000
+        }
+      }
+    ],
+    "primary_model": "glm-5.2[1m]",
+    "unknowns": [
+      "model_version",
+      "token_usage"
+    ]
+  },
+  "summary": "This follow-up review targets the medium stranding finding from the prior stranding-followup review. The fix is a one-line default change in `cross_run_queue_run_once` (`release_queue_claim = False` \u2192 `True`), which ensures the queue `claim.lock` is released in the `finally` block on every exit path after a successful queue claim \u2014 including the previously-uncovered case where `try_claim_job` raises a non-`HarnessCliError` exception (e.g., `OSError`) before `release_queue_claim` was ever explicitly set. Two regression tests are added: (1) `try_claim_job` raising `OSError`, asserting the entry is marked `failed`, added to `skipped_entries`, `terminal_job_status` is `None`, and no `claim.lock` remains; (2) `try_claim_job` raising `OSError` AND `mark_cross_run_queue_entry_terminal` raising `RuntimeError`, asserting the `RuntimeError` propagates while the `claim.lock` is still released. Both the fix and the tests are minimal, focused, and logically sound for one-shot worker semantics. No medium/high/critical defects were identified in the diff itself; observations are info-level.",
+  "findings": [
+    {
+      "severity": "info",
+      "title": "Terminal-marking-failure test omits entry final-state assertions",
+      "evidence": "test_cross_run_queue_run_once_releases_queue_claim_when_terminal_marking_fails mocks try_claim_job (OSError) and mark_cross_run_queue_entry_terminal (RuntimeError), but only asserts `with self.assertRaises(RuntimeError)` and `assertFalse((entry_dir / \"claim.lock\").exists())`. It does not verify entry.json status/terminal fields after the partial write. If mark_cross_run_queue_entry_terminal partially wrote before raising, the entry could be in an indeterminate state; the claim.lock release allows another run-once to re-claim and retry, which is acceptable for at-least-once semantics, but the test does not lock in what that state is.",
+      "recommendation": "Optionally assert entry.json's persisted status (e.g., still 'claimed' or partially 'failed') after the RuntimeError to document the recoverable/retryable state contract, or explicitly note that indeterminate intermediate state is expected and handled by confirmed recovery.",
+      "file": "tests/test_cross_run_queue.py",
+      "line": 451
+    },
+    {
+      "severity": "info",
+      "title": "Only OSError exercised as representative non-HarnessCliError exception",
+      "evidence": "The scope item 'direct try_claim_job non-HarnessCliError exception coverage' is satisfied by a single OSError mock. The test assertions (entry marked failed, claim.lock released, skipped_entries populated) imply a broad exception handler exists in cross_run_queue_run_once, but other non-HarnessCliError types (ValueError, TypeError, KeyError, etc.) are not independently exercised. If the handler narrows on exception type in the future, OSError-only coverage could miss regressions.",
+      "recommendation": "Accept OSError as a sufficient representative if the handler is a broad `except Exception` clause; otherwise add a parametrized or second-type case to guard against future narrowing of the handler.",
+      "file": "tests/test_cross_run_queue.py",
+      "line": 422
+    },
+    {
+      "severity": "info",
+      "title": "Default-to-True is a blunt release policy versus explicit release at each exit",
+      "evidence": "Changing `release_queue_claim` default to `True` ensures all paths release, which is correct for one-shot semantics, but it relies on NO code path inside the try-block intentionally setting it to `False` to retain the claim. The diff does not show the full function body, so any path that previously relied on the False default to keep the lock would now release early. The 21 passing tests suggest no regression, but untested internal paths cannot be fully ruled out from the diff alone.",
+      "recommendation": "Confirm by reading the full cross_run_queue_run_once body that no branch sets release_queue_claim=False to retain an in-flight claim; if such branches exist, add explicit release guards rather than relying on the True default.",
+      "file": "harness/cli.py",
+      "line": 2535
+    }
+  ],
+  "tested": [
+    "try_claim_job raising OSError (non-HarnessCliError) is caught, entry marked status='failed', added to skipped_entries, and terminal_job_status recorded as None",
+    "No queue claim.lock remains after try_claim_job OSError path (stranding fixed by release_queue_claim=True default)",
+    "mark_cross_run_queue_entry_terminal raising RuntimeError after a claim-path OSError propagates the RuntimeError to the caller",
+    "Queue claim.lock is released even when terminal marking fails (finally block fires on propagated RuntimeError)",
+    "Real (un-mocked) mark_cross_run_queue_entry_terminal writes status='failed' in Test 1's temp fixture",
+    "Full suite: tests.test_cross_run_queue (21 OK), tests.test_static_contracts (18 OK, 1 skipped), git diff --check clean"
+  ],
+  "not_tested": [
+    "Entry final persisted state (status/terminal fields) when mark_cross_run_queue_entry_terminal raises mid-write (Test 2 only checks exception propagation + claim.lock absence)",
+    "Non-OSError non-HarnessCliError exception types from try_claim_job (e.g., ValueError, TypeError, KeyError)",
+    "HarnessCliError path from try_claim_job (presumably covered by pre-existing tests not in this diff)",
+    "Failure of the claim RELEASE operation itself (e.g., unlink raising OSError in the finally block) and whether it masks the original exception",
+    "Event/artifact side-effects of mark_cross_run_queue_entry_terminal (cross-run-queue-event records) in the new tests",
+    "Full cross_run_queue_run_once body to confirm no branch sets release_queue_claim=False to retain a claim"
+  ],
+  "residual_risks": [
+    "Full cross_run_queue_run_once function body was not included in the diff; cannot fully verify no internal path relied on the old False default to retain an in-flight claim. Passing suite mitigates but does not eliminate this.",
+    "When mark_cross_run_queue_entry_terminal fails, entry state may be indeterminate (partially written) while claim.lock is released; a subsequent run-once may re-claim and retry the entry. This is acceptable for at-least-once/recovery semantics but is not asserted as a contract by the tests.",
+    "If the release operation (claim.lock removal) itself raises in the finally block, it would mask the propagated exception and could still strand the lock; this path is untested.",
+    "Local atomic directory claims remain non-proof for cross-machine/networked filesystems (acknowledged in task/plan risks, out of Phase 9A scope)."
+  ]
+}

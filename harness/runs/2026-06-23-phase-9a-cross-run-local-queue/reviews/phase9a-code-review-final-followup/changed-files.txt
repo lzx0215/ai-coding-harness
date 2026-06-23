@@ -1,0 +1,4 @@
+harness/cli.py
+harness/core/state-authority.md
+harness/schemas/cross-run-queue-entry.schema.json
+tests/test_cross_run_queue.py

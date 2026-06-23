@@ -86,3 +86,28 @@ job. A fresh matching lease blocks stale recovery because it may represent an
 active worker whose run-level scheduler heartbeat was overwritten by another
 worker. Claimed job state transitions must compare `worker_id` and
 `claim_token` before writing `job.json`.
+
+## Cross-Run Queue Records
+
+Local cross-run queue entries are coordination records, not state authority.
+They may reference existing run-local queued jobs, but they do not own the
+referenced run's `state.json`, evidence index, review decision, verification, or
+handoff.
+
+A cross-run queue worker must claim a queue entry before it attempts to claim
+the referenced run-local job. The owning run-local job remains protected by the
+normal `jobs/<job-id>/claim.lock` and claim-token contract. Queue entries may
+record routing status such as `queued`, `claimed`, `running`, `succeeded`,
+`failed`, `timeout`, `cancelled`, or `abandoned`, but those statuses do not
+advance the owning Harness run.
+
+Cross-run queue recovery and cleanup are explicit operator actions. Recovery may
+requeue or abandon a queue entry with an audit artifact; cleanup records that a
+terminal queue entry was handled. Neither action may silently rewrite or delete
+owning run-local `job.json`, `raw.log`, or `output.json` artifacts.
+
+Phase 9A queue-entry leases are diagnostic only. The local queue does not
+automatically steal or reap expired `claimed` / `running` entries. If a queue
+worker dies after claiming the referenced run-local job, the run-local stale-job
+recovery contract must make that job safe before the queue entry can be
+requeued.

@@ -1,0 +1,26 @@
+{
+  "schema_version": "0.1.0",
+  "queue_id": "cross-run-queue",
+  "entry_id": "entry-a",
+  "run_id": "phase9a-live-owning-run-a",
+  "run_dir": "harness/runs/2026-06-23-phase-9a-cross-run-local-queue/live-smoke/owning-run-a",
+  "job_id": "job-a",
+  "agent": "generic-test-agent",
+  "adapter": "generic-cli-agent",
+  "creator": "codex",
+  "allowed_worker_id": null,
+  "allowed_worker_groups": [
+    "local"
+  ],
+  "status": "succeeded",
+  "created_at": "2026-06-23T04:40:59Z",
+  "updated_at": "2026-06-23T04:40:59Z",
+  "claim_owner": "phase9a-local-worker",
+  "claim_token": "13dcbe7fd06a41e28b64f406ce76f1e9",
+  "claim_started_at": "2026-06-23T04:40:59Z",
+  "claim_updated_at": "2026-06-23T04:40:59Z",
+  "lease_expires_at": "2026-06-23T04:41:59Z",
+  "terminal_job_status": "succeeded",
+  "recovery": [],
+  "cleanup": []
+}

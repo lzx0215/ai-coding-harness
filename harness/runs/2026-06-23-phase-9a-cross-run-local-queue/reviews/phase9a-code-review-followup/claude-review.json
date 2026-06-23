@@ -1,0 +1,103 @@
+{
+  "status": "findings",
+  "run_id": "phase9a-cross-run-local-queue-followup-review",
+  "completed": true,
+  "harness_version": "0.2.0",
+  "adapter_version": "0.1.0",
+  "prompt_version": "0.2.0",
+  "reviewer": "claude-code",
+  "reviewer_model": "glm-5.2[1m]",
+  "reviewer_model_version": null,
+  "reviewer_cli_version": "2.1.168 (Claude Code)",
+  "output_file": "C:\\ai\\ai-coding-harness\\harness\\runs\\2026-06-23-phase-9a-cross-run-local-queue\\reviews\\phase9a-code-review-followup\\claude-review.json",
+  "raw_log_file": "C:\\ai\\ai-coding-harness\\harness\\runs\\2026-06-23-phase-9a-cross-run-local-queue\\reviews\\phase9a-code-review-followup\\claude-review.raw.log",
+  "exit_code": 0,
+  "duration_seconds": 219.234,
+  "review_file": "C:\\ai\\ai-coding-harness\\harness\\runs\\2026-06-23-phase-9a-cross-run-local-queue\\reviews\\phase9a-code-review-followup\\claude-review.evidence.json",
+  "summary": "The Phase 9A follow-up diff addresses five medium findings from the first review, all correctly implemented per the diff evidence: (1) requeue recovery now requires the referenced run-local job to still be \"queued\", (2) run-once mirrors already-terminal referenced job status instead of recording spurious failures, (3) entry creation uses atomic mkdir(exist_ok=False) instead of check-then-act, with cleanup-on-failure, (4) static schema contracts now call Draft202012Validator.check_schema, and (5) state-authority/evidence docs clarify queue records are diagnostic-only coordination artifacts. New tests (terminal mirroring, requeue precondition, abandon clears claim, worker-id authorization, CLI command existence) provide good behavioral coverage. Two remaining medium risks concern lossy terminal-status mapping and unhandled load_job_payload exceptions in the run-once path. No high or critical risks were identified in the diff.",
+  "findings": [
+    {
+      "severity": "medium",
+      "title": "Lossy non-succeeded terminal status mapping to queue entry \"failed\"",
+      "evidence": "In cross_run_queue_run_once, when try_claim_job returns None and the referenced job is terminal, the code maps terminal status as: `terminal_entry_status = (\"succeeded\" if terminal_job_status == \"succeeded\" else \"failed\")`. Any terminal status other than \"succeeded\" (e.g., \"skipped\", \"abandoned\", \"cancelled\") is collapsed to \"failed\". The TERMINAL_JOB_STATUSES set is not visible in the diff, so the full set of affected statuses cannot be confirmed. The test only exercises the succeeded -> succeeded path. A job intentionally skipped or abandoned by the owning run would appear as a queue \"failure\", mislabeling the audit trail and potentially misleading operators during diagnosis.",
+      "recommendation": "Either enumerate terminal statuses explicitly (map \"succeeded\" -> \"succeeded\", \"skipped\"/\"abandoned\" -> \"skipped\"/\"abandoned\", genuine failures -> \"failed\"), or record the raw terminal_job_status alongside the queue entry status so the original job terminal state is preserved in the entry details without being lost to a binary succeeded/failed collapse.",
+      "file": "harness/cli.py",
+      "line": 2550
+    },
+    {
+      "severity": "medium",
+      "title": "Unhandled load_job_payload exceptions in run-once can strand claimed queue entries",
+      "evidence": "In cross_run_queue_run_once, when job_claim is None, the new code calls `current_job = load_job_payload(run_dir / \"jobs\" / claimed_entry[\"job_id\"] / \"job.json\")` without local try/except. Before this fix, the None branch went directly to mark_cross_run_queue_entry_terminal(...), guaranteeing the entry was always marked terminal. The new intermediate load_job_payload call introduces a failure window: if the job file is concurrently deleted or corrupted between try_claim_job and load_job_payload, the exception propagates without releasing the queue claim or recording a terminal status. The entry remains stuck in \"claimed\" until manual operator recovery. The diff context does not show a surrounding try/finally that releases the claim on unexpected exceptions, and the state-authority.md doc only documents manual recovery for this scenario.",
+      "recommendation": "Wrap the load_job_payload call in a try/except that, on failure, either falls through to the existing mark_cross_run_queue_entry_terminal(failed) path (preserving the pre-fix guarantee that None always terminates the entry) or explicitly releases the queue claim and records a diagnostic failure. Alternatively, confirm the surrounding loop body has a finally block that releases the claim on any exception and cite that structure in the review evidence.",
+      "file": "harness/cli.py",
+      "line": 2548
+    }
+  ],
+  "tested": [
+    "Requeue precondition blocks when referenced job status != \"queued\" (diff + test_recover_requeue_requires_referenced_job_to_be_queued)",
+    "Already-terminal referenced job mirrors succeeded status and is skipped, not failed (diff + test_cross_run_queue_run_once_mirrors_already_terminal_referenced_job)",
+    "Atomic entry creation via entry_dir.mkdir(exist_ok=False) replacing check-then-act exists() (diff)",
+    "Cleanup-on-failure: except Exception -> shutil.rmtree(entry_dir) re-raises (diff)",
+    "Draft202012Validator.check_schema added to static contract schema loop (diff)",
+    "Worker-id authorization: unauthorized worker returns None, authorized worker claims (test_worker_id_must_be_authorized_to_claim_queue_entry)",
+    "Abandon recovery records audit, sets status \"abandoned\", clears claim_owner, removes claim.lock (test_recover_abandon_records_audit_and_clears_claim)",
+    "CLI commands queue-cross-run-job and run-cross-run-queue appear in --help (test_phase9a_cross_run_queue_cli_commands_exist)",
+    "evidence.md documents queue files as control/audit artifacts not auto-indexed (diff)",
+    "state-authority.md documents queue leases are diagnostic-only, no auto-steal, manual recovery required (diff)"
+  ],
+  "not_tested": [
+    "Full unittest discover execution (verification summary claims 330 pass, 1 skip \u2014 not independently confirmed from diff)",
+    "Remote GitHub Actions CI results",
+    "Live smoke reproducibility (two owning runs, byte-identical state.json) \u2014 claimed in summary but not verifiable from diff",
+    "Whether shutil is imported (cleanup-on-failure path uses shutil.rmtree but no test triggers that path)",
+    "Full set of values in TERMINAL_JOB_STATUSES (not visible in diff; affects terminal mapping accuracy)",
+    "mark_cross_run_queue_entry_terminal signature accepts the new terminal_job_status parameter (referenced in new code but definition not in diff)",
+    "Whether cross_run_queue_entry_dir is used consistently by all readers/writers replacing the old cross_run_queue_entry_path (structural layout change to entries/<id>/entry.json)",
+    "Whether queue iteration handles entries whose directory exists but entry.json is absent after a crash mid-creation",
+    "Whether the run-once loop body has a finally/except that releases the queue claim on unexpected exceptions (only partial context visible)",
+    "Whether append_cross_run_queue_event is atomic (partial event line risk on crash)"
+  ],
+  "residual_risks": [
+    "Local filesystem atomicity only: mkdir-based claims and atomic writes are not proof for network shares or cloud queues \u2014 explicitly documented as a non-goal in Phase 9A but remains an architectural limitation for any future multi-machine deployment.",
+    "Crash between entry_dir.mkdir and write_json_atomic can leave a directory with no entry.json; queue iteration robustness for this state is not verifiable from the diff.",
+    "Stuck \"claimed\"/\"running\" queue entries require explicit manual recovery (no auto-steal/reap); operators must run recover_cross_run_queue_entry with confirm=True. This is by design but creates an operational burden if workers crash frequently.",
+    "The new load_job_payload calls in run-once and recover paths assume the referenced job.json exists and is well-formed at call time; a narrow TOCTOU window exists between try_claim_job/load and the status read.",
+    "If TERMINAL_JOB_STATUSES includes non-failure terminal states (skipped/abandoned), the current mapping to \"failed\" produces semantically inaccurate queue audit records.",
+    "shutil import for the entry-creation cleanup path is assumed present but not confirmed from the diff; if absent, the except-Exception block would raise NameError instead of cleaning up, though this only triggers on validation/write/event failures which may be rare."
+  ],
+  "reviewer_provenance": {
+    "schema_version": "0.2.0",
+    "reviewer": "claude-code",
+    "cli": {
+      "name": "Claude Code",
+      "raw_version": "2.1.168 (Claude Code)",
+      "version": "2.1.168"
+    },
+    "models": [
+      {
+        "name": "glm-5.2[1m]",
+        "version": null,
+        "source": "modelUsage",
+        "usage": {
+          "input_tokens": null,
+          "output_tokens": null
+        },
+        "raw_usage": {
+          "inputTokens": 43847,
+          "outputTokens": 11829,
+          "cacheReadInputTokens": 32320,
+          "cacheCreationInputTokens": 0,
+          "webSearchRequests": 0,
+          "costUSD": 0.53112,
+          "contextWindow": 1000000,
+          "maxOutputTokens": 32000
+        }
+      }
+    ],
+    "primary_model": "glm-5.2[1m]",
+    "unknowns": [
+      "model_version",
+      "token_usage"
+    ]
+  }
+}
