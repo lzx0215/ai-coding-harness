@@ -108,6 +108,9 @@ Phase 9A must prove:
 
 ### Phase 9B: Cloud Queue Adapter
 
+Status: deferred. Do not start Phase 9B until the user approves provider,
+credential, cost, cleanup, and audit boundaries.
+
 Phase 9B adds a provider-specific or provider-neutral cloud queue adapter after
 Phase 9A is stable.
 

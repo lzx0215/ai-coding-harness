@@ -2659,7 +2659,15 @@ def cross_run_queue_run_once(
             release_queue_claim = True
         finally:
             if release_queue_claim:
-                release_cross_run_queue_claim(queue_path, entry_id)
+                active_exception = sys.exc_info()[1]
+                try:
+                    release_cross_run_queue_claim(queue_path, entry_id)
+                except Exception as release_exc:
+                    if active_exception is None:
+                        raise
+                    active_exception.add_note(
+                        f"cross-run queue claim release failed: {release_exc}"
+                    )
 
     return {"executed_entries": executed_entries, "skipped_entries": skipped_entries}
 

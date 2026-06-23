@@ -467,6 +467,37 @@ class CrossRunQueueExecutionTest(unittest.TestCase):
             entry_dir = queue_dir / "entries" / "entry-a"
             self.assertFalse((entry_dir / "claim.lock").exists())
 
+    def test_cross_run_queue_run_once_release_failure_does_not_mask_original_exception(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            base = Path(raw)
+            _, queue_dir = build_queued_entry_fixture(base, allowed_groups=["local"])
+
+            with (
+                mock.patch.object(cli, "try_claim_job", side_effect=OSError("claim io failure")),
+                mock.patch.object(
+                    cli,
+                    "mark_cross_run_queue_entry_terminal",
+                    side_effect=RuntimeError("terminal write failed"),
+                ),
+                mock.patch.object(
+                    cli,
+                    "release_cross_run_queue_claim",
+                    side_effect=OSError("release failed"),
+                ) as release_claim,
+            ):
+                with self.assertRaisesRegex(RuntimeError, "terminal write failed") as raised:
+                    cli.cross_run_queue_run_once(
+                        queue_dir,
+                        worker_id="worker-a",
+                        worker_groups=["local"],
+                        root=base,
+                    )
+                self.assertEqual(release_claim.call_count, 1)
+                self.assertIn(
+                    "cross-run queue claim release failed: release failed",
+                    getattr(raised.exception, "__notes__", []),
+                )
+
     def test_cross_run_queue_run_once_releases_queue_claim_after_unexpected_execution_error(self):
         with tempfile.TemporaryDirectory(dir=ROOT) as raw:
             base = Path(raw)
