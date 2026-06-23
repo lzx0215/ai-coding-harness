@@ -2532,7 +2532,7 @@ def cross_run_queue_run_once(
             skipped_entries.append(entry_id)
             continue
 
-        release_queue_claim = False
+        release_queue_claim = True
         try:
             run_dir = repo_root / claimed_entry["run_dir"]
             before = validate_run(run_dir, root=repo_root)

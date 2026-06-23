@@ -418,6 +418,55 @@ class CrossRunQueueExecutionTest(unittest.TestCase):
             self.assertIsNone(entry["terminal_job_status"])
             self.assertFalse((entry_dir / "claim.lock").exists())
 
+    def test_cross_run_queue_run_once_marks_unclaimable_referenced_job_failed_without_stranding_lock(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            base = Path(raw)
+            _, queue_dir = build_queued_entry_fixture(base, allowed_groups=["local"])
+
+            with mock.patch.object(
+                cli,
+                "try_claim_job",
+                side_effect=OSError("claim io failure"),
+            ):
+                summary = cli.cross_run_queue_run_once(
+                    queue_dir,
+                    worker_id="worker-a",
+                    worker_groups=["local"],
+                    root=base,
+                )
+
+            entry_dir = queue_dir / "entries" / "entry-a"
+            entry = json.loads((entry_dir / "entry.json").read_text(encoding="utf-8"))
+            self.assertEqual(summary["executed_entries"], [])
+            self.assertEqual(summary["skipped_entries"], ["entry-a"])
+            self.assertEqual(entry["status"], "failed")
+            self.assertIsNone(entry["terminal_job_status"])
+            self.assertFalse((entry_dir / "claim.lock").exists())
+
+    def test_cross_run_queue_run_once_releases_queue_claim_when_terminal_marking_fails(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            base = Path(raw)
+            _, queue_dir = build_queued_entry_fixture(base, allowed_groups=["local"])
+
+            with (
+                mock.patch.object(cli, "try_claim_job", side_effect=OSError("claim io failure")),
+                mock.patch.object(
+                    cli,
+                    "mark_cross_run_queue_entry_terminal",
+                    side_effect=RuntimeError("terminal write failed"),
+                ),
+            ):
+                with self.assertRaises(RuntimeError):
+                    cli.cross_run_queue_run_once(
+                        queue_dir,
+                        worker_id="worker-a",
+                        worker_groups=["local"],
+                        root=base,
+                    )
+
+            entry_dir = queue_dir / "entries" / "entry-a"
+            self.assertFalse((entry_dir / "claim.lock").exists())
+
     def test_cross_run_queue_run_once_releases_queue_claim_after_unexpected_execution_error(self):
         with tempfile.TemporaryDirectory(dir=ROOT) as raw:
             base = Path(raw)
