@@ -68,6 +68,59 @@ def minimal_state(run_id: str) -> dict:
     }
 
 
+def successful_agent_command() -> list[str]:
+    script = (
+        "import json, os; "
+        "from pathlib import Path; "
+        "payload = {"
+        "'run_id': os.environ['HARNESS_RUN_ID'], "
+        "'job_id': os.environ['HARNESS_JOB_ID'], "
+        "'agent': os.environ['HARNESS_AGENT'], "
+        "'adapter': os.environ['HARNESS_AGENT_ADAPTER'], "
+        "'status': 'passed', "
+        "'summary': 'cross-run queue smoke passed', "
+        "'findings': [], "
+        "'evidence': [], "
+        "'not_tested': [], "
+        "'residual_risks': [], "
+        "'generated_at': '2026-06-23T00:00:00Z'"
+        "}; "
+        "Path(os.environ['HARNESS_AGENT_OUTPUT_FILE']).write_text("
+        "json.dumps(payload, indent=2) + '\\n', encoding='utf-8'"
+        ")"
+    )
+    return [sys.executable, "-c", script]
+
+
+def build_queued_entry_fixture(
+    base: Path,
+    *,
+    allowed_groups: list[str],
+    allowed_worker_id: str | None = None,
+) -> tuple[Path, Path]:
+    run_dir = base / "harness" / "runs" / "run-a"
+    queue_dir = base / "queue"
+    write_json(run_dir / "state.json", minimal_state("run-a"))
+    cli.create_generic_agent_job(
+        run_dir,
+        "job-a",
+        agent="generic-test-agent",
+        command=successful_agent_command(),
+        root=base,
+    )
+    cli.create_cross_run_queue_entry(
+        queue_dir,
+        "entry-a",
+        run_dir=run_dir,
+        job_id="job-a",
+        creator="codex",
+        allowed_worker_id=allowed_worker_id,
+        allowed_worker_groups=allowed_groups,
+        root=base,
+    )
+    return run_dir, queue_dir
+
+
 class CrossRunQueueSchemaTest(unittest.TestCase):
     def test_cross_run_queue_entry_schema_accepts_minimal_queued_entry(self):
         Draft202012Validator(load_schema(ENTRY_SCHEMA)).validate(valid_entry())
@@ -159,6 +212,65 @@ class CrossRunQueueCreationTest(unittest.TestCase):
                 )
 
             self.assertIn("referenced job does not exist", str(raised.exception))
+
+
+class CrossRunQueueExecutionTest(unittest.TestCase):
+    def test_worker_group_must_be_authorized_to_claim_queue_entry(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            base = Path(raw)
+            _, queue_dir = build_queued_entry_fixture(base, allowed_groups=["local"])
+
+            claimed = cli.try_claim_cross_run_queue_entry(
+                queue_dir,
+                "entry-a",
+                worker_id="worker-a",
+                worker_groups=["remote"],
+                root=base,
+            )
+
+            entry = json.loads(
+                (queue_dir / "entries" / "entry-a" / "entry.json").read_text(
+                    encoding="utf-8",
+                )
+            )
+            self.assertIsNone(claimed)
+            self.assertEqual(entry["status"], "queued")
+            self.assertFalse((queue_dir / "entries" / "entry-a" / "claim.lock").exists())
+
+    def test_cross_run_queue_run_once_executes_authorized_entry_once(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            base = Path(raw)
+            run_dir, queue_dir = build_queued_entry_fixture(base, allowed_groups=["local"])
+            before_state = (run_dir / "state.json").read_text(encoding="utf-8")
+
+            summary = cli.cross_run_queue_run_once(
+                queue_dir,
+                worker_id="worker-a",
+                worker_groups=["local"],
+                root=base,
+            )
+            second_summary = cli.cross_run_queue_run_once(
+                queue_dir,
+                worker_id="worker-b",
+                worker_groups=["local"],
+                root=base,
+            )
+
+            job = json.loads((run_dir / "jobs" / "job-a" / "job.json").read_text(encoding="utf-8"))
+            entry = json.loads(
+                (queue_dir / "entries" / "entry-a" / "entry.json").read_text(
+                    encoding="utf-8",
+                )
+            )
+            self.assertEqual(summary["executed_entries"], ["entry-a"])
+            self.assertEqual(summary["skipped_entries"], [])
+            self.assertEqual(second_summary["executed_entries"], [])
+            self.assertEqual(second_summary["skipped_entries"], ["entry-a"])
+            self.assertEqual(job["status"], "succeeded")
+            self.assertEqual(entry["status"], "succeeded")
+            self.assertEqual(entry["terminal_job_status"], "succeeded")
+            self.assertTrue((run_dir / "jobs" / "job-a" / "output.json").exists())
+            self.assertEqual((run_dir / "state.json").read_text(encoding="utf-8"), before_state)
 
 
 if __name__ == "__main__":

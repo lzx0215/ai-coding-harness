@@ -2123,6 +2123,18 @@ def cross_run_queue_entry_path(queue_dir: Path | str, entry_id: str) -> Path:
     return cross_run_queue_entry_dir(queue_dir, entry_id) / "entry.json"
 
 
+def cross_run_queue_claim_lock_dir(queue_dir: Path | str, entry_id: str) -> Path:
+    return cross_run_queue_entry_dir(queue_dir, entry_id) / CLAIM_LOCK_DIR_NAME
+
+
+def cross_run_queue_claim_owner_path(queue_dir: Path | str, entry_id: str) -> Path:
+    return cross_run_queue_claim_lock_dir(queue_dir, entry_id) / "owner.json"
+
+
+def cross_run_queue_claim_lock_relative_path(entry_id: str) -> str:
+    return f"entries/{entry_id}/{CLAIM_LOCK_DIR_NAME}"
+
+
 def cross_run_queue_events_path(queue_dir: Path | str) -> Path:
     return Path(queue_dir) / "events.log"
 
@@ -2206,6 +2218,15 @@ def load_cross_run_queue_entry(queue_dir: Path | str, entry_id: str) -> dict[str
     if entry is None:
         raise HarnessCliError(f"cross-run queue entry cannot be loaded: {entry_path}")
     return entry
+
+
+def write_cross_run_queue_entry(
+    queue_dir: Path | str,
+    entry_id: str,
+    entry: dict[str, Any],
+) -> None:
+    validate_json_payload(entry, CROSS_RUN_QUEUE_ENTRY_SCHEMA, "cross-run-queue-entry")
+    write_json_atomic(cross_run_queue_entry_path(queue_dir, entry_id), entry)
 
 
 def repository_relative_path(path: Path, *, root: Path) -> str:
@@ -2293,6 +2314,280 @@ def create_cross_run_queue_entry(
         details={"run_id": state["run_id"], "job_id": job_id},
     )
     return entry
+
+
+def cross_run_queue_worker_authorized(
+    entry: dict[str, Any],
+    *,
+    worker_id: str,
+    worker_groups: list[str],
+) -> bool:
+    allowed_worker_id = entry.get("allowed_worker_id")
+    if allowed_worker_id is not None and allowed_worker_id == worker_id:
+        return True
+    allowed_worker_groups = set(entry.get("allowed_worker_groups", []))
+    return bool(allowed_worker_groups.intersection(worker_groups))
+
+
+def build_cross_run_queue_claim_owner(
+    *,
+    queue_id: str,
+    entry_id: str,
+    worker_id: str,
+    worker_groups: list[str],
+    claim_token: str,
+    claimed_at: datetime,
+    lease_seconds: float = DEFAULT_CLAIM_LEASE_SECONDS,
+) -> dict[str, Any]:
+    formatted_claimed_at = format_datetime(claimed_at)
+    return {
+        "schema_version": 1,
+        "queue_id": queue_id,
+        "entry_id": entry_id,
+        "worker_id": worker_id,
+        "worker_groups": worker_groups,
+        "claim_token": claim_token,
+        "claimed_at": formatted_claimed_at,
+        "lease_started_at": formatted_claimed_at,
+        "lease_heartbeat_at": formatted_claimed_at,
+        "lease_expires_at": format_datetime(add_seconds(claimed_at, lease_seconds)),
+        "lock_path": cross_run_queue_claim_lock_relative_path(entry_id),
+    }
+
+
+def release_cross_run_queue_claim(queue_dir: Path | str, entry_id: str) -> None:
+    entry_dir = cross_run_queue_entry_dir(queue_dir, entry_id)
+    remove_claim_lock_dir(cross_run_queue_claim_lock_dir(queue_dir, entry_id), entry_dir)
+
+
+def try_claim_cross_run_queue_entry(
+    queue_dir: Path | str,
+    entry_id: str,
+    *,
+    worker_id: str,
+    worker_groups: list[str],
+    root: Path | str | None = None,
+) -> dict[str, Any] | None:
+    validate_generic_agent_job_id(entry_id)
+    validate_non_empty_string(worker_id, "worker_id")
+    for group in worker_groups:
+        validate_non_empty_string(group, "worker_group")
+
+    queue_path = Path(queue_dir)
+    entry = load_cross_run_queue_entry(queue_path, entry_id)
+    if entry["status"] != "queued":
+        return None
+    if not cross_run_queue_worker_authorized(
+        entry,
+        worker_id=worker_id,
+        worker_groups=worker_groups,
+    ):
+        return None
+
+    entry_dir = cross_run_queue_entry_dir(queue_path, entry_id)
+    lock_dir = cross_run_queue_claim_lock_dir(queue_path, entry_id)
+    claim_token = new_claim_token()
+    claimed_at = datetime.now(timezone.utc)
+    owner = build_cross_run_queue_claim_owner(
+        queue_id=entry["queue_id"],
+        entry_id=entry_id,
+        worker_id=worker_id,
+        worker_groups=worker_groups,
+        claim_token=claim_token,
+        claimed_at=claimed_at,
+    )
+    if not acquire_claim_lock_dir(entry_dir, lock_dir, owner):
+        return None
+
+    try:
+        entry = load_cross_run_queue_entry(queue_path, entry_id)
+        if entry["status"] != "queued" or not cross_run_queue_worker_authorized(
+            entry,
+            worker_id=worker_id,
+            worker_groups=worker_groups,
+        ):
+            release_cross_run_queue_claim(queue_path, entry_id)
+            return None
+
+        claimed_at_text = owner["claimed_at"]
+        entry["status"] = "claimed"
+        entry["claim_owner"] = worker_id
+        entry["claim_token"] = claim_token
+        entry["claim_started_at"] = claimed_at_text
+        entry["claim_updated_at"] = claimed_at_text
+        entry["lease_expires_at"] = owner["lease_expires_at"]
+        entry["updated_at"] = claimed_at_text
+        write_cross_run_queue_entry(queue_path, entry_id, entry)
+        append_cross_run_queue_event(
+            queue_path,
+            queue_id=entry["queue_id"],
+            entry_id=entry_id,
+            event="entry_claimed",
+            actor=worker_id,
+            details={"worker_groups": worker_groups},
+        )
+        return entry
+    except Exception:
+        if lock_dir.exists():
+            try:
+                release_cross_run_queue_claim(queue_path, entry_id)
+            except HarnessCliError:
+                pass
+        raise
+
+
+def mark_cross_run_queue_entry_running(
+    queue_dir: Path | str,
+    entry: dict[str, Any],
+    *,
+    worker_id: str,
+) -> dict[str, Any]:
+    updated_at = utc_now()
+    entry["status"] = "running"
+    entry["claim_updated_at"] = updated_at
+    entry["updated_at"] = updated_at
+    write_cross_run_queue_entry(queue_dir, entry["entry_id"], entry)
+    append_cross_run_queue_event(
+        queue_dir,
+        queue_id=entry["queue_id"],
+        entry_id=entry["entry_id"],
+        event="entry_executing_job",
+        actor=worker_id,
+        details={"run_id": entry["run_id"], "job_id": entry["job_id"]},
+    )
+    return entry
+
+
+def mark_cross_run_queue_entry_terminal(
+    queue_dir: Path | str,
+    entry: dict[str, Any],
+    *,
+    status: str,
+    terminal_job_status: str | None,
+    worker_id: str,
+    details: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    updated_at = utc_now()
+    entry["status"] = status
+    entry["terminal_job_status"] = terminal_job_status
+    entry["claim_updated_at"] = updated_at
+    entry["updated_at"] = updated_at
+    write_cross_run_queue_entry(queue_dir, entry["entry_id"], entry)
+    event = "entry_completed" if status == "succeeded" else "entry_failed"
+    append_cross_run_queue_event(
+        queue_dir,
+        queue_id=entry["queue_id"],
+        entry_id=entry["entry_id"],
+        event=event,
+        actor=worker_id,
+        details=details or {"terminal_job_status": terminal_job_status},
+    )
+    return entry
+
+
+def cross_run_queue_run_once(
+    queue_dir: Path | str,
+    *,
+    worker_id: str,
+    worker_groups: list[str],
+    root: Path | str | None = None,
+) -> dict[str, Any]:
+    validate_non_empty_string(worker_id, "worker_id")
+    for group in worker_groups:
+        validate_non_empty_string(group, "worker_group")
+
+    queue_path = Path(queue_dir)
+    repo_root = resolve_repository_root(queue_path, root=root)
+    executed_entries: list[str] = []
+    skipped_entries: list[str] = []
+    entries_dir = cross_run_queue_entries_dir(queue_path)
+    if not entries_dir.exists():
+        return {"executed_entries": executed_entries, "skipped_entries": skipped_entries}
+
+    for entry_path in sorted(entries_dir.glob("*/entry.json")):
+        entry_id = entry_path.parent.name
+        claimed_entry = try_claim_cross_run_queue_entry(
+            queue_path,
+            entry_id,
+            worker_id=worker_id,
+            worker_groups=worker_groups,
+            root=repo_root,
+        )
+        if claimed_entry is None:
+            skipped_entries.append(entry_id)
+            continue
+
+        release_queue_claim = False
+        try:
+            run_dir = repo_root / claimed_entry["run_dir"]
+            before = validate_run(run_dir, root=repo_root)
+            if not before.ok:
+                raise HarnessCliError(format_errors(before.errors))
+
+            claimed_entry = mark_cross_run_queue_entry_running(
+                queue_path,
+                claimed_entry,
+                worker_id=worker_id,
+            )
+            job_claim = try_claim_job(
+                run_dir,
+                claimed_entry["job_id"],
+                worker_id=worker_id,
+                root=repo_root,
+            )
+            if job_claim is None:
+                mark_cross_run_queue_entry_terminal(
+                    queue_path,
+                    claimed_entry,
+                    status="failed",
+                    terminal_job_status=None,
+                    worker_id=worker_id,
+                    details={"reason": "referenced job could not be claimed"},
+                )
+                skipped_entries.append(entry_id)
+                release_queue_claim = True
+                continue
+
+            write_scheduler_worker(
+                run_dir,
+                worker_id=worker_id,
+                poll_interval_seconds=0.1,
+                max_iterations=1,
+                max_seconds=None,
+                root=repo_root,
+            )
+            write_scheduler_heartbeat(
+                run_dir,
+                worker_id=worker_id,
+                iteration=1,
+                status="running-job",
+                current_job_id=claimed_entry["job_id"],
+            )
+            executed_job = execute_claimed_generic_agent_job(
+                run_dir,
+                job_claim,
+                iteration=1,
+                poll_interval_seconds=0.1,
+                root=repo_root,
+            )
+            terminal_job_status = executed_job["status"]
+            terminal_entry_status = (
+                "succeeded" if terminal_job_status == "succeeded" else "failed"
+            )
+            mark_cross_run_queue_entry_terminal(
+                queue_path,
+                claimed_entry,
+                status=terminal_entry_status,
+                terminal_job_status=terminal_job_status,
+                worker_id=worker_id,
+            )
+            executed_entries.append(entry_id)
+            release_queue_claim = True
+        finally:
+            if release_queue_claim:
+                release_cross_run_queue_claim(queue_path, entry_id)
+
+    return {"executed_entries": executed_entries, "skipped_entries": skipped_entries}
 
 
 def new_claim_token() -> str:
