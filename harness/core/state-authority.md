@@ -98,8 +98,8 @@ A cross-run queue worker must claim a queue entry before it attempts to claim
 the referenced run-local job. The owning run-local job remains protected by the
 normal `jobs/<job-id>/claim.lock` and claim-token contract. Queue entries may
 record routing status such as `queued`, `claimed`, `running`, `succeeded`,
-`failed`, or `abandoned`, but those statuses do not advance the owning Harness
-run.
+`failed`, `timeout`, `cancelled`, or `abandoned`, but those statuses do not
+advance the owning Harness run.
 
 Cross-run queue recovery and cleanup are explicit operator actions. Recovery may
 requeue or abandon a queue entry with an audit artifact; cleanup records that a

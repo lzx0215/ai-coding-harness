@@ -2494,6 +2494,12 @@ def mark_cross_run_queue_entry_terminal(
     return entry
 
 
+def cross_run_queue_status_for_terminal_job(terminal_job_status: str) -> str:
+    if terminal_job_status not in TERMINAL_JOB_STATUSES:
+        raise HarnessCliError(f"job status is not terminal: {terminal_job_status}")
+    return terminal_job_status
+
+
 def cross_run_queue_run_once(
     queue_dir: Path | str,
     *,
@@ -2538,18 +2544,46 @@ def cross_run_queue_run_once(
                 claimed_entry,
                 worker_id=worker_id,
             )
-            job_claim = try_claim_job(
-                run_dir,
-                claimed_entry["job_id"],
-                worker_id=worker_id,
-                root=repo_root,
-            )
+            try:
+                job_claim = try_claim_job(
+                    run_dir,
+                    claimed_entry["job_id"],
+                    worker_id=worker_id,
+                    root=repo_root,
+                )
+            except HarnessCliError as exc:
+                mark_cross_run_queue_entry_terminal(
+                    queue_path,
+                    claimed_entry,
+                    status="failed",
+                    terminal_job_status=None,
+                    worker_id=worker_id,
+                    details={"reason": f"referenced job could not be claimed: {exc}"},
+                )
+                skipped_entries.append(entry_id)
+                release_queue_claim = True
+                continue
             if job_claim is None:
-                current_job = load_job_payload(run_dir / "jobs" / claimed_entry["job_id"] / "job.json")
+                try:
+                    current_job = load_job_payload(
+                        run_dir / "jobs" / claimed_entry["job_id"] / "job.json",
+                    )
+                except HarnessCliError as exc:
+                    mark_cross_run_queue_entry_terminal(
+                        queue_path,
+                        claimed_entry,
+                        status="failed",
+                        terminal_job_status=None,
+                        worker_id=worker_id,
+                        details={"reason": f"referenced job could not be loaded: {exc}"},
+                    )
+                    skipped_entries.append(entry_id)
+                    release_queue_claim = True
+                    continue
                 if current_job["status"] in TERMINAL_JOB_STATUSES:
                     terminal_job_status = current_job["status"]
-                    terminal_entry_status = (
-                        "succeeded" if terminal_job_status == "succeeded" else "failed"
+                    terminal_entry_status = cross_run_queue_status_for_terminal_job(
+                        terminal_job_status,
                     )
                     mark_cross_run_queue_entry_terminal(
                         queue_path,
@@ -2600,8 +2634,8 @@ def cross_run_queue_run_once(
                 root=repo_root,
             )
             terminal_job_status = executed_job["status"]
-            terminal_entry_status = (
-                "succeeded" if terminal_job_status == "succeeded" else "failed"
+            terminal_entry_status = cross_run_queue_status_for_terminal_job(
+                terminal_job_status,
             )
             mark_cross_run_queue_entry_terminal(
                 queue_path,
@@ -2712,7 +2746,7 @@ def cleanup_cross_run_queue_entry(
 
     queue_path = Path(queue_dir)
     entry = load_cross_run_queue_entry(queue_path, entry_id)
-    if entry["status"] not in {"succeeded", "failed", "abandoned"}:
+    if entry["status"] not in TERMINAL_JOB_STATUSES.union({"abandoned"}):
         raise HarnessCliError(f"entry {entry_id} is {entry['status']}, not terminal")
 
     repo_root = resolve_repository_root(queue_path, root=root)

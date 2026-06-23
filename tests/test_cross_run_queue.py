@@ -342,6 +342,57 @@ class CrossRunQueueExecutionTest(unittest.TestCase):
             self.assertEqual(entry["status"], "succeeded")
             self.assertEqual(entry["terminal_job_status"], "succeeded")
 
+    def test_cross_run_queue_run_once_preserves_cancelled_referenced_job_status(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            base = Path(raw)
+            run_dir, queue_dir = build_queued_entry_fixture(base, allowed_groups=["local"])
+            job_path = run_dir / "jobs" / "job-a" / "job.json"
+            job = json.loads(job_path.read_text(encoding="utf-8"))
+            completed_at = "2026-06-23T00:00:01Z"
+            job["status"] = "cancelled"
+            job["completed_at"] = completed_at
+            job["updated_at"] = completed_at
+            write_json(job_path, job)
+
+            summary = cli.cross_run_queue_run_once(
+                queue_dir,
+                worker_id="worker-a",
+                worker_groups=["local"],
+                root=base,
+            )
+
+            entry = json.loads(
+                (queue_dir / "entries" / "entry-a" / "entry.json").read_text(
+                    encoding="utf-8",
+                )
+            )
+            self.assertEqual(summary["executed_entries"], [])
+            self.assertEqual(summary["skipped_entries"], ["entry-a"])
+            self.assertEqual(entry["status"], "cancelled")
+            self.assertEqual(entry["terminal_job_status"], "cancelled")
+
+    def test_cross_run_queue_run_once_marks_invalid_referenced_job_failed_without_stranding_lock(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            base = Path(raw)
+            _, queue_dir = build_queued_entry_fixture(base, allowed_groups=["local"])
+            run_dir = base / "harness" / "runs" / "run-a"
+            (run_dir / "jobs" / "job-a" / "job.json").write_text("{", encoding="utf-8")
+
+            summary = cli.cross_run_queue_run_once(
+                queue_dir,
+                worker_id="worker-a",
+                worker_groups=["local"],
+                root=base,
+            )
+
+            entry_dir = queue_dir / "entries" / "entry-a"
+            entry = json.loads((entry_dir / "entry.json").read_text(encoding="utf-8"))
+            self.assertEqual(summary["executed_entries"], [])
+            self.assertEqual(summary["skipped_entries"], ["entry-a"])
+            self.assertEqual(entry["status"], "failed")
+            self.assertIsNone(entry["terminal_job_status"])
+            self.assertFalse((entry_dir / "claim.lock").exists())
+
 
 class CrossRunQueueCliTest(unittest.TestCase):
     def test_module_entrypoint_creates_and_runs_cross_run_queue_entry(self):

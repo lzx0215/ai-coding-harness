@@ -49,7 +49,7 @@
     },
     "status": {
       "type": "string",
-      "enum": ["queued", "claimed", "running", "succeeded", "failed", "abandoned"]
+      "enum": ["queued", "claimed", "running", "succeeded", "failed", "timeout", "cancelled", "abandoned"]
     },
     "created_at": { "type": "string", "pattern": "Z$" },
     "updated_at": { "type": "string", "pattern": "Z$" },
