@@ -26,7 +26,7 @@ Phase 7 stale-running detection and explicit recovery are implemented in source.
 
 Phase 8 multi-worker concurrency hardening is implemented in source. Local filesystem workers now use claim tokens, claim lease diagnostics, claim-aware job writes, guarded raw/output artifact publishing, recovery safeguards for fresh matching leases, and a live multi-worker scheduler smoke for local filesystem workers.
 
-Phase 9 Cross-Run / Cloud Queue is a Strict gated future phase. It must start with a local cross-run queue slice only after local scheduler entry gates are recorded; cloud queue adapters are later work requiring explicit provider, credential, cost, cleanup, and audit approval.
+Phase 9 Cross-Run / Cloud Queue is a Strict gated phase. The local scheduler entry gates are closed by `harness/runs/2026-06-23-phase-9-entry-gate-local-scheduler-closure` plus successful remote CI run `27999826047` for commit `c2f2299ee5803e770e2e1db6ed71c22d2397abe6`. Phase 9A must start with the local cross-run queue slice in `docs/superpowers/plans/2026-06-23-phase-9a-cross-run-local-queue-implementation.md`; cloud queue adapters are later work requiring explicit provider, credential, cost, cleanup, and audit approval.
 
 The Phase 5.2 `master` baseline also adds team-repeatable validation entrypoints and packaged CLI hardening:
 
@@ -49,4 +49,4 @@ Follow-up Phase 3 provenance hardening now rejects empty `source_evidence` for r
 
 ## Next Step
 
-Close the Phase 9 entry gates with `harness/runs/2026-06-23-phase-9-entry-gate-local-scheduler-closure` before writing any Phase 9A implementation plan. If remote CI is not run for the closure baseline, record that as residual risk with explicit user decision before treating the Phase 9 implementation gate as satisfied.
+Execute `docs/superpowers/plans/2026-06-23-phase-9a-cross-run-local-queue-implementation.md` for Phase 9A local cross-run queue. Do not start Phase 9B cloud queue work until Phase 9A is proven and the user approves provider, credential, cost, cleanup, and audit boundaries.
