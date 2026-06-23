@@ -1,3 +1,4 @@
+import io
 import json
 import os
 import shutil
@@ -56,6 +57,64 @@ def write_state(run_dir: Path, state: dict) -> None:
 def write_json(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+
+def minimal_agent_job(job_id: str = "audit-job", status: str = "succeeded") -> dict:
+    return {
+        "job_id": job_id,
+        "run_id": "test-run",
+        "agent": "claude-code",
+        "adapter": "claude-review",
+        "status": status,
+        "input_file": "input.json",
+        "output_file": "output.json",
+        "raw_log_file": "raw.log",
+        "created_at": "2026-06-20T00:00:00Z",
+        "started_at": "2026-06-20T00:00:01Z",
+        "completed_at": "2026-06-20T00:02:00Z",
+        "updated_at": "2026-06-20T00:02:00Z",
+        "worker_id": None,
+        "timeout_seconds": 900,
+        "error_reason": None,
+        "provenance": {
+            "agent": "claude-code",
+            "adapter_version": "0.1.0",
+            "runtime": "local-cli",
+        },
+    }
+
+
+def minimal_agent_result(job_id: str = "audit-job") -> dict:
+    return {
+        "run_id": "test-run",
+        "job_id": job_id,
+        "agent": "claude-code",
+        "adapter": "claude-review",
+        "status": "passed",
+        "summary": "No issues found.",
+        "findings": [],
+        "evidence": [],
+        "not_tested": [],
+        "residual_risks": [],
+        "generated_at": "2026-06-20T00:02:00Z",
+    }
+
+
+def minimal_agent_aggregation(job_id: str = "audit-job") -> dict:
+    return {
+        "run_id": "test-run",
+        "generated_at": "2026-06-20T00:03:00Z",
+        "consumed_jobs": [job_id],
+        "succeeded_jobs": [job_id],
+        "failed_jobs": [],
+        "timeout_jobs": [],
+        "cancelled_jobs": [],
+        "incomplete_jobs": [],
+        "findings": [],
+        "conflicts": [],
+        "recommended_transition": None,
+        "residual_risks": [],
+    }
 
 
 def review_decision_payload(
@@ -166,6 +225,137 @@ def historical_run_dirs() -> list[Path]:
 
 
 class HarnessCliTest(unittest.TestCase):
+    def test_audit_run_reports_resumable_without_mutating_state(self):
+        with temporary_run_directory() as raw:
+            run_dir = Path(raw)
+            write_state(run_dir, minimal_state(status="planned"))
+            before = (run_dir / "state.json").read_bytes()
+
+            report = cli.audit_run(run_dir, root=ROOT)
+            after = (run_dir / "state.json").read_bytes()
+
+        self.assertEqual(report["classification"], "resumable")
+        self.assertEqual(report["validation"]["ok"], True)
+        self.assertEqual(report["state"]["status"], "planned")
+        self.assertIn("in_progress", report["next_transitions"])
+        self.assertEqual(report["actions_required"], [])
+        self.assertEqual(after, before)
+
+    def test_audit_run_reports_user_decision_for_unindexed_terminal_artifacts(self):
+        with temporary_run_directory() as raw:
+            run_dir = Path(raw)
+            job_dir = run_dir / "jobs" / "audit-job"
+            write_json(job_dir / "job.json", minimal_agent_job())
+            write_json(job_dir / "output.json", minimal_agent_result())
+            write_json(run_dir / "jobs" / "aggregation.json", minimal_agent_aggregation())
+            write_state(run_dir, minimal_state(status="verified"))
+            before = (run_dir / "state.json").read_bytes()
+
+            report = cli.audit_run(run_dir, root=ROOT)
+            saved_state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
+            after = (run_dir / "state.json").read_bytes()
+
+        self.assertEqual(report["classification"], "needs_user_decision")
+        self.assertEqual(report["validation"]["ok"], True)
+        self.assertEqual(report["job_artifacts"]["ok"], True)
+        self.assertEqual(report["aggregation"]["ok"], True)
+        self.assertEqual(report["job_artifacts"]["terminal_unindexed_jobs"], ["audit-job"])
+        self.assertEqual(report["aggregation"]["indexed"], False)
+        self.assertTrue(
+            any("index terminal agent-job" in action for action in report["actions_required"]),
+            report["actions_required"],
+        )
+        self.assertEqual(saved_state["evidence"], [])
+        self.assertEqual(after, before)
+
+    def test_audit_run_reports_not_auto_recoverable_for_invalid_job_artifact(self):
+        with temporary_run_directory() as raw:
+            run_dir = Path(raw)
+            job_dir = run_dir / "jobs" / "audit-job"
+            job = minimal_agent_job("audit-job")
+            job["completed_at"] = None
+            write_json(job_dir / "job.json", job)
+            write_state(run_dir, minimal_state(status="verified"))
+
+            report = cli.audit_run(run_dir, root=ROOT)
+
+        self.assertEqual(report["classification"], "not_auto_recoverable")
+        self.assertEqual(report["validation"]["ok"], True)
+        self.assertEqual(report["job_artifacts"]["ok"], False)
+        self.assertTrue(
+            any(
+                "terminal job requires completed_at" in error
+                for error in report["job_artifacts"]["errors"]
+            ),
+            report["job_artifacts"]["errors"],
+        )
+
+    def test_audit_run_reuses_aggregation_semantic_validation(self):
+        with temporary_run_directory() as raw:
+            run_dir = Path(raw)
+            job_dir = run_dir / "jobs" / "audit-job"
+            aggregation = minimal_agent_aggregation()
+            aggregation["failed_jobs"] = ["audit-job"]
+            write_json(job_dir / "job.json", minimal_agent_job())
+            write_json(job_dir / "output.json", minimal_agent_result())
+            write_json(run_dir / "jobs" / "aggregation.json", aggregation)
+            write_state(run_dir, minimal_state(status="verified"))
+
+            report = cli.audit_run(run_dir, root=ROOT)
+
+        self.assertEqual(report["classification"], "not_auto_recoverable")
+        self.assertEqual(report["aggregation"]["ok"], False)
+        self.assertTrue(
+            any(
+                "multiple terminal aggregation buckets" in error
+                for error in report["aggregation"]["errors"]
+            ),
+            report["aggregation"]["errors"],
+        )
+
+    def test_audit_run_treats_failed_terminal_job_without_output_as_decision(self):
+        with temporary_run_directory() as raw:
+            run_dir = Path(raw)
+            job_dir = run_dir / "jobs" / "audit-job"
+            job = minimal_agent_job(status="failed")
+            job["error_reason"] = "agent command exited with code 1"
+            write_json(job_dir / "job.json", job)
+            write_state(run_dir, minimal_state(status="verified"))
+
+            report = cli.audit_run(run_dir, root=ROOT)
+
+        self.assertEqual(report["classification"], "needs_user_decision")
+        self.assertEqual(report["job_artifacts"]["ok"], True)
+        self.assertEqual(report["job_artifacts"]["terminal_unindexed_jobs"], ["audit-job"])
+        self.assertTrue(
+            any(
+                "terminal output is missing" in warning
+                for warning in report["job_artifacts"]["warnings"]
+            ),
+            report["job_artifacts"]["warnings"],
+        )
+
+    def test_audit_run_cli_outputs_machine_and_human_reports(self):
+        with temporary_run_directory() as raw:
+            run_dir = Path(raw)
+            write_state(run_dir, minimal_state(status="planned"))
+
+            json_stdout = io.StringIO()
+            with mock.patch("sys.stdout", json_stdout):
+                json_exit = cli.main(["audit-run", str(run_dir), "--format", "json"])
+            parsed = json.loads(json_stdout.getvalue())
+
+            text_stdout = io.StringIO()
+            with mock.patch("sys.stdout", text_stdout):
+                text_exit = cli.main(["audit-run", str(run_dir)])
+            text_output = text_stdout.getvalue()
+
+        self.assertEqual(json_exit, 0)
+        self.assertEqual(parsed["classification"], "resumable")
+        self.assertEqual(text_exit, 0)
+        self.assertIn("Audit classification: resumable", text_output)
+        self.assertIn("Validation: ok", text_output)
+
     def test_validate_accepts_example_run(self):
         result = cli.validate_run(
             ROOT / "harness" / "runs" / "example-fast-doc-change",

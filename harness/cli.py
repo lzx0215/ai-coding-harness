@@ -1465,6 +1465,414 @@ def check_ready(
     return readiness.check_run_readiness(resolved_run_dir, state)
 
 
+def path_for_report(path: Path, *, base: Path | None = None) -> str:
+    candidate = path.resolve(strict=False)
+    if base is not None:
+        try:
+            return candidate.relative_to(base.resolve(strict=False)).as_posix()
+        except ValueError:
+            pass
+    return str(candidate)
+
+
+def evidence_indexes_path(
+    state: dict[str, Any],
+    evidence_type: str,
+    target_path: Path,
+    *,
+    root: Path,
+    run_dir: Path,
+) -> bool:
+    for _index, evidence in evidence_items(state):
+        if evidence.get("type") != evidence_type:
+            continue
+        raw_path = evidence.get("path")
+        if not isinstance(raw_path, str) or not raw_path.strip():
+            continue
+        candidate = first_existing_evidence_path(raw_path, root=root, run_dir=run_dir)
+        if candidate is not None and same_path(candidate, target_path):
+            return True
+    return False
+
+
+def audit_terminal_job_output(
+    job: dict[str, Any],
+    *,
+    job_dir: Path,
+) -> tuple[list[str], list[str]]:
+    if job.get("status") not in TERMINAL_JOB_STATUSES:
+        return [], []
+
+    job_id = job.get("job_id")
+    status = job.get("status")
+    output_file = job.get("output_file")
+    if not isinstance(output_file, str) or not output_file.strip():
+        message = f"job {job_id} terminal output is missing or invalid: output_file"
+        if status == "succeeded":
+            return [message], []
+        return [], [message]
+
+    raw_output_path = Path(output_file)
+    output_path = (
+        raw_output_path
+        if raw_output_path.is_absolute()
+        else job_dir / raw_output_path
+    )
+    output_path = output_path.resolve(strict=False)
+    if not is_within_path(output_path, job_dir.resolve(strict=False)):
+        return [
+            f"job {job_id} terminal output escapes job directory: {output_file}",
+        ], []
+    if not output_path.exists():
+        message = f"job {job_id} terminal output is missing: {output_file}"
+        if status == "succeeded":
+            return [message], []
+        return [], [message]
+
+    agent_result, result_errors = validate_json_artifact(
+        output_path,
+        AGENT_RESULT_SCHEMA,
+        "agent-result",
+    )
+    messages = [
+        f"job {job_id} terminal output is invalid: {error}"
+        for error in result_errors
+    ]
+    if agent_result is None:
+        if status == "succeeded":
+            return messages, []
+        return [], messages
+
+    messages.extend(
+        f"job {job_id} terminal output is invalid: {error}"
+        for error in validate_agent_result_matches_job(agent_result, job)
+    )
+    if status == "succeeded":
+        return messages, []
+    return [], messages
+
+
+def audit_job_artifacts(
+    run_dir: Path,
+    state: dict[str, Any] | None,
+    *,
+    root: Path,
+) -> tuple[dict[str, Any], dict[str, IndexedJob]]:
+    report: dict[str, Any] = {
+        "ok": True,
+        "errors": [],
+        "warnings": [],
+        "jobs": [],
+        "terminal_unindexed_jobs": [],
+        "queued_jobs": [],
+        "running_jobs": [],
+    }
+    if not isinstance(state, dict) or not isinstance(state.get("run_id"), str):
+        report["ok"] = False
+        report["errors"].append("state run_id is unavailable; job artifacts not audited")
+        return report, {}
+
+    indexed_jobs, indexed_errors = load_indexed_job_evidence(
+        state,
+        root=root,
+        run_dir=run_dir,
+    )
+    report["errors"].extend(indexed_errors)
+
+    try:
+        jobs = sorted(
+            load_scheduler_jobs(run_dir, root=root),
+            key=lambda item: item["job_id"],
+        )
+    except HarnessCliError as exc:
+        report["errors"].extend(str(exc).splitlines())
+        report["ok"] = False
+        return report, indexed_jobs
+
+    all_jobs: dict[str, IndexedJob] = {}
+    for job in jobs:
+        job_id = job["job_id"]
+        status = job["status"]
+        job_path = run_dir / "jobs" / job_id / "job.json"
+        indexed = job_id in indexed_jobs
+        all_jobs[job_id] = IndexedJob(-1, job_path, job)
+        job_report = {
+            "job_id": job_id,
+            "status": status,
+            "path": path_for_report(job_path, base=run_dir),
+            "indexed": indexed,
+            "output_errors": [],
+            "output_warnings": [],
+        }
+
+        output_errors, output_warnings = audit_terminal_job_output(
+            job,
+            job_dir=job_path.parent,
+        )
+        if output_errors:
+            job_report["output_errors"] = output_errors
+            report["errors"].extend(output_errors)
+        if output_warnings:
+            job_report["output_warnings"] = output_warnings
+            report["warnings"].extend(output_warnings)
+
+        if status in TERMINAL_JOB_STATUSES and not indexed:
+            report["terminal_unindexed_jobs"].append(job_id)
+        if status == "queued":
+            report["queued_jobs"].append(job_id)
+        if status == "running":
+            report["running_jobs"].append(job_id)
+        report["jobs"].append(job_report)
+
+    report["ok"] = not report["errors"]
+    return report, all_jobs
+
+
+def audit_aggregation_artifact(
+    run_dir: Path,
+    state: dict[str, Any] | None,
+    *,
+    root: Path,
+    jobs_by_id: dict[str, IndexedJob],
+) -> dict[str, Any]:
+    aggregation_path = run_dir / "jobs" / "aggregation.json"
+    report: dict[str, Any] = {
+        "present": aggregation_path.exists(),
+        "path": path_for_report(aggregation_path, base=run_dir),
+        "indexed": False,
+        "ok": True,
+        "errors": [],
+    }
+    if not aggregation_path.exists():
+        return report
+
+    if isinstance(state, dict):
+        report["indexed"] = evidence_indexes_path(
+            state,
+            "aggregation",
+            aggregation_path,
+            root=root,
+            run_dir=run_dir,
+        )
+
+    aggregation, aggregation_errors = validate_json_artifact(
+        aggregation_path,
+        AGGREGATION_SCHEMA,
+        "aggregation",
+    )
+    report["errors"].extend(aggregation_errors)
+    if aggregation is not None:
+        report["errors"].extend(validate_aggregation_semantics(aggregation))
+        if isinstance(state, dict) and isinstance(state.get("run_id"), str):
+            if aggregation.get("run_id") != state["run_id"]:
+                report["errors"].append(
+                    f"aggregation run_id {aggregation.get('run_id')} "
+                    f"does not match state run_id {state['run_id']}",
+                )
+        report["errors"].extend(
+            validate_aggregation_against_jobs(aggregation, jobs_by_id),
+        )
+
+    report["ok"] = not report["errors"]
+    return report
+
+
+def classify_audit_report(report: dict[str, Any]) -> str:
+    if (
+        not report["validation"]["ok"]
+        or not report["job_artifacts"]["ok"]
+        or not report["aggregation"]["ok"]
+    ):
+        return "not_auto_recoverable"
+
+    state_status = report["state"].get("status")
+    if state_status in {"blocked", "needs_user_decision", "external_review_unavailable"}:
+        return "needs_user_decision"
+
+    if report["job_artifacts"]["terminal_unindexed_jobs"]:
+        return "needs_user_decision"
+    if report["job_artifacts"].get("warnings"):
+        return "needs_user_decision"
+    if report["aggregation"]["present"] and not report["aggregation"]["indexed"]:
+        return "needs_user_decision"
+
+    stale_detection = report.get("stale_detection", {})
+    if stale_detection.get("stale_jobs") or stale_detection.get("invalid_jobs"):
+        return "needs_user_decision"
+
+    return "resumable"
+
+
+def audit_actions_required(report: dict[str, Any]) -> list[str]:
+    actions: list[str] = []
+    if not report["validation"]["ok"]:
+        actions.append("fix validation errors before resume")
+    if not report["job_artifacts"]["ok"]:
+        actions.append("correct job artifacts before resume or recovery")
+    if not report["aggregation"]["ok"]:
+        actions.append("correct aggregation artifact before consuming it")
+
+    state_status = report["state"].get("status")
+    if state_status in {"blocked", "needs_user_decision", "external_review_unavailable"}:
+        actions.append(f"operator decision required for state {state_status}")
+
+    terminal_unindexed_jobs = report["job_artifacts"]["terminal_unindexed_jobs"]
+    if terminal_unindexed_jobs:
+        actions.append(
+            "operator decision required to index terminal agent-job artifacts: "
+            + ", ".join(terminal_unindexed_jobs),
+        )
+    if report["job_artifacts"].get("warnings"):
+        actions.append("operator decision required for terminal job output warnings")
+    if report["aggregation"]["present"] and not report["aggregation"]["indexed"]:
+        actions.append(
+            "operator decision required to index aggregation artifact: "
+            + report["aggregation"]["path"],
+        )
+
+    stale_detection = report.get("stale_detection", {})
+    if stale_detection.get("stale_jobs"):
+        actions.append(
+            "operator decision required before recovering stale running jobs: "
+            + ", ".join(stale_detection["stale_jobs"]),
+        )
+    if stale_detection.get("invalid_jobs"):
+        actions.append(
+            "operator correction required for invalid running jobs: "
+            + ", ".join(stale_detection["invalid_jobs"]),
+        )
+
+    return actions
+
+
+def audit_run(
+    run_dir: Path | str,
+    *,
+    heartbeat_timeout_seconds: float = 60.0,
+    root: Path | str | None = None,
+) -> dict[str, Any]:
+    validate_heartbeat_timeout(heartbeat_timeout_seconds)
+    resolved_run_dir = Path(run_dir)
+    repo_root = resolve_repository_root(resolved_run_dir, root=root)
+    validation = validate_run(resolved_run_dir, root=repo_root)
+
+    state: dict[str, Any] | None = None
+    state_load_errors: list[str] = []
+    try:
+        loaded_state = load_json(state_path(resolved_run_dir))
+        if isinstance(loaded_state, dict):
+            state = loaded_state
+        else:
+            state_load_errors.append("state file must contain an object")
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        state_load_errors.append(f"cannot read state file: {exc}")
+
+    state_report = {
+        "run_id": state.get("run_id") if isinstance(state, dict) else None,
+        "status": state.get("status") if isinstance(state, dict) else None,
+        "track": state.get("track") if isinstance(state, dict) else None,
+        "current_workflow": (
+            state.get("current_workflow") if isinstance(state, dict) else None
+        ),
+    }
+    validation_errors = list(validation.errors)
+    validation_errors.extend(
+        error for error in state_load_errors if error not in validation_errors
+    )
+
+    job_report, jobs_by_id = audit_job_artifacts(
+        resolved_run_dir,
+        state,
+        root=repo_root,
+    )
+    aggregation_report = audit_aggregation_artifact(
+        resolved_run_dir,
+        state,
+        root=repo_root,
+        jobs_by_id=jobs_by_id,
+    )
+
+    stale_detection: dict[str, Any] = {
+        "heartbeat_timeout_seconds": heartbeat_timeout_seconds,
+        "active_jobs": [],
+        "recent_jobs": [],
+        "stale_jobs": [],
+        "invalid_jobs": [],
+        "jobs": [],
+        "errors": [],
+    }
+    if not validation_errors and job_report["ok"]:
+        try:
+            stale_detection = detect_stale_running_jobs(
+                resolved_run_dir,
+                heartbeat_timeout_seconds=heartbeat_timeout_seconds,
+                root=repo_root,
+            )
+            stale_detection["errors"] = []
+        except HarnessCliError as exc:
+            stale_detection["errors"] = str(exc).splitlines()
+
+    report: dict[str, Any] = {
+        "schema_version": "0.1.0",
+        "generated_at": utc_now(),
+        "run_dir": path_for_report(resolved_run_dir),
+        "run_id": state_report["run_id"],
+        "state": state_report,
+        "validation": {
+            "ok": not validation_errors,
+            "errors": validation_errors,
+        },
+        "job_artifacts": job_report,
+        "aggregation": aggregation_report,
+        "stale_detection": stale_detection,
+        "next_transitions": sorted(
+            ALLOWED_TRANSITIONS.get(state_report["status"], set())
+            if isinstance(state_report["status"], str)
+            else []
+        ),
+        "read_only": {
+            "state_mutated": False,
+            "evidence_indexed": False,
+            "recovery_performed": False,
+        },
+    }
+    report["classification"] = classify_audit_report(report)
+    report["actions_required"] = audit_actions_required(report)
+    return report
+
+
+def format_audit_report(report: dict[str, Any]) -> str:
+    validation_label = "ok" if report["validation"]["ok"] else "errors"
+    job_label = "ok" if report["job_artifacts"]["ok"] else "errors"
+    aggregation_label = "ok" if report["aggregation"]["ok"] else "errors"
+    lines = [
+        f"Audit classification: {report['classification']}",
+        f"Run: {report.get('run_id') or '<unknown>'}",
+        f"Run directory: {report['run_dir']}",
+        f"Status: {report['state'].get('status') or '<unknown>'}",
+        f"Validation: {validation_label}",
+        f"Job artifacts: {job_label}",
+        f"Aggregation: {aggregation_label}",
+        "Read-only: state_mutated=false evidence_indexed=false recovery_performed=false",
+    ]
+    next_transitions = report.get("next_transitions", [])
+    if next_transitions:
+        lines.append("Next transitions: " + ", ".join(next_transitions))
+    if report["actions_required"]:
+        lines.append("Actions required:")
+        lines.extend(f"- {action}" for action in report["actions_required"])
+    for section_name, section in (
+        ("Validation errors", report["validation"]),
+        ("Job artifact errors", report["job_artifacts"]),
+        ("Aggregation errors", report["aggregation"]),
+    ):
+        errors = section.get("errors", [])
+        if errors:
+            lines.append(f"{section_name}:")
+            lines.extend(f"- {error}" for error in errors)
+    return "\n".join(lines)
+
+
 def index_evidence(
     run_dir: Path | str,
     evidence_type: str,
@@ -4991,6 +5399,14 @@ def build_parser() -> argparse.ArgumentParser:
     validate = subparsers.add_parser("validate", help="Validate a Harness run directory.")
     validate.add_argument("run_dir")
 
+    audit_run_parser = subparsers.add_parser(
+        "audit-run",
+        help="Read-only audit report for resume and recovery decisions.",
+    )
+    audit_run_parser.add_argument("run_dir")
+    audit_run_parser.add_argument("--format", choices=["text", "json"], default="text")
+    audit_run_parser.add_argument("--heartbeat-timeout-seconds", type=float, default=60.0)
+
     check_ready_parser = subparsers.add_parser(
         "check-ready",
         help="Report non-mutating Phase 2 readiness warnings for a Harness run.",
@@ -5175,6 +5591,17 @@ def main(argv: list[str] | None = None) -> int:
                 print(format_errors(result.errors))
                 return 1
             print(f"valid: {result.run_dir}")
+            return 0
+
+        if args.command == "audit-run":
+            report = audit_run(
+                args.run_dir,
+                heartbeat_timeout_seconds=args.heartbeat_timeout_seconds,
+            )
+            if args.format == "json":
+                print(json.dumps(report, indent=2, sort_keys=True))
+            else:
+                print(format_audit_report(report))
             return 0
 
         if args.command == "check-ready":
