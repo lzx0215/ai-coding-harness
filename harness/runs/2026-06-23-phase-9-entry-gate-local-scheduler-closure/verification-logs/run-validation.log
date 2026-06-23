@@ -1,0 +1,56 @@
+
+== validate harness\runs\2026-06-19-standard-adapter-cli ==
+valid: harness\runs\2026-06-19-standard-adapter-cli
+exit_code: 0
+
+== validate harness\runs\2026-06-19-v0.1.1-audit-closure ==
+valid: harness\runs\2026-06-19-v0.1.1-audit-closure
+exit_code: 0
+
+== validate harness\runs\2026-06-19-v0.2-implementation-plan ==
+valid: harness\runs\2026-06-19-v0.2-implementation-plan
+exit_code: 0
+
+== validate harness\runs\2026-06-19-v0.2-plan-amendment ==
+valid: harness\runs\2026-06-19-v0.2-plan-amendment
+exit_code: 0
+
+== validate harness\runs\2026-06-19-v0.2-reviewer-provenance-design ==
+valid: harness\runs\2026-06-19-v0.2-reviewer-provenance-design
+exit_code: 0
+
+== validate harness\runs\2026-06-19-v0.2-reviewer-provenance-implementation ==
+valid: harness\runs\2026-06-19-v0.2-reviewer-provenance-implementation
+exit_code: 0
+
+== validate harness\runs\2026-06-19-v0.2-spec-amendment ==
+valid: harness\runs\2026-06-19-v0.2-spec-amendment
+exit_code: 0
+
+== validate harness\runs\2026-06-20-phase-3-review-decision-memory-implementation ==
+valid: harness\runs\2026-06-20-phase-3-review-decision-memory-implementation
+exit_code: 0
+
+== validate harness\runs\2026-06-21-phase-4-async-substrate-closure ==
+valid: harness\runs\2026-06-21-phase-4-async-substrate-closure
+exit_code: 0
+
+== validate harness\runs\2026-06-21-phase-4-live-generic-agent-smoke ==
+valid: harness\runs\2026-06-21-phase-4-live-generic-agent-smoke
+exit_code: 0
+
+== validate harness\runs\2026-06-22-phase-5-live-scheduler-smoke ==
+valid: harness\runs\2026-06-22-phase-5-live-scheduler-smoke
+exit_code: 0
+
+== validate harness\runs\2026-06-22-phase-6-scheduler-watch-mode ==
+valid: harness\runs\2026-06-22-phase-6-scheduler-watch-mode
+exit_code: 0
+
+== validate harness\runs\2026-06-23-phase-9-entry-gate-local-scheduler-closure ==
+valid: harness\runs\2026-06-23-phase-9-entry-gate-local-scheduler-closure
+exit_code: 0
+
+== validate harness\runs\example-fast-doc-change ==
+valid: harness\runs\example-fast-doc-change
+exit_code: 0
