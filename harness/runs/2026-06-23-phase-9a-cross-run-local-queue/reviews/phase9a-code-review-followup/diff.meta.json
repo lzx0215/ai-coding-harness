@@ -1,0 +1,14 @@
+{
+    "base":  "a28e6cca4d3e9c70f913334e03dfbcec58a2e533",
+    "head":  "d54fba83a0666d92f028548b024c6ed966c497e7",
+    "includes_working_tree":  true,
+    "changed_files":  [
+                          "harness/cli.py",
+                          "harness/core/evidence.md",
+                          "harness/core/state-authority.md",
+                          "tests/test_cross_run_queue.py",
+                          "tests/test_static_contracts.py"
+                      ],
+    "diff_file":  "diff.patch",
+    "note":  "Follow-up review diff focused on fixes for the medium findings from the first Phase 9A review."
+}

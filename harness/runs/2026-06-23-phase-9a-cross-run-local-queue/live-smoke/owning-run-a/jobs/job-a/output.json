@@ -1,0 +1,13 @@
+{
+  "run_id": "phase9a-live-owning-run-a",
+  "job_id": "job-a",
+  "agent": "generic-test-agent",
+  "adapter": "generic-cli-agent",
+  "status": "passed",
+  "summary": "phase9a cross-run queue live smoke passed",
+  "findings": [],
+  "evidence": [],
+  "not_tested": [],
+  "residual_risks": [],
+  "generated_at": "2026-06-23T00:00:00Z"
+}

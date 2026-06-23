@@ -1,0 +1,11 @@
+{
+    "base":  "7f432ec058f80e46314b91846e9bfbf6d162f223",
+    "head":  "ea9f2e14096b14db4e04159ffdd724fc275532b9",
+    "includes_working_tree":  false,
+    "changed_files":  [
+                          "harness/cli.py",
+                          "tests/test_cross_run_queue.py"
+                      ],
+    "diff_file":  "diff.patch",
+    "note":  "Final follow-up review for non-HarnessCliError queue claim/load stranding and unexpected execution exceptions."
+}

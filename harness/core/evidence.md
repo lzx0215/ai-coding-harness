@@ -66,3 +66,16 @@ valid.
 
 Claim tokens and lease timestamps are control metadata, not evidence. They must
 not be auto-indexed.
+
+## Cross-Run Queue Control Files
+
+Phase 9A local cross-run queue files are control and audit artifacts, not
+completion evidence. This includes queue manifests, `events.log`,
+`entries/<entry-id>/entry.json`, `entries/<entry-id>/claim.lock/owner.json`,
+`entries/<entry-id>/recovery/*.json`, and
+`entries/<entry-id>/cleanup/*.json`.
+
+Queue entries may help Codex decide what happened, but they must not be
+auto-indexed into any owning run's `state.json.evidence[]`. Terminal run-local
+`agent-job`, `agent-result`, and `aggregation` artifacts remain under the owning
+run and must still be explicitly indexed by Codex when consumed.

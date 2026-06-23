@@ -1,0 +1,7 @@
+{
+  "worker_id": "phase9a-local-worker",
+  "last_seen_at": "2026-06-23T04:40:59Z",
+  "iteration": 1,
+  "status": "running-job",
+  "current_job_id": "job-a"
+}

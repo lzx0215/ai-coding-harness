@@ -1,0 +1,104 @@
+{
+  "run_id": "2026-06-23-phase-9a-cross-run-local-queue",
+  "harness_version": "0.2.0",
+  "state_schema_version": "0.2.0",
+  "status": "completed",
+  "track": "Strict",
+  "current_workflow": "strict-risk-change",
+  "owner": "codex",
+  "base_commit": "a28e6cca4d3e9c70f913334e03dfbcec58a2e533",
+  "created_at": "2026-06-23T03:47:56Z",
+  "updated_at": "2026-06-23T04:47:19Z",
+  "external_agents": [
+    {
+      "name": "claude-code",
+      "role": "reviewer",
+      "adapter": "claude-review",
+      "adapter_version": "0.1.0",
+      "tool": "claude_review",
+      "model": "glm-5.2[1m]",
+      "model_version": null,
+      "cli_version": "2.1.168 (Claude Code)",
+      "prompt_version": "0.2.0",
+      "state_access": "none",
+      "status": "findings"
+    }
+  ],
+  "evidence": [
+    {
+      "type": "task",
+      "path": "task.md",
+      "description": "Task definition."
+    },
+    {
+      "type": "triage",
+      "path": "triage.md",
+      "description": "Task triage."
+    },
+    {
+      "type": "plan",
+      "path": "plan.md",
+      "description": "Implementation plan."
+    },
+    {
+      "type": "verification",
+      "path": "verification-cross-run-queue.log",
+      "description": "Focused Phase 9A cross-run queue unit test log."
+    },
+    {
+      "type": "verification",
+      "path": "verification-static-contracts.log",
+      "description": "Static contract verification for schemas and CLI commands."
+    },
+    {
+      "type": "verification",
+      "path": "verification-full-suite.log",
+      "description": "Full unittest discovery verification log."
+    },
+    {
+      "type": "verification",
+      "path": "verification-diff-check.log",
+      "description": "Whitespace diff check log."
+    },
+    {
+      "type": "verification",
+      "path": "verification-run-validation.log",
+      "description": "Source-controlled Harness run validation log."
+    },
+    {
+      "type": "verification",
+      "path": "live-smoke/command-log.md",
+      "description": "Live smoke command log for two owning runs through one local cross-run queue."
+    },
+    {
+      "type": "review-input",
+      "path": "harness/runs/2026-06-23-phase-9a-cross-run-local-queue/reviews/phase9a-code-review-claim-coverage-followup/claude-review.input.json",
+      "description": "Final Claude Code rereview input."
+    },
+    {
+      "type": "review-output",
+      "path": "harness/runs/2026-06-23-phase-9a-cross-run-local-queue/reviews/phase9a-code-review-claim-coverage-followup/claude-review.json",
+      "description": "Final Claude Code rereview output."
+    },
+    {
+      "type": "review-evidence",
+      "path": "harness/runs/2026-06-23-phase-9a-cross-run-local-queue/reviews/phase9a-code-review-claim-coverage-followup/claude-review.evidence.json",
+      "description": "Structured final Claude Code rereview evidence."
+    },
+    {
+      "type": "review-raw-log",
+      "path": "harness/runs/2026-06-23-phase-9a-cross-run-local-queue/reviews/phase9a-code-review-claim-coverage-followup/claude-review.raw.log",
+      "description": "Raw final Claude Code rereview log."
+    },
+    {
+      "type": "review-evidence",
+      "path": "harness/runs/2026-06-23-phase-9a-cross-run-local-queue/reviews/phase9a-code-review-claim-coverage-followup/review-decision.json",
+      "description": "Codex triage decision for final Phase 9A review."
+    },
+    {
+      "type": "handoff",
+      "path": "handoff.md",
+      "description": "Phase 9A completion handoff."
+    }
+  ]
+}

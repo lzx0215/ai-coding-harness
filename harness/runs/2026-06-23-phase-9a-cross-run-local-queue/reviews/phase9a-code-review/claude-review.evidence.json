@@ -1,0 +1,139 @@
+{
+  "run_id": "phase9a-cross-run-local-queue-code-review",
+  "status": "findings",
+  "reviewer": "claude-code",
+  "reviewer_model": "glm-5.2[1m]",
+  "reviewer_model_version": null,
+  "reviewer_cli_version": "2.1.168 (Claude Code)",
+  "reviewer_provenance": {
+    "schema_version": "0.2.0",
+    "reviewer": "claude-code",
+    "cli": {
+      "name": "Claude Code",
+      "raw_version": "2.1.168 (Claude Code)",
+      "version": "2.1.168"
+    },
+    "models": [
+      {
+        "name": "glm-5.2[1m]",
+        "version": null,
+        "source": "modelUsage",
+        "usage": {
+          "input_tokens": null,
+          "output_tokens": null
+        },
+        "raw_usage": {
+          "inputTokens": 120338,
+          "outputTokens": 12514,
+          "cacheReadInputTokens": 108096,
+          "cacheCreationInputTokens": 0,
+          "webSearchRequests": 0,
+          "costUSD": 0.968588,
+          "contextWindow": 1000000,
+          "maxOutputTokens": 32000
+        }
+      }
+    ],
+    "primary_model": "glm-5.2[1m]",
+    "unknowns": [
+      "model_version",
+      "token_usage"
+    ]
+  },
+  "summary": "Phase 9A adds a local filesystem cross-run queue as a pure coordination layer: entries reference existing queued run-local jobs, authorized workers claim queue entries (atomic dir lock) before claiming the owning job, execution is delegated to the existing Phase 8 try_claim_job/execute_claimed_generic_agent_job path, and recovery/cleanup write explicit audit artifacts without touching run state.json or terminal job artifacts. The authority boundary is largely sound: queue files never become state/evidence authority, state.json is provably unchanged, and duplicate execution is well-guarded by the combination of entry status gating + atomic claim lock + run-local job claim. Verification is broad (11 focused tests, 326 full suite, run validation, diff --check, two-run live smoke). The main weaknesses are (1) queue-level requeue recovery does not coordinate with the referenced run-local job's claim state, making requeue ineffective for the most common crash scenario; (2) when try_claim_job returns None the entry is reported \"failed\" even if the job had already succeeded elsewhere, degrading audit accuracy; (3) lease_expires_at is recorded but never enforced; and several authorization/recovery branches lack direct test coverage. No critical or high-severity correctness defects found.",
+  "findings": [
+    {
+      "severity": "medium",
+      "title": "Requeue recovery does not coordinate with the referenced run-local job claim, so requeue is ineffective for crash-after-job-claim",
+      "evidence": "recover_cross_run_queue_entry resets the QUEUE entry to status 'queued', clears queue claim fields, and calls release_cross_run_queue_claim (removing entries/<id>/claim.lock). It does NOT touch the referenced run-local job's claim (jobs/<job-id>/claim.lock) or job status. In cross_run_queue_run_once, after claiming+marking running, the worker calls try_claim_job(run_dir, job_id). If the original worker died after try_claim_job succeeded, the run-local job remains 'claimed' with a live claim.lock, so the requeued entry will hit job_claim is None and be marked terminal 'failed' (reason 'referenced job could not be claimed'). Thus 'requeue' cannot actually drive re-execution for the most likely crash window without a separate, undocumented run-local job recovery step.",
+      "recommendation": "Either have recover_cross_run_queue_entry('requeue') also recover/expire the referenced run-local job claim (or at least detect and report a stale run-local claim), or explicitly document that run-local job claim recovery is a required prerequisite for requeue and add a contract test exercising crash-after-job-claim followed by requeue.",
+      "file": "harness/cli.py",
+      "line": 2110
+    },
+    {
+      "severity": "medium",
+      "title": "Entry reported as 'failed' when referenced job is already terminal, misreporting a succeeded job",
+      "evidence": "In cross_run_queue_run_once, when try_claim_job returns None the code unconditionally calls mark_cross_run_queue_entry_terminal(status='failed', terminal_job_status=None, reason='referenced job could not be claimed'). try_claim_job returns None both when the job is actively claimed by another worker AND when the job already reached a terminal state (e.g., executed by run-scheduler). In the latter case the job actually succeeded, but the queue entry is recorded as failed with terminal_job_status=null, corrupting the audit record. No test covers a job that is already terminal when the queue worker claims the entry (the existing second-run test skips at the queue level because the entry is already 'succeeded', never reaching try_claim_job).",
+      "recommendation": "Before marking failed, inspect the referenced job's current status; if it is terminal, mirror that terminal status into entry.terminal_job_status and set entry.status accordingly (succeeded/failed) instead of reporting a spurious failure. Add a test where the job is pre-executed before the queue worker runs.",
+      "file": "harness/cli.py",
+      "line": 2110
+    },
+    {
+      "severity": "low",
+      "title": "Lease expiration is recorded but never enforced; stale claimed/running entries block until manual recovery",
+      "evidence": "build_cross_run_queue_claim_owner populates lease_expires_at (DEFAULT_CLAIM_LEASE_SECONDS=60.0) and the entry stores lease_expires_at, but neither try_claim_cross_run_queue_entry nor cross_run_queue_run_once checks lease expiry or reaps stale claims. A worker that crashes after claiming leaves the entry in 'claimed'/'running' indefinitely; only explicit recover_cross_run_queue_entry can unblock it.",
+      "recommendation": "Either implement lease-aware reclaim (allow claiming entries whose lease_expires_at is in the past, with an audit event) or document explicitly in state-authority/evidence docs that the local queue has no automatic lease reaping and stale claims require operator recovery. The current behavior is acceptable for a one-shot local queue but the field implies enforcement that does not exist.",
+      "file": "harness/cli.py",
+      "line": 2110
+    },
+    {
+      "severity": "low",
+      "title": "TOCTOU in entry creation between existence check and atomic write",
+      "evidence": "create_cross_run_queue_entry checks if entry_path.exists() then later calls write_json_atomic(entry_path, entry). Two concurrent creators for the same entry_id can both pass the exists() check; the second write_json_atomic rename overwrites the first entry and emits a duplicate entry_created event, with no error raised. Entry creation is an operator-paced action so likelihood is low, but the check-then-write is not atomic.",
+      "recommendation": "Use an atomic create (e.g., os.mkdir of the entry dir with exist_ok=False, or write to a temp and os.replace/exclusive create) so a duplicate entry_id fails loudly instead of silently overwriting.",
+      "file": "harness/cli.py",
+      "line": 2110
+    },
+    {
+      "severity": "low",
+      "title": "Several authorization and recovery branches lack direct test coverage",
+      "evidence": "Tests cover group-based authorization and the recovery --confirm gate only. Not exercised: (a) allowed_worker_id exact-match authorization path in cross_run_queue_worker_authorized and the CLI --worker-id binding; (b) the 'abandon' recovery action end-to-end; (c) recovery of a 'failed'/'claimed' entry actually resetting fields and succeeding on re-run; (d) multiple entries in one queue and their execution order; (e) the queue_id mismatch guard in ensure_cross_run_queue.",
+      "recommendation": "Add focused tests for allowed_worker_id enforcement, abandon recovery, full requeue-then-reexecute success, multi-entry ordering, and the queue_id mismatch error path to lock in the acceptance criteria ('Unauthorized workers cannot claim', 'recovery requires explicit confirmation').",
+      "file": "tests/test_cross_run_queue.py",
+      "line": 1
+    },
+    {
+      "severity": "info",
+      "title": "events.log appends are not atomic under concurrent workers",
+      "evidence": "append_cross_run_queue_event opens events.log in 'a' mode and writes a single JSON line. Append atomicity for small writes is typical on POSIX but not guaranteed on Windows; interleaving is possible with concurrent workers. events.log is diagnostic/audit only and explicitly not auto-indexed evidence, so impact is limited to potentially garbled audit lines.",
+      "recommendation": "Acceptable for this slice. If stricter audit ordering is later required, serialize event appends through the queue claim or use an OS-level append lock; document that events.log is best-effort diagnostics.",
+      "file": "harness/cli.py",
+      "line": 2110
+    },
+    {
+      "severity": "info",
+      "title": "Static contract test only asserts the $schema header, not schema self-consistency",
+      "evidence": "test_phase9a_cross_run_queue_schemas_exist asserts schema['$schema'] == 'https://json-schema.org/draft/2020-12/schema' for the two new schema files but does not validate that the schemas are well-formed Draft 2020-12 schemas (e.g., via Draft202012Validator.check_schema) or that required/properties/enums are internally consistent.",
+      "recommendation": "Add Draft202012Validator.check_schema(schema) to the static contract so malformed schema edits fail CI early. Schema correctness is currently only indirectly exercised by entry/event validation.",
+      "file": "tests/test_static_contracts.py",
+      "line": 161
+    }
+  ],
+  "tested": [
+    "Schema accepts minimal queued entry; rejects path-traversal run_dir and unknown status; event schema accepts minimal event",
+    "Entry creation references an existing queued job and persists run_id/job_id/status/allowed_worker_groups correctly",
+    "Entry creation rejects a missing referenced job with 'referenced job does not exist'",
+    "Worker group authorization gate: unauthorized group returns None and leaves entry 'queued' with no claim.lock; authorized group succeeds",
+    "run_once executes an authorized entry exactly once: job -> succeeded, entry -> succeeded, terminal_job_status=succeeded, output.json exists, state.json byte-identical before/after",
+    "run_once idempotency: second pass reports executed=[] skipped=[entry-a] (entry already terminal)",
+    "CLI queue-cross-run-job + run-cross-run-queue --once end-to-end via module entrypoint prints 'executed=1'",
+    "Recovery requires --confirm (raises HarnessCliError otherwise)",
+    "Cleanup records a *-cleanup.json audit file and does NOT delete run-local job.json/output.json",
+    "Static contract pins both new schemas with Draft 2020-12 $schema",
+    "Full suite (326 OK, 1 skipped), all source-controlled runs validate, git diff --check exits 0",
+    "Live smoke: two owning runs, two queue entries, both jobs complete once, both owning state.json remain byte-identical"
+  ],
+  "not_tested": [
+    "allowed_worker_id exact-match authorization path (only group-based auth is tested)",
+    "Recovery 'abandon' action end-to-end (status -> abandoned, audit event, fields reset)",
+    "Recovery of a 'claimed'/'failed' entry actually resetting to 'queued' and successfully re-executing on a subsequent run_once",
+    "Crash-after-try_claim_job recovery (leftover run-local job claim.lock blocking requeue)",
+    "Job already terminal when the queue worker calls try_claim_job (spurious 'failed' misreport scenario)",
+    "Concurrent claim contention between two authorized workers (atomicity of acquire_claim_lock_dir under race)",
+    "Lease expiration / automatic reclaim of stale 'claimed'/'running' entries",
+    "Multiple entries in a single queue and deterministic execution ordering",
+    "queue_id mismatch guard in ensure_cross_run_queue",
+    "events.log append atomicity under concurrent writers",
+    "Schema self-consistency (Draft202012Validator.check_schema) beyond the $schema header",
+    "Cross-machine / network-share / cloud object-store atomic directory claim semantics"
+  ],
+  "residual_risks": [
+    "Phase 9A is local filesystem only; atomic directory claim locks are not proof for cross-machine filesystems, network shares, or cloud object stores.",
+    "Queue records are coordination/audit artifacts only and do not replace run-local state, evidence indexing, review, verification, or handoff gates; Codex still advances each owning run explicitly.",
+    "queue-level 'requeue' does not recover the referenced run-local job claim; a crash after try_claim_job requires separate run-local job recovery or the requeued entry will fail again.",
+    "Lease expiration is recorded (lease_expires_at) but never enforced; stale claimed/running entries require manual operator recovery.",
+    "Queue cleanup is audit-only in this slice and does not compact or delete terminal run-local job.json, raw.log, or output.json.",
+    "When the referenced job is already terminal, the queue entry is reported 'failed' with terminal_job_status=null, which can mislead audit consumers about actual job outcome.",
+    "Cloud queue adapters, provider credentials/permissions, cost controls, and cloud cleanup/audit semantics remain unimplemented."
+  ]
+}

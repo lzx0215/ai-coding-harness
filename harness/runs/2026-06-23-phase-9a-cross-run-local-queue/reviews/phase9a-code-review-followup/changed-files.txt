@@ -1,0 +1,5 @@
+harness/cli.py
+harness/core/evidence.md
+harness/core/state-authority.md
+tests/test_cross_run_queue.py
+tests/test_static_contracts.py

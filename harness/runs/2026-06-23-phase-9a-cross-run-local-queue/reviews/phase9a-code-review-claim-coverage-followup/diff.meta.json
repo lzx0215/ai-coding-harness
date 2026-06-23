@@ -1,0 +1,11 @@
+{
+    "base":  "ea9f2e14096b14db4e04159ffdd724fc275532b9",
+    "head":  "acba379a930232a4d187462ae51ff4263f15a496",
+    "includes_working_tree":  false,
+    "changed_files":  [
+                          "harness/cli.py",
+                          "tests/test_cross_run_queue.py"
+                      ],
+    "diff_file":  "diff.patch",
+    "note":  "Rereview for direct try_claim_job non-HarnessCliError coverage and queue-claim release safety after terminal marking failures."
+}

@@ -1,0 +1,183 @@
+diff --git a/harness/cli.py b/harness/cli.py
+index 5472f2c..aa15c3d 100644
+--- a/harness/cli.py
++++ b/harness/cli.py
+@@ -2494,6 +2494,12 @@ def mark_cross_run_queue_entry_terminal(
+     return entry
+
+
++def cross_run_queue_status_for_terminal_job(terminal_job_status: str) -> str:
++    if terminal_job_status not in TERMINAL_JOB_STATUSES:
++        raise HarnessCliError(f"job status is not terminal: {terminal_job_status}")
++    return terminal_job_status
++
++
+ def cross_run_queue_run_once(
+     queue_dir: Path | str,
+     *,
+@@ -2538,18 +2544,46 @@ def cross_run_queue_run_once(
+                 claimed_entry,
+                 worker_id=worker_id,
+             )
+-            job_claim = try_claim_job(
+-                run_dir,
+-                claimed_entry["job_id"],
+-                worker_id=worker_id,
+-                root=repo_root,
+-            )
++            try:
++                job_claim = try_claim_job(
++                    run_dir,
++                    claimed_entry["job_id"],
++                    worker_id=worker_id,
++                    root=repo_root,
++                )
++            except HarnessCliError as exc:
++                mark_cross_run_queue_entry_terminal(
++                    queue_path,
++                    claimed_entry,
++                    status="failed",
++                    terminal_job_status=None,
++                    worker_id=worker_id,
++                    details={"reason": f"referenced job could not be claimed: {exc}"},
++                )
++                skipped_entries.append(entry_id)
++                release_queue_claim = True
++                continue
+             if job_claim is None:
+-                current_job = load_job_payload(run_dir / "jobs" / claimed_entry["job_id"] / "job.json")
++                try:
++                    current_job = load_job_payload(
++                        run_dir / "jobs" / claimed_entry["job_id"] / "job.json",
++                    )
++                except HarnessCliError as exc:
++                    mark_cross_run_queue_entry_terminal(
++                        queue_path,
++                        claimed_entry,
++                        status="failed",
++                        terminal_job_status=None,
++                        worker_id=worker_id,
++                        details={"reason": f"referenced job could not be loaded: {exc}"},
++                    )
++                    skipped_entries.append(entry_id)
++                    release_queue_claim = True
++                    continue
+                 if current_job["status"] in TERMINAL_JOB_STATUSES:
+                     terminal_job_status = current_job["status"]
+-                    terminal_entry_status = (
+-                        "succeeded" if terminal_job_status == "succeeded" else "failed"
++                    terminal_entry_status = cross_run_queue_status_for_terminal_job(
++                        terminal_job_status,
+                     )
+                     mark_cross_run_queue_entry_terminal(
+                         queue_path,
+@@ -2600,8 +2634,8 @@ def cross_run_queue_run_once(
+                 root=repo_root,
+             )
+             terminal_job_status = executed_job["status"]
+-            terminal_entry_status = (
+-                "succeeded" if terminal_job_status == "succeeded" else "failed"
++            terminal_entry_status = cross_run_queue_status_for_terminal_job(
++                terminal_job_status,
+             )
+             mark_cross_run_queue_entry_terminal(
+                 queue_path,
+@@ -2712,7 +2746,7 @@ def cleanup_cross_run_queue_entry(
+
+     queue_path = Path(queue_dir)
+     entry = load_cross_run_queue_entry(queue_path, entry_id)
+-    if entry["status"] not in {"succeeded", "failed", "abandoned"}:
++    if entry["status"] not in TERMINAL_JOB_STATUSES.union({"abandoned"}):
+         raise HarnessCliError(f"entry {entry_id} is {entry['status']}, not terminal")
+
+     repo_root = resolve_repository_root(queue_path, root=root)
+diff --git a/harness/core/state-authority.md b/harness/core/state-authority.md
+index 297c899..9261144 100644
+--- a/harness/core/state-authority.md
++++ b/harness/core/state-authority.md
+@@ -98,8 +98,8 @@ A cross-run queue worker must claim a queue entry before it attempts to claim
+ the referenced run-local job. The owning run-local job remains protected by the
+ normal `jobs/<job-id>/claim.lock` and claim-token contract. Queue entries may
+ record routing status such as `queued`, `claimed`, `running`, `succeeded`,
+-`failed`, or `abandoned`, but those statuses do not advance the owning Harness
+-run.
++`failed`, `timeout`, `cancelled`, or `abandoned`, but those statuses do not
++advance the owning Harness run.
+
+ Cross-run queue recovery and cleanup are explicit operator actions. Recovery may
+ requeue or abandon a queue entry with an audit artifact; cleanup records that a
+diff --git a/harness/schemas/cross-run-queue-entry.schema.json b/harness/schemas/cross-run-queue-entry.schema.json
+index cefb3f6..f34445e 100644
+--- a/harness/schemas/cross-run-queue-entry.schema.json
++++ b/harness/schemas/cross-run-queue-entry.schema.json
+@@ -49,7 +49,7 @@
+     },
+     "status": {
+       "type": "string",
+-      "enum": ["queued", "claimed", "running", "succeeded", "failed", "abandoned"]
++      "enum": ["queued", "claimed", "running", "succeeded", "failed", "timeout", "cancelled", "abandoned"]
+     },
+     "created_at": { "type": "string", "pattern": "Z$" },
+     "updated_at": { "type": "string", "pattern": "Z$" },
+diff --git a/tests/test_cross_run_queue.py b/tests/test_cross_run_queue.py
+index 587e6f1..3805a64 100644
+--- a/tests/test_cross_run_queue.py
++++ b/tests/test_cross_run_queue.py
+@@ -342,6 +342,57 @@ class CrossRunQueueExecutionTest(unittest.TestCase):
+             self.assertEqual(entry["status"], "succeeded")
+             self.assertEqual(entry["terminal_job_status"], "succeeded")
+
++    def test_cross_run_queue_run_once_preserves_cancelled_referenced_job_status(self):
++        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
++            base = Path(raw)
++            run_dir, queue_dir = build_queued_entry_fixture(base, allowed_groups=["local"])
++            job_path = run_dir / "jobs" / "job-a" / "job.json"
++            job = json.loads(job_path.read_text(encoding="utf-8"))
++            completed_at = "2026-06-23T00:00:01Z"
++            job["status"] = "cancelled"
++            job["completed_at"] = completed_at
++            job["updated_at"] = completed_at
++            write_json(job_path, job)
++
++            summary = cli.cross_run_queue_run_once(
++                queue_dir,
++                worker_id="worker-a",
++                worker_groups=["local"],
++                root=base,
++            )
++
++            entry = json.loads(
++                (queue_dir / "entries" / "entry-a" / "entry.json").read_text(
++                    encoding="utf-8",
++                )
++            )
++            self.assertEqual(summary["executed_entries"], [])
++            self.assertEqual(summary["skipped_entries"], ["entry-a"])
++            self.assertEqual(entry["status"], "cancelled")
++            self.assertEqual(entry["terminal_job_status"], "cancelled")
++
++    def test_cross_run_queue_run_once_marks_invalid_referenced_job_failed_without_stranding_lock(self):
++        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
++            base = Path(raw)
++            _, queue_dir = build_queued_entry_fixture(base, allowed_groups=["local"])
++            run_dir = base / "harness" / "runs" / "run-a"
++            (run_dir / "jobs" / "job-a" / "job.json").write_text("{", encoding="utf-8")
++
++            summary = cli.cross_run_queue_run_once(
++                queue_dir,
++                worker_id="worker-a",
++                worker_groups=["local"],
++                root=base,
++            )
++
++            entry_dir = queue_dir / "entries" / "entry-a"
++            entry = json.loads((entry_dir / "entry.json").read_text(encoding="utf-8"))
++            self.assertEqual(summary["executed_entries"], [])
++            self.assertEqual(summary["skipped_entries"], ["entry-a"])
++            self.assertEqual(entry["status"], "failed")
++            self.assertIsNone(entry["terminal_job_status"])
++            self.assertFalse((entry_dir / "claim.lock").exists())
++
+
+ class CrossRunQueueCliTest(unittest.TestCase):
+     def test_module_entrypoint_creates_and_runs_cross_run_queue_entry(self):

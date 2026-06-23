@@ -1,0 +1,7 @@
+command: ["python", "-c", "import json, os; from pathlib import Path; payload={'run_id':os.environ['HARNESS_RUN_ID'],'job_id':os.environ['HARNESS_JOB_ID'],'agent':os.environ['HARNESS_AGENT'],'adapter':os.environ['HARNESS_AGENT_ADAPTER'],'status':'passed','summary':'phase9a cross-run queue live smoke passed','findings':[],'evidence':[],'not_tested':[],'residual_risks':[],'generated_at':'2026-06-23T00:00:00Z'}; Path(os.environ['HARNESS_AGENT_OUTPUT_FILE']).write_text(json.dumps(payload, indent=2)+'\\n', encoding='utf-8')"]
+returncode: 0
+
+stdout:
+
+
+stderr:

@@ -1,0 +1,21 @@
+{
+    "base":  "7aaa5acb1cbe1eea386374e98c2bae8152afdebe",
+    "head":  "d54fba83a0666d92f028548b024c6ed966c497e7",
+    "includes_working_tree":  true,
+    "changed_files":  [
+                          "docs/INDEX.md",
+                          "harness/cli.py",
+                          "harness/core/evidence.md",
+                          "harness/core/state-authority.md",
+                          "harness/memory/progress.md",
+                          "harness/schemas/cross-run-queue-entry.schema.json",
+                          "harness/schemas/cross-run-queue-event.schema.json",
+                          "tests/test_cross_run_queue.py",
+                          "tests/test_static_contracts.py"
+                      ],
+    "diff_file":  "diff.patch",
+    "excluded_from_diff":  [
+                               "harness/runs/2026-06-23-phase-9a-cross-run-local-queue/** generated run docs, logs, and live-smoke evidence"
+                           ],
+    "note":  "Review diff is scoped to source, schemas, tests, and durable contracts. Run artifacts are summarized in verification-summary.md to stay within reviewer budget."
+}

@@ -1,0 +1,13 @@
+{
+    "base":  "d54fba83a0666d92f028548b024c6ed966c497e7",
+    "head":  "7f432ec058f80e46314b91846e9bfbf6d162f223",
+    "includes_working_tree":  true,
+    "changed_files":  [
+                          "harness/cli.py",
+                          "harness/core/state-authority.md",
+                          "harness/schemas/cross-run-queue-entry.schema.json",
+                          "tests/test_cross_run_queue.py"
+                      ],
+    "diff_file":  "diff.patch",
+    "note":  "Final follow-up review for terminal status preservation and no-stranding error handling."
+}

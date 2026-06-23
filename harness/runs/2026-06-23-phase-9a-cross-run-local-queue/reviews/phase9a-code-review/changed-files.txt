@@ -1,0 +1,9 @@
+docs/INDEX.md
+harness/cli.py
+harness/core/evidence.md
+harness/core/state-authority.md
+harness/memory/progress.md
+harness/schemas/cross-run-queue-entry.schema.json
+harness/schemas/cross-run-queue-event.schema.json
+tests/test_cross_run_queue.py
+tests/test_static_contracts.py

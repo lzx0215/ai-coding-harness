@@ -1,0 +1,60 @@
+{
+    "schema_version":  "0.1.0",
+    "run_id":  "2026-06-23-phase-9a-cross-run-local-queue",
+    "generated_at":  "2026-06-23T04:44:35Z",
+    "disposition":  "findings-triaged",
+    "recommended_status":  "reviewed",
+    "decision_owner":  "codex",
+    "source_evidence":  [
+                            {
+                                "type":  "review-output",
+                                "path":  "harness/runs/2026-06-23-phase-9a-cross-run-local-queue/reviews/phase9a-code-review-claim-coverage-followup/claude-review.json"
+                            },
+                            {
+                                "type":  "review-evidence",
+                                "path":  "harness/runs/2026-06-23-phase-9a-cross-run-local-queue/reviews/phase9a-code-review-claim-coverage-followup/claude-review.evidence.json"
+                            }
+                        ],
+    "severity_counts":  {
+                            "critical":  0,
+                            "high":  0,
+                            "medium":  0,
+                            "low":  0,
+                            "info":  3
+                        },
+    "resolved_findings":  [
+                              {
+                                  "title":  "Terminal-marking-failure test omits entry final-state assertions",
+                                  "severity":  "info",
+                                  "evidence":  "Triaged as informational. Phase 9A locks in the required safety property: the queue claim lock is released when terminal marking fails; the exact partial entry state remains a residual recovery note."
+                              },
+                              {
+                                  "title":  "Only OSError exercised as representative non-HarnessCliError exception",
+                                  "severity":  "info",
+                                  "evidence":  "Triaged as informational. OSError is the representative filesystem failure for try_claim_job; the production handler is a broad except Exception path covered by the regression."
+                              },
+                              {
+                                  "title":  "Default-to-True is a blunt release policy versus explicit release at each exit",
+                                  "severity":  "info",
+                                  "evidence":  "Triaged as informational after reading the full function body. No branch intentionally retains a queue claim after cross_run_queue_run_once claims an entry; tests cover success, skip, failure, terminal, and exception paths."
+                              }
+                          ],
+    "accepted_risks":  [
+
+                       ],
+    "not_tested":  [
+                       "Entry final persisted state (status/terminal fields) when mark_cross_run_queue_entry_terminal raises mid-write (Test 2 only checks exception propagation + claim.lock absence)",
+                       "Non-OSError non-HarnessCliError exception types from try_claim_job (e.g., ValueError, TypeError, KeyError)",
+                       "HarnessCliError path from try_claim_job (presumably covered by pre-existing tests not in this diff)",
+                       "Failure of the claim RELEASE operation itself (e.g., unlink raising OSError in the finally block) and whether it masks the original exception",
+                       "Event/artifact side-effects of mark_cross_run_queue_entry_terminal (cross-run-queue-event records) in the new tests",
+                       "Full cross_run_queue_run_once body to confirm no branch sets release_queue_claim=False to retain a claim"
+                   ],
+    "residual_risks":  [
+                           "Full cross_run_queue_run_once function body was not included in the diff; cannot fully verify no internal path relied on the old False default to retain an in-flight claim. Passing suite mitigates but does not eliminate this.",
+                           "When mark_cross_run_queue_entry_terminal fails, entry state may be indeterminate (partially written) while claim.lock is released; a subsequent run-once may re-claim and retry the entry. This is acceptable for at-least-once/recovery semantics but is not asserted as a contract by the tests.",
+                           "If the release operation (claim.lock removal) itself raises in the finally block, it would mask the propagated exception and could still strand the lock; this path is untested.",
+                           "Local atomic directory claims remain non-proof for cross-machine/networked filesystems (acknowledged in task/plan risks, out of Phase 9A scope)."
+                       ],
+    "notes":  "Final Claude Code rereview returned findings with info severity only. No medium, high, or critical findings remain for Phase 9A."
+}
