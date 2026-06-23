@@ -4815,6 +4815,28 @@ def build_parser() -> argparse.ArgumentParser:
     queue_generic.add_argument("--timeout-seconds", type=int, default=1800)
     queue_generic.add_argument("agent_command", nargs=argparse.REMAINDER)
 
+    cross_run_queue = subparsers.add_parser(
+        "queue-cross-run-job",
+        help="Create a local cross-run queue entry for an existing queued run-local job.",
+    )
+    cross_run_queue.add_argument("queue_dir")
+    cross_run_queue.add_argument("entry_id")
+    cross_run_queue.add_argument("--run-dir", required=True)
+    cross_run_queue.add_argument("--job-id", required=True)
+    cross_run_queue.add_argument("--creator", default=CODEX_ACTOR)
+    cross_run_queue.add_argument("--worker-id")
+    cross_run_queue.add_argument("--worker-group", action="append", default=[])
+
+    run_cross_run_queue = subparsers.add_parser(
+        "run-cross-run-queue",
+        help="Run local cross-run queue entries without mutating Harness state.",
+    )
+    run_cross_run_queue.add_argument("queue_dir")
+    run_cross_run_mode = run_cross_run_queue.add_mutually_exclusive_group(required=True)
+    run_cross_run_mode.add_argument("--once", action="store_true")
+    run_cross_run_queue.add_argument("--worker-id", required=True)
+    run_cross_run_queue.add_argument("--worker-group", action="append", default=[])
+
     scheduler = subparsers.add_parser(
         "run-scheduler",
         help="Run the local async scheduler for queued jobs.",
@@ -4985,6 +5007,36 @@ def main(argv: list[str] | None = None) -> int:
                 timeout_seconds=args.timeout_seconds,
             )
             print(f"queued generic-agent: {job['run_id']}/{job['job_id']}")
+            return 0
+
+        if args.command == "queue-cross-run-job":
+            entry = create_cross_run_queue_entry(
+                args.queue_dir,
+                args.entry_id,
+                run_dir=args.run_dir,
+                job_id=args.job_id,
+                creator=args.creator,
+                allowed_worker_id=args.worker_id,
+                allowed_worker_groups=args.worker_group,
+            )
+            print(
+                f"queued cross-run job: "
+                f"{entry['queue_id']}/{entry['entry_id']} -> "
+                f"{entry['run_id']}/{entry['job_id']}",
+            )
+            return 0
+
+        if args.command == "run-cross-run-queue":
+            summary = cross_run_queue_run_once(
+                args.queue_dir,
+                worker_id=args.worker_id,
+                worker_groups=args.worker_group,
+            )
+            print(
+                "cross-run queue: "
+                f"executed={len(summary['executed_entries'])} "
+                f"skipped={len(summary['skipped_entries'])}",
+            )
             return 0
 
         if args.command == "run-scheduler":

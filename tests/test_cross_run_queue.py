@@ -121,6 +121,20 @@ def build_queued_entry_fixture(
     return run_dir, queue_dir
 
 
+def build_run_with_queued_job(base: Path) -> tuple[Path, Path]:
+    run_dir = base / "harness" / "runs" / "run-a"
+    queue_dir = base / "queue"
+    write_json(run_dir / "state.json", minimal_state("run-a"))
+    cli.create_generic_agent_job(
+        run_dir,
+        "job-a",
+        agent="generic-test-agent",
+        command=successful_agent_command(),
+        root=base,
+    )
+    return run_dir, queue_dir
+
+
 class CrossRunQueueSchemaTest(unittest.TestCase):
     def test_cross_run_queue_entry_schema_accepts_minimal_queued_entry(self):
         Draft202012Validator(load_schema(ENTRY_SCHEMA)).validate(valid_entry())
@@ -271,6 +285,60 @@ class CrossRunQueueExecutionTest(unittest.TestCase):
             self.assertEqual(entry["terminal_job_status"], "succeeded")
             self.assertTrue((run_dir / "jobs" / "job-a" / "output.json").exists())
             self.assertEqual((run_dir / "state.json").read_text(encoding="utf-8"), before_state)
+
+
+class CrossRunQueueCliTest(unittest.TestCase):
+    def test_module_entrypoint_creates_and_runs_cross_run_queue_entry(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            base = Path(raw)
+            run_dir, queue_dir = build_run_with_queued_job(base)
+            entry_path = queue_dir / "entries" / "entry-b" / "entry.json"
+
+            create_result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "harness.cli",
+                    "queue-cross-run-job",
+                    str(queue_dir),
+                    "entry-b",
+                    "--run-dir",
+                    str(run_dir),
+                    "--job-id",
+                    "job-a",
+                    "--creator",
+                    "codex",
+                    "--worker-group",
+                    "local",
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            run_result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "harness.cli",
+                    "run-cross-run-queue",
+                    str(queue_dir),
+                    "--once",
+                    "--worker-id",
+                    "worker-a",
+                    "--worker-group",
+                    "local",
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(create_result.returncode, 0, create_result.stderr + create_result.stdout)
+            self.assertTrue(entry_path.exists())
+            self.assertEqual(run_result.returncode, 0, run_result.stderr + run_result.stdout)
+            self.assertIn("cross-run queue: executed=1", run_result.stdout)
 
 
 if __name__ == "__main__":
