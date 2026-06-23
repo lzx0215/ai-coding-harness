@@ -1,0 +1,8 @@
+command: ["python", "..\\..\\scripts\\watch-smoke.py"]
+returncode: 0
+
+stdout:
+phase6 scheduler watch agent wrote output
+
+
+stderr:

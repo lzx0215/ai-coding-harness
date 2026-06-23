@@ -14,6 +14,13 @@ from harness import cli, readiness
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def temporary_run_directory():
+    return tempfile.TemporaryDirectory(
+        dir=ROOT,
+        ignore_cleanup_errors=os.name == "nt",
+    )
+
+
 def minimal_state(status: str = "draft") -> dict:
     return {
         "run_id": "test-run",
@@ -201,12 +208,13 @@ class HarnessCliTest(unittest.TestCase):
                     "agent-job",
                     "agent-result",
                     "aggregation",
+                    "job-recovery",
                 }
             ),
         )
 
     def test_validate_rejects_unknown_evidence_type(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             state = minimal_state(status="verified")
             state["evidence"] = [
@@ -226,7 +234,7 @@ class HarnessCliTest(unittest.TestCase):
         )
 
     def test_validate_reports_null_evidence_as_schema_error(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             state = minimal_state(status="verified")
             state["evidence"] = None
@@ -240,7 +248,7 @@ class HarnessCliTest(unittest.TestCase):
         )
 
     def test_validate_reports_non_object_evidence_item_as_schema_error(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             state = minimal_state(status="verified")
             state["evidence"] = ["not-an-object"]
@@ -254,7 +262,7 @@ class HarnessCliTest(unittest.TestCase):
         )
 
     def test_validate_reports_non_object_state_as_schema_error(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             run_dir.mkdir(parents=True, exist_ok=True)
             (run_dir / "state.json").write_text("[]\n", encoding="utf-8")
@@ -267,7 +275,7 @@ class HarnessCliTest(unittest.TestCase):
         )
 
     def test_validate_rejects_missing_evidence_path(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             state = minimal_state(status="verified")
             state["evidence"] = [
@@ -287,7 +295,7 @@ class HarnessCliTest(unittest.TestCase):
         )
 
     def test_validate_accepts_root_relative_evidence_path_inside_repository(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw) / "run"
             state = minimal_state(status="verified")
             state["evidence"] = [
@@ -329,7 +337,7 @@ class HarnessCliTest(unittest.TestCase):
         self.assertIn(f"valid: {run_dir}", result.stdout)
 
     def test_validate_rejects_evidence_path_outside_repository(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw) / "run"
             with tempfile.TemporaryDirectory() as external_raw:
                 outside_evidence = Path(external_raw) / "outside.md"
@@ -352,7 +360,7 @@ class HarnessCliTest(unittest.TestCase):
         )
 
     def test_validate_rejects_relative_evidence_path_traversal_outside_repository(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw) / "run"
             state = minimal_state(status="verified")
             state["evidence"] = [
@@ -372,7 +380,7 @@ class HarnessCliTest(unittest.TestCase):
         )
 
     def test_validate_accepts_bom_prefixed_state_json(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             run_dir.mkdir(parents=True, exist_ok=True)
             (run_dir / "state.json").write_text(
@@ -385,7 +393,7 @@ class HarnessCliTest(unittest.TestCase):
         self.assertEqual(result.errors, [])
 
     def test_validate_reports_non_utf8_state_json_as_error(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             run_dir.mkdir(parents=True, exist_ok=True)
             (run_dir / "state.json").write_bytes(b"\xff\xfe\x00")
@@ -398,7 +406,7 @@ class HarnessCliTest(unittest.TestCase):
         )
 
     def test_advance_allows_codex_normal_transition_and_updates_timestamp(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             state = minimal_state(status="draft")
             write_state(run_dir, state)
@@ -412,7 +420,7 @@ class HarnessCliTest(unittest.TestCase):
         self.assertNotEqual(saved["updated_at"], "2026-06-19T00:00:00Z")
 
     def test_advance_does_not_write_candidate_when_validation_fails(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             state = minimal_state(status="draft")
             write_state(run_dir, state)
@@ -427,7 +435,7 @@ class HarnessCliTest(unittest.TestCase):
         self.assertEqual(saved["updated_at"], "2026-06-19T00:00:00Z")
 
     def test_advance_keeps_original_state_when_atomic_replace_fails(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             write_state(run_dir, minimal_state(status="draft"))
 
@@ -441,7 +449,7 @@ class HarnessCliTest(unittest.TestCase):
         self.assertEqual(saved["updated_at"], "2026-06-19T00:00:00Z")
 
     def test_advance_reports_state_read_error_after_validation(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             state = minimal_state(status="draft")
             write_state(run_dir, state)
@@ -459,7 +467,7 @@ class HarnessCliTest(unittest.TestCase):
         self.assertIn("cannot read state file", str(raised.exception))
 
     def test_atomic_write_cleans_temp_file_when_serialization_fails(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             run_dir.mkdir(parents=True, exist_ok=True)
             state_file = run_dir / "state.json"
@@ -472,8 +480,31 @@ class HarnessCliTest(unittest.TestCase):
 
         self.assertEqual(temp_files, [])
 
+    def test_atomic_write_retries_transient_permission_error_on_replace(self):
+        with temporary_run_directory() as raw:
+            run_dir = Path(raw)
+            run_dir.mkdir(parents=True, exist_ok=True)
+            state_file = run_dir / "state.json"
+            replace_calls = 0
+            original_replace = Path.replace
+
+            def flaky_replace(path: Path, target: Path) -> Path:
+                nonlocal replace_calls
+                replace_calls += 1
+                if replace_calls == 1:
+                    raise PermissionError("temporary file lock")
+                return original_replace(path, target)
+
+            with mock.patch.object(Path, "replace", autospec=True, side_effect=flaky_replace):
+                cli.write_json_atomic(state_file, minimal_state(status="draft"))
+
+            saved = json.loads(state_file.read_text(encoding="utf-8"))
+
+        self.assertEqual(replace_calls, 2)
+        self.assertEqual(saved["status"], "draft")
+
     def test_advance_rejects_invalid_transition(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             write_state(run_dir, minimal_state(status="completed"))
 
@@ -481,7 +512,7 @@ class HarnessCliTest(unittest.TestCase):
                 cli.advance_run(run_dir, "planned", actor="codex", root=ROOT)
 
     def test_advance_rejects_external_actor(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             write_state(run_dir, minimal_state(status="draft"))
 
@@ -489,7 +520,7 @@ class HarnessCliTest(unittest.TestCase):
                 cli.advance_run(run_dir, "triaged", actor="claude-code", root=ROOT)
 
     def test_advance_allows_fast_completion_without_review_evidence(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             state = state_for_workflow(
                 status="reviewed",
@@ -505,7 +536,7 @@ class HarnessCliTest(unittest.TestCase):
         self.assertEqual(advanced["status"], "completed")
 
     def test_advance_allows_standard_completion_with_review_handling(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             state = state_for_workflow(
                 status="reviewed",
@@ -521,7 +552,7 @@ class HarnessCliTest(unittest.TestCase):
         self.assertEqual(advanced["status"], "completed")
 
     def test_advance_rejects_standard_completion_without_verification(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             state = state_for_workflow(
                 status="reviewed",
@@ -538,7 +569,7 @@ class HarnessCliTest(unittest.TestCase):
         self.assertIn("missing completion evidence type: verification", str(raised.exception))
 
     def test_advance_rejects_standard_completion_without_handoff(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             state = state_for_workflow(
                 status="reviewed",
@@ -555,7 +586,7 @@ class HarnessCliTest(unittest.TestCase):
         self.assertIn("missing completion evidence type: handoff", str(raised.exception))
 
     def test_advance_rejects_standard_completion_without_review_handling(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             state = state_for_workflow(
                 status="reviewed",
@@ -575,7 +606,7 @@ class HarnessCliTest(unittest.TestCase):
         )
 
     def test_advance_allows_risk_accepted_completion_with_risk_acceptance(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             state = state_for_workflow(
                 status="external_review_unavailable",
@@ -603,7 +634,7 @@ class HarnessCliTest(unittest.TestCase):
         self.assertEqual(completed["status"], "completed")
 
     def test_advance_allows_standard_unavailable_review_to_risk_accepted(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             state = minimal_state(status="external_review_unavailable")
             state["track"] = "Standard"
@@ -620,7 +651,7 @@ class HarnessCliTest(unittest.TestCase):
         self.assertEqual(advanced["status"], "risk_accepted")
 
     def test_advance_rejects_strict_unavailable_review_to_risk_accepted(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             state = minimal_state(status="external_review_unavailable")
             state["track"] = "Strict"
@@ -641,7 +672,7 @@ class HarnessCliTest(unittest.TestCase):
         )
 
     def test_advance_allows_strict_unavailable_review_to_needs_user_decision(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             state = minimal_state(status="external_review_unavailable")
             state["track"] = "Strict"
@@ -658,7 +689,7 @@ class HarnessCliTest(unittest.TestCase):
         self.assertEqual(advanced["status"], "needs_user_decision")
 
     def test_advance_rejects_risk_accepted_completion_without_risk_acceptance(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             state = state_for_workflow(
                 status="risk_accepted",
@@ -675,7 +706,7 @@ class HarnessCliTest(unittest.TestCase):
         self.assertIn("missing completion evidence type: risk-acceptance", str(raised.exception))
 
     def test_advance_does_not_require_completion_evidence_for_intermediate_transition(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             state = minimal_state(status="planned")
             state["track"] = "Standard"
@@ -687,7 +718,7 @@ class HarnessCliTest(unittest.TestCase):
         self.assertEqual(advanced["status"], "in_progress")
 
     def test_check_ready_reports_warnings_without_mutating_state(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             write_state(run_dir, minimal_state(status="draft"))
             before = (run_dir / "state.json").read_text(encoding="utf-8")
@@ -706,7 +737,7 @@ class HarnessCliTest(unittest.TestCase):
         self.assertIn("missing run document: task.md", result.stdout)
 
     def test_check_ready_returns_zero_when_no_warnings(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             state = minimal_state(status="draft")
             state["track"] = "Standard"
@@ -790,7 +821,7 @@ memory_files: []
         self.assertIn("ready: no readiness warnings", result.stdout)
 
     def test_index_evidence_appends_valid_evidence_without_advancing_state(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             write_state(run_dir, minimal_state(status="draft"))
             evidence_path = run_dir / "task.md"
@@ -830,7 +861,7 @@ memory_files: []
         )
 
     def test_index_evidence_rejects_unknown_type_without_writing(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             write_state(run_dir, minimal_state(status="draft"))
             (run_dir / "note.md").write_text("# Note\n", encoding="utf-8")
@@ -858,7 +889,7 @@ memory_files: []
         self.assertIn("unknown evidence type", result.stdout)
 
     def test_index_evidence_rejects_missing_path_without_writing(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             write_state(run_dir, minimal_state(status="draft"))
             before = (run_dir / "state.json").read_text(encoding="utf-8")
@@ -885,7 +916,7 @@ memory_files: []
         self.assertIn("evidence path does not exist", result.stdout)
 
     def test_index_evidence_rejects_unsafe_path_without_writing(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw) / "run"
             write_state(run_dir, minimal_state(status="draft"))
             before = (run_dir / "state.json").read_bytes()
@@ -912,7 +943,7 @@ memory_files: []
         self.assertIn("outside repository", result.stdout)
 
     def test_init_run_creates_draft_run_with_phase2_documents(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             parent = Path(raw)
             run_dir = parent / "phase2-created-run"
 
@@ -962,7 +993,7 @@ memory_files: []
         self.assertTrue(documents_exist["handoff.md"])
 
     def test_init_run_refuses_existing_directory(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw) / "existing"
             run_dir.mkdir()
 
@@ -990,7 +1021,7 @@ memory_files: []
         self.assertIn("run directory already exists", result.stdout)
 
     def test_init_run_rejects_invalid_track_workflow_without_leftover_directory(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw) / "invalid-pairing"
 
             result = subprocess.run(
@@ -1019,7 +1050,7 @@ memory_files: []
         self.assertIn("schema error at track", result.stdout)
 
     def test_init_run_prevalidates_static_evidence_before_writing(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw) / "invalid-evidence"
 
             with mock.patch.object(cli, "EVIDENCE_TYPES", cli.EVIDENCE_TYPES - {"task"}):
@@ -1044,7 +1075,7 @@ memory_files: []
         self.assertIn("unknown evidence type", str(raised.exception))
 
     def test_init_run_cleans_created_directory_when_final_validation_fails(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             parent = Path(raw)
             run_dir = parent / "final-validation-fails"
             failed_validation = cli.ValidationResult(run_dir, ["forced final validation failure"])
@@ -1082,7 +1113,7 @@ memory_files: []
         self.assertIn(f"valid: {run_dir}", result.stdout)
 
     def test_module_entrypoint_advances_run_from_command_line(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             write_state(run_dir, minimal_state(status="draft"))
 
@@ -1107,7 +1138,7 @@ memory_files: []
         self.assertIn("advanced: test-run -> triaged", result.stdout)
 
     def test_validate_accepts_indexed_review_decision_as_review_evidence(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             reviews_dir = run_dir / "reviews"
             reviews_dir.mkdir()
@@ -1168,7 +1199,7 @@ memory_files: []
         ]
         for disposition, recommended_status in required_source_dispositions:
             with self.subTest(disposition=disposition):
-                with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+                with temporary_run_directory() as raw:
                     run_dir = Path(raw)
                     decision_path = run_dir / "reviews" / "review-decision.json"
                     decision = review_decision_payload(
@@ -1222,7 +1253,7 @@ memory_files: []
         ]
         for disposition, recommended_status in allowed_empty_source:
             with self.subTest(disposition=disposition, recommended_status=recommended_status):
-                with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+                with temporary_run_directory() as raw:
                     run_dir = Path(raw)
                     decision_path = run_dir / "reviews" / "review-decision.json"
                     write_json(
@@ -1241,7 +1272,7 @@ memory_files: []
                 self.assertEqual(result.errors, [], result.errors)
 
     def test_validate_rejects_duplicate_indexed_review_decision_evidence(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             source_path = run_dir / "reviews" / "claude-review.json"
             write_json(source_path, {"status": "passed"})
@@ -1272,7 +1303,7 @@ memory_files: []
         )
 
     def test_validate_rejects_review_decision_severity_count_mismatch(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             review_output_path = run_dir / "reviews" / "claude-review.json"
             write_json(
@@ -1318,7 +1349,7 @@ memory_files: []
         )
 
     def test_validate_skips_severity_cross_check_when_source_findings_are_not_computable(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             review_output_path = run_dir / "reviews" / "claude-review.json"
             review_output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1344,7 +1375,7 @@ memory_files: []
         self.assertEqual(result.errors, [], result.errors)
 
     def test_validate_rejects_indexed_review_decision_with_unknown_disposition(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             reviews_dir = run_dir / "reviews"
             reviews_dir.mkdir()
@@ -1392,7 +1423,7 @@ memory_files: []
         )
 
     def test_validate_rejects_review_decision_run_id_mismatch(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             reviews_dir = run_dir / "reviews"
             reviews_dir.mkdir()
@@ -1440,7 +1471,7 @@ memory_files: []
         )
 
     def test_validate_rejects_high_finding_reviewed_without_resolution(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             reviews_dir = run_dir / "reviews"
             reviews_dir.mkdir()
@@ -1488,7 +1519,7 @@ memory_files: []
         )
 
     def test_validate_allows_high_finding_blocked_decision(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             reviews_dir = run_dir / "reviews"
             reviews_dir.mkdir()
@@ -1539,7 +1570,7 @@ memory_files: []
         self.assertEqual(result.errors, [], result.errors)
 
     def test_validate_allows_high_finding_reviewed_with_risk_acceptance(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             reviews_dir = run_dir / "reviews"
             reviews_dir.mkdir()
@@ -1600,7 +1631,7 @@ memory_files: []
         self.assertEqual(result.errors, [], result.errors)
 
     def test_validate_rejects_risk_accepted_high_finding_without_accepted_risks(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             reviews_dir = run_dir / "reviews"
             reviews_dir.mkdir()
@@ -1656,7 +1687,7 @@ memory_files: []
         )
 
     def test_validate_rejects_waived_decision_without_review_waiver_evidence(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             reviews_dir = run_dir / "reviews"
             reviews_dir.mkdir()
@@ -1704,7 +1735,7 @@ memory_files: []
         )
 
     def test_validate_rejects_review_decision_with_non_indexable_source_evidence(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             reviews_dir = run_dir / "reviews"
             reviews_dir.mkdir()
@@ -1760,7 +1791,7 @@ memory_files: []
         )
 
     def test_advance_allows_review_target_matching_recommended_status(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             reviews_dir = run_dir / "reviews"
             reviews_dir.mkdir()
@@ -1808,7 +1839,7 @@ memory_files: []
         self.assertEqual(advanced["status"], "reviewed")
 
     def test_advance_rejects_review_target_conflicting_with_recommended_status(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             reviews_dir = run_dir / "reviews"
             reviews_dir.mkdir()
@@ -1863,7 +1894,7 @@ memory_files: []
         self.assertEqual(before, after)
 
     def test_advance_ignores_review_decision_gate_for_non_review_target(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             state = minimal_state(status="draft")
             write_state(run_dir, state)
@@ -1873,7 +1904,7 @@ memory_files: []
         self.assertEqual(advanced["status"], "triaged")
 
     def test_advance_requires_decision_when_advancing_review_outcome_with_review_evidence(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             (run_dir / "review-output.md").write_text("# Review Output\n", encoding="utf-8")
             state = minimal_state(status="reviewing")
@@ -1901,7 +1932,7 @@ memory_files: []
         # A run that has not indexed any review evidence (e.g. a Fast run that
         # bypasses review, or a pre-review run) is not required to carry a
         # review decision. This keeps historical runs valid.
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             state = minimal_state(status="verified")
             state["track"] = "Fast"

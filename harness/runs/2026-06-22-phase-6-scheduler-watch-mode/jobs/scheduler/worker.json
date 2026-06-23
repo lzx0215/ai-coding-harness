@@ -1,0 +1,10 @@
+{
+  "worker_id": "phase6-live-watch",
+  "pid": 8708,
+  "started_at": "2026-06-22T05:22:55Z",
+  "run_dir": "C:\\ai\\ai-coding-harness\\harness\\runs\\2026-06-22-phase-6-scheduler-watch-mode",
+  "poll_interval": 0.1,
+  "max_iterations": 3,
+  "max_seconds": null,
+  "cli_version": "0.2.0"
+}

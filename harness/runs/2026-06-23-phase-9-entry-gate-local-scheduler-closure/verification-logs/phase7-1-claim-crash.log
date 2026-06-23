@@ -1,0 +1,9 @@
+test_acquire_claim_lock_retries_transient_windows_access_denied (tests.test_generic_agent_adapter.GenericCliAgentOrchestrationTest.test_acquire_claim_lock_retries_transient_windows_access_denied) ... ok
+test_try_claim_job_creates_owner_and_blocks_second_worker (tests.test_generic_agent_adapter.GenericCliAgentOrchestrationTest.test_try_claim_job_creates_owner_and_blocks_second_worker) ... ok
+test_scheduler_run_once_two_workers_execute_same_queued_job_at_most_once (tests.test_generic_agent_adapter.GenericCliAgentOrchestrationTest.test_scheduler_run_once_two_workers_execute_same_queued_job_at_most_once) ... ok
+test_real_scheduler_process_kill_leaves_claimed_running_job_detectable_as_stale (tests.test_generic_agent_adapter.GenericCliAgentOrchestrationTest.test_real_scheduler_process_kill_leaves_claimed_running_job_detectable_as_stale) ... ok
+
+----------------------------------------------------------------------
+Ran 4 tests in 3.184s
+
+OK

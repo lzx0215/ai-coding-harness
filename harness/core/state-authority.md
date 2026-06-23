@@ -50,3 +50,39 @@ Harness defines valid states and transitions. Codex executes transitions for the
 ## Resume
 
 On resume, Codex must read `state.json`, validate it against `harness/schemas/state.schema.json`, verify evidence paths, and continue only from a valid transition.
+
+## Stale Running Jobs
+
+`running` async jobs are current process records, not Harness completion states.
+Codex must distinguish active work from orphaned work before recovery:
+
+- Active: the job has a `worker_id`, and `jobs/scheduler/heartbeat.json` has the
+  same `worker_id`, `status = running-job`, matching `current_job_id`, and a
+  `last_seen_at` inside the chosen heartbeat timeout.
+- Recent: no fresh matching heartbeat proves activity, but the job's
+  `updated_at` or, when absent, `started_at` is still inside the timeout.
+- Stale: no fresh matching heartbeat proves activity, and the job's
+  `updated_at` or `started_at` is older than the timeout.
+- Invalid: required timestamps are missing or malformed after schema validation.
+
+Recovery is never automatic. A stale `running` job may be requeued or marked
+failed only through an explicit operator-confirmed recovery action that writes a
+`job-recovery` artifact and a scheduler event before changing the current
+`job.json`. Requeue recovery must not overwrite or delete partial `raw.log` or
+`output.json`; those artifacts require explicit user correction first.
+
+Multi-worker scheduler execution is guarded by per-job `claim.lock` directories.
+A worker owns a queued job only after a prepared directory containing
+`owner.json` is atomically renamed to `jobs/<job-id>/claim.lock`. Normal
+scheduler polling must not clear existing claim locks. Explicit stale recovery
+may remove a stale claim lock only after recovery preconditions pass, the
+`job-recovery` artifact and scheduler event are written, and the `job.json`
+state change succeeds. If recovery is rejected, including for partial
+`raw.log` or `output.json`, the claim lock must remain untouched.
+
+Claim leases are diagnostic and recovery safety inputs. An expired lease does
+not authorize ordinary scheduler polling to steal a lock or rewrite a running
+job. A fresh matching lease blocks stale recovery because it may represent an
+active worker whose run-level scheduler heartbeat was overwritten by another
+worker. Claimed job state transitions must compare `worker_id` and
+`claim_token` before writing `job.json`.

@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -8,6 +9,15 @@ from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def temporary_run_directory():
+    return tempfile.TemporaryDirectory(
+        dir=ROOT,
+        ignore_cleanup_errors=os.name == "nt",
+    )
+
+
 ADAPTER_PATH = ROOT / "mcp" / "claude-review" / "adapter.py"
 spec = importlib.util.spec_from_file_location("claude_review_adapter", ADAPTER_PATH)
 adapter = importlib.util.module_from_spec(spec)
@@ -101,7 +111,7 @@ class ClaudeReviewAdapterTest(unittest.TestCase):
             self.assertFalse((tmp / "outside-review.json").exists())
 
     def test_missing_artifact_dir_rejects_without_invoking_claude(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             payload = self.make_payload(Path(raw))
             payload.pop("artifact_dir")
 
@@ -124,7 +134,7 @@ class ClaudeReviewAdapterTest(unittest.TestCase):
             self.assertFalse(Path(payload["raw_log_file"]).exists())
 
     def test_empty_artifact_dir_rejects_without_invoking_claude(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             payload = self.make_payload(Path(raw))
             payload["artifact_dir"] = "   "
 
@@ -143,7 +153,7 @@ class ClaudeReviewAdapterTest(unittest.TestCase):
             self.assertEqual(result["reason"], "unsupported_environment")
 
     def test_payload_write_paths_remain_authoritative_over_cli_args(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             tmp = Path(raw)
             payload = self.make_payload(tmp)
             payload["output_file"] = str(tmp / "outside-output.json")

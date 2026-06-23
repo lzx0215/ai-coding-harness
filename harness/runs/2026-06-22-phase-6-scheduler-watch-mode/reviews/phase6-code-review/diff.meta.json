@@ -1,0 +1,8 @@
+﻿{
+    "base":  "fca6ae36aaf68c6927ae931afea2df70ecbecb08",
+    "head":  "246dc629ffaff9db19252a876fb4bd397417469d",
+    "diff_command":  "git diff fca6ae36aaf68c6927ae931afea2df70ecbecb08 HEAD",
+    "changed_files_command":  "git diff --name-only fca6ae36aaf68c6927ae931afea2df70ecbecb08 HEAD",
+    "diff_lines":  4399,
+    "changed_files":  28
+}

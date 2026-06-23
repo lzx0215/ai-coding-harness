@@ -1,4 +1,5 @@
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -7,6 +8,13 @@ from harness import readiness
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def temporary_run_directory():
+    return tempfile.TemporaryDirectory(
+        dir=ROOT,
+        ignore_cleanup_errors=os.name == "nt",
+    )
 
 
 def write_state(run_dir: Path, state: dict) -> None:
@@ -203,7 +211,7 @@ class ReadinessCheckTest(unittest.TestCase):
             ),
         }
 
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             state = minimal_state()
             write_state(run_dir, state)
@@ -231,7 +239,7 @@ workflow: standard-doc-system-change
                     )
 
     def test_check_run_readiness_does_not_require_strict_plan_fields_for_standard_track(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             state = minimal_state()
             write_state(run_dir, state)
@@ -263,7 +271,7 @@ constraints: []
         )
 
     def test_check_run_readiness_requires_strict_plan_fields_for_strict_track(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             state = minimal_state()
             state["track"] = "Strict"
@@ -297,7 +305,7 @@ constraints: []
         )
 
     def test_check_run_readiness_reports_missing_documents_without_mutation(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             state = minimal_state()
             write_state(run_dir, state)
@@ -315,7 +323,7 @@ constraints: []
         )
 
     def test_check_run_readiness_warns_on_track_mismatch(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             state = minimal_state()
             write_state(run_dir, state)
@@ -454,7 +462,7 @@ class Phase2TemplateTest(unittest.TestCase):
 
 class Phase3MemoryReadinessTest(unittest.TestCase):
     def test_check_ready_warns_when_memory_files_present_without_update(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             state = minimal_state()
             write_state(run_dir, state)
@@ -536,7 +544,7 @@ memory_files:
         )
 
     def test_check_ready_does_not_warn_when_memory_update_backs_memory_files(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             state = minimal_state()
             write_state(run_dir, state)

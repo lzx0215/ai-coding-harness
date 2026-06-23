@@ -1,0 +1,9 @@
+test_detects_old_running_job_without_fresh_matching_heartbeat_as_stale (tests.test_generic_agent_adapter.GenericCliAgentOrchestrationTest.test_detects_old_running_job_without_fresh_matching_heartbeat_as_stale) ... ok
+test_recover_stale_running_job_requires_confirmation_and_requeues_with_audit_artifact (tests.test_generic_agent_adapter.GenericCliAgentOrchestrationTest.test_recover_stale_running_job_requires_confirmation_and_requeues_with_audit_artifact) ... ok
+test_recover_stale_running_job_can_mark_failed_with_audit_artifact (tests.test_generic_agent_adapter.GenericCliAgentOrchestrationTest.test_recover_stale_running_job_can_mark_failed_with_audit_artifact) ... ok
+test_requeue_recovery_requires_conflicting_artifacts_to_be_corrected_first (tests.test_generic_agent_adapter.GenericCliAgentOrchestrationTest.test_requeue_recovery_requires_conflicting_artifacts_to_be_corrected_first) ... ok
+
+----------------------------------------------------------------------
+Ran 4 tests in 2.250s
+
+OK

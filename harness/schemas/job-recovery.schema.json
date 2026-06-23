@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Harness Stale Running Job Recovery Artifact",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "run_id",
+    "job_id",
+    "action",
+    "requested_by",
+    "requested_at",
+    "reason",
+    "heartbeat_timeout_seconds",
+    "artifact_correction_confirmed",
+    "artifact_warnings",
+    "stale_assessment",
+    "previous_job",
+    "new_job"
+  ],
+  "properties": {
+    "schema_version": { "type": "string", "minLength": 1 },
+    "run_id": { "type": "string", "minLength": 1 },
+    "job_id": { "type": "string", "minLength": 1 },
+    "action": {
+      "type": "string",
+      "enum": ["requeue", "fail"]
+    },
+    "requested_by": { "type": "string", "minLength": 1 },
+    "requested_at": {
+      "type": "string",
+      "minLength": 1,
+      "format": "date-time",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?(?:Z|[+-]\\d{2}:\\d{2})$"
+    },
+    "reason": { "type": "string", "minLength": 1 },
+    "heartbeat_timeout_seconds": { "type": "number", "exclusiveMinimum": 0 },
+    "artifact_correction_confirmed": { "type": "boolean" },
+    "artifact_warnings": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "stale_assessment": {
+      "type": "object",
+      "required": ["job_id", "classification", "reasons"],
+      "properties": {
+        "job_id": { "type": "string", "minLength": 1 },
+        "classification": {
+          "type": "string",
+          "enum": ["active", "recent", "stale", "invalid"]
+        },
+        "reasons": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        }
+      },
+      "additionalProperties": true
+    },
+    "previous_job": {
+      "type": "object",
+      "required": ["job_id", "run_id", "status"],
+      "additionalProperties": true
+    },
+    "new_job": {
+      "type": "object",
+      "required": ["job_id", "run_id", "status"],
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,4 +1,5 @@
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -7,6 +8,13 @@ from harness import cli
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def temporary_run_directory():
+    return tempfile.TemporaryDirectory(
+        dir=ROOT,
+        ignore_cleanup_errors=os.name == "nt",
+    )
 
 
 def minimal_state(status: str = "reviewed") -> dict:
@@ -98,7 +106,7 @@ class HandoffClosureTest(unittest.TestCase):
     def test_advance_to_completed_requires_handoff_closure_fields(self):
         required = ("changed", "verified", "not_verified", "residual_risks", "next_step")
         for missing in required:
-            with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            with temporary_run_directory() as raw:
                 run_dir = Path(raw)
                 state = minimal_state(status="reviewed")
                 state["evidence"] = complete_evidence(run_dir)
@@ -118,7 +126,7 @@ class HandoffClosureTest(unittest.TestCase):
             self.assertIn(f"handoff frontmatter missing field: {missing}", str(raised.exception))
 
     def test_advance_to_completed_fails_when_memory_update_lacks_files(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             state = minimal_state(status="reviewed")
             state["evidence"] = complete_evidence(run_dir)
@@ -131,7 +139,7 @@ class HandoffClosureTest(unittest.TestCase):
         self.assertIn("memory_update is updated but memory_files is empty", str(raised.exception))
 
     def test_advance_to_completed_fails_when_memory_files_is_not_a_list(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             state = minimal_state(status="reviewed")
             state["evidence"] = complete_evidence(run_dir)
@@ -148,7 +156,7 @@ class HandoffClosureTest(unittest.TestCase):
         self.assertIn("handoff memory_files must be a list", str(raised.exception))
 
     def test_advance_to_completed_fails_when_listed_memory_file_missing(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             state = minimal_state(status="reviewed")
             state["evidence"] = complete_evidence(run_dir)
@@ -167,7 +175,7 @@ class HandoffClosureTest(unittest.TestCase):
         self.assertIn("memory file does not exist", str(raised.exception))
 
     def test_advance_to_completed_allows_consistent_handoff(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             state = minimal_state(status="reviewed")
             state["evidence"] = complete_evidence(run_dir)

@@ -1,0 +1,11 @@
+test_concurrent_claims_same_worker_id_get_one_token (tests.test_generic_agent_adapter.GenericCliAgentOrchestrationTest.test_concurrent_claims_same_worker_id_get_one_token) ... ok
+test_scheduler_job_heartbeat_refreshes_claim_lease (tests.test_generic_agent_adapter.GenericCliAgentOrchestrationTest.test_scheduler_job_heartbeat_refreshes_claim_lease) ... ok
+test_execute_claimed_job_records_claim_token_on_running_job (tests.test_generic_agent_adapter.GenericCliAgentOrchestrationTest.test_execute_claimed_job_records_claim_token_on_running_job) ... ok
+test_claimed_execution_does_not_overwrite_raw_log_created_during_run (tests.test_generic_agent_adapter.GenericCliAgentOrchestrationTest.test_claimed_execution_does_not_overwrite_raw_log_created_during_run) ... ok
+test_claimed_execution_does_not_overwrite_output_created_during_run (tests.test_generic_agent_adapter.GenericCliAgentOrchestrationTest.test_claimed_execution_does_not_overwrite_output_created_during_run) ... ok
+test_live_multi_worker_watch_processes_execute_jobs_once (tests.test_generic_agent_adapter.GenericCliAgentOrchestrationTest.test_live_multi_worker_watch_processes_execute_jobs_once) ... ok
+
+----------------------------------------------------------------------
+Ran 6 tests in 13.581s
+
+OK

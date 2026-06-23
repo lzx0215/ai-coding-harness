@@ -1,0 +1,11 @@
+{"detail": {"worker_id": "phase6-live-watch"}, "event": "worker_started", "ts": "2026-06-22T05:22:55Z"}
+{"detail": {"iteration": 1, "worker_id": "phase6-live-watch"}, "event": "poll_started", "ts": "2026-06-22T05:22:55Z"}
+{"detail": {"job_id": "phase6-watch-agent", "worker_id": "phase6-live-watch"}, "event": "job_started", "ts": "2026-06-22T05:22:55Z"}
+{"detail": {"job_id": "phase6-watch-agent", "status": "succeeded", "worker_id": "phase6-live-watch"}, "event": "job_completed", "ts": "2026-06-22T05:22:55Z"}
+{"detail": {"executed_jobs": ["phase6-watch-agent"], "iteration": 1, "worker_id": "phase6-live-watch"}, "event": "poll_completed", "ts": "2026-06-22T05:22:55Z"}
+{"detail": {"iteration": 2, "worker_id": "phase6-live-watch"}, "event": "poll_started", "ts": "2026-06-22T05:22:56Z"}
+{"detail": {"executed_jobs": [], "iteration": 2, "worker_id": "phase6-live-watch"}, "event": "poll_completed", "ts": "2026-06-22T05:22:56Z"}
+{"detail": {"iteration": 3, "worker_id": "phase6-live-watch"}, "event": "poll_started", "ts": "2026-06-22T05:22:56Z"}
+{"detail": {"executed_jobs": [], "iteration": 3, "worker_id": "phase6-live-watch"}, "event": "poll_completed", "ts": "2026-06-22T05:22:56Z"}
+{"detail": {"iteration": 3, "worker_id": "phase6-live-watch"}, "event": "max_iterations_reached", "ts": "2026-06-22T05:22:56Z"}
+{"detail": {"iteration": 3, "stop_reason": "max_iterations", "worker_id": "phase6-live-watch"}, "event": "worker_stopped", "ts": "2026-06-22T05:22:56Z"}

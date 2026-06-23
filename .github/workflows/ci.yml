@@ -122,3 +122,35 @@ jobs:
           harness index-evidence "$GITHUB_WORKSPACE/.tmp/package-smoke-run" agent-result jobs/package-smoke-scheduler/output.json --description "Package smoke scheduler result."
           harness index-evidence "$GITHUB_WORKSPACE/.tmp/package-smoke-run" aggregation jobs/aggregation.json --description "Package smoke job aggregation."
           harness validate "$GITHUB_WORKSPACE/.tmp/package-smoke-run"
+          cat > "$GITHUB_WORKSPACE/.tmp/package-smoke-watch-agent.py" <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          payload = json.loads(Path(os.environ["HARNESS_AGENT_INPUT_FILE"]).read_text(encoding="utf-8"))
+          output = {
+              "run_id": payload["run_id"],
+              "job_id": payload["job_id"],
+              "agent": payload["agent"],
+              "adapter": payload["adapter"],
+              "status": "passed",
+              "summary": "Package smoke watch agent completed.",
+              "findings": [],
+              "evidence": [],
+              "not_tested": [],
+              "residual_risks": [],
+              "generated_at": payload["created_at"],
+          }
+          Path(os.environ["HARNESS_AGENT_OUTPUT_FILE"]).write_text(
+              json.dumps(output, indent=2) + "\n",
+              encoding="utf-8",
+          )
+          print("package-smoke-watch-agent wrote output")
+          PY
+          harness queue-generic-agent "$GITHUB_WORKSPACE/.tmp/package-smoke-run" package-smoke-watch --agent package-smoke-watch-agent --timeout-seconds 30 -- python "$GITHUB_WORKSPACE/.tmp/package-smoke-watch-agent.py"
+          harness run-scheduler "$GITHUB_WORKSPACE/.tmp/package-smoke-run" --watch --poll-interval-seconds 0.1 --max-iterations 3
+          harness index-evidence "$GITHUB_WORKSPACE/.tmp/package-smoke-run" agent-job jobs/package-smoke-watch/job.json --description "Package smoke watch scheduler job."
+          harness index-evidence "$GITHUB_WORKSPACE/.tmp/package-smoke-run" agent-result jobs/package-smoke-watch/output.json --description "Package smoke watch scheduler result."
+          harness aggregate-jobs "$GITHUB_WORKSPACE/.tmp/package-smoke-run"
+          harness index-evidence "$GITHUB_WORKSPACE/.tmp/package-smoke-run" aggregation jobs/aggregation.json --description "Package smoke watch job aggregation."
+          harness validate "$GITHUB_WORKSPACE/.tmp/package-smoke-run"

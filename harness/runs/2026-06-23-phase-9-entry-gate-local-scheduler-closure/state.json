@@ -1,0 +1,92 @@
+{
+  "run_id": "2026-06-23-phase-9-entry-gate-local-scheduler-closure",
+  "harness_version": "0.2.0",
+  "state_schema_version": "0.2.0",
+  "status": "completed",
+  "track": "Strict",
+  "current_workflow": "strict-risk-change",
+  "owner": "codex",
+  "base_commit": "00c3b57cc09c9ad4e33a5fe84dab398693e35a4f",
+  "created_at": "2026-06-23T00:26:57Z",
+  "updated_at": "2026-06-23T01:24:43Z",
+  "external_agents": [
+    {
+      "name": "claude-code",
+      "role": "reviewer",
+      "state_access": "none",
+      "status": "not_requested"
+    }
+  ],
+  "evidence": [
+    {
+      "type": "task",
+      "path": "task.md",
+      "description": "Task definition."
+    },
+    {
+      "type": "triage",
+      "path": "triage.md",
+      "description": "Task triage."
+    },
+    {
+      "type": "plan",
+      "path": "plan.md",
+      "description": "Implementation plan."
+    },
+    {
+      "type": "design-spec",
+      "path": "docs/superpowers/specs/2026-06-23-phase-9-cross-run-cloud-queue-design.md",
+      "description": "Approved Phase 9 Strict gated design."
+    },
+    {
+      "type": "implementation-plan",
+      "path": "docs/superpowers/plans/2026-06-23-phase-9-entry-gate-local-scheduler-closure-implementation.md",
+      "description": "Implementation plan for local scheduler entry-gate closure."
+    },
+    {
+      "type": "verification",
+      "path": "verification-logs/phase7-stale-recovery.log",
+      "description": "Targeted Phase 7 stale detection and recovery verification log."
+    },
+    {
+      "type": "verification",
+      "path": "verification-logs/phase7-1-claim-crash.log",
+      "description": "Targeted Phase 7.1 claim-lock and crash-smoke verification log."
+    },
+    {
+      "type": "verification",
+      "path": "verification-logs/phase8-multi-worker.log",
+      "description": "Targeted Phase 8 multi-worker verification log."
+    },
+    {
+      "type": "verification",
+      "path": "verification-logs/full-suite.log",
+      "description": "Full local unit suite verification log."
+    },
+    {
+      "type": "verification",
+      "path": "verification-logs/run-validation.log",
+      "description": "All source-controlled runs validation log."
+    },
+    {
+      "type": "verification",
+      "path": "verification-logs/diff-check.log",
+      "description": "Whitespace validation log."
+    },
+    {
+      "type": "verification",
+      "path": "verification.md",
+      "description": "Verification summary for Phase 9 entry-gate local scheduler closure."
+    },
+    {
+      "type": "review-waiver",
+      "path": "review-waiver.md",
+      "description": "Scoped review waiver for documentation and run-evidence-only closure."
+    },
+    {
+      "type": "handoff",
+      "path": "handoff.md",
+      "description": "Completion handoff for Phase 9 entry-gate local scheduler closure."
+    }
+  ]
+}

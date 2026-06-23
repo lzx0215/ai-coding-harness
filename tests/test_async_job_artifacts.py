@@ -1,4 +1,5 @@
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -12,9 +13,19 @@ ROOT = Path(__file__).resolve().parents[1]
 PHASE4_RUN = ROOT / "harness" / "runs" / "2026-06-21-phase-4-async-substrate-closure"
 PHASE4_LIVE_RUN = ROOT / "harness" / "runs" / "2026-06-21-phase-4-live-generic-agent-smoke"
 PHASE5_LIVE_RUN = ROOT / "harness" / "runs" / "2026-06-22-phase-5-live-scheduler-smoke"
+PHASE6_WATCH_RUN = ROOT / "harness" / "runs" / "2026-06-22-phase-6-scheduler-watch-mode"
 JOB_SCHEMA = ROOT / "harness" / "schemas" / "job.schema.json"
+JOB_RECOVERY_SCHEMA = ROOT / "harness" / "schemas" / "job-recovery.schema.json"
+CLAIM_OWNER_SCHEMA = ROOT / "harness" / "schemas" / "claim-owner.schema.json"
 AGGREGATION_SCHEMA = ROOT / "harness" / "schemas" / "aggregation.schema.json"
 AGENT_RESULT_SCHEMA = ROOT / "harness" / "schemas" / "agent-result.schema.json"
+
+
+def temporary_run_directory():
+    return tempfile.TemporaryDirectory(
+        dir=ROOT,
+        ignore_cleanup_errors=os.name == "nt",
+    )
 
 
 def load_schema(path: Path) -> dict:
@@ -96,6 +107,43 @@ class Phase4ClosureRunTest(unittest.TestCase):
         self.assertEqual(aggregation["consumed_jobs"], ["phase5-live-scheduler-agent"])
         self.assertEqual(aggregation["incomplete_jobs"], [])
 
+    def test_phase6_watch_run_was_produced_by_watch_scheduler_path(self):
+        result = cli.validate_run(PHASE6_WATCH_RUN, root=ROOT)
+        state = json.loads((PHASE6_WATCH_RUN / "state.json").read_text(encoding="utf-8"))
+        evidence_types = {item["type"] for item in state["evidence"]}
+        evidence_paths = {item["path"] for item in state["evidence"]}
+        scheduler_dir = PHASE6_WATCH_RUN / "jobs" / "scheduler"
+        worker = json.loads((scheduler_dir / "worker.json").read_text(encoding="utf-8"))
+        heartbeat = json.loads((scheduler_dir / "heartbeat.json").read_text(encoding="utf-8"))
+        events = [
+            json.loads(line)
+            for line in (scheduler_dir / "events.log").read_text(encoding="utf-8").splitlines()
+        ]
+        aggregation = json.loads(
+            PHASE6_WATCH_RUN.joinpath("jobs", "aggregation.json").read_text(encoding="utf-8")
+        )
+
+        self.assertEqual(result.errors, [])
+        self.assertEqual(state["status"], "completed")
+        self.assertIn("agent-job", evidence_types)
+        self.assertIn("agent-result", evidence_types)
+        self.assertIn("aggregation", evidence_types)
+        self.assertIn("verification", evidence_types)
+        self.assertIn("review-waiver", evidence_types)
+        self.assertIn("handoff", evidence_types)
+        self.assertIn("verification.md", evidence_paths)
+        self.assertIn("review-waiver.md", evidence_paths)
+        self.assertIn("handoff.md", evidence_paths)
+        self.assertEqual(worker["worker_id"], "phase6-live-watch")
+        self.assertEqual(heartbeat["worker_id"], "phase6-live-watch")
+        self.assertEqual(heartbeat["status"], "stopped")
+        self.assertTrue(events)
+        self.assertTrue(all({"ts", "event", "detail"} <= set(event) for event in events))
+        self.assertIn("worker_started", {event["event"] for event in events})
+        self.assertIn("job_completed", {event["event"] for event in events})
+        self.assertEqual(aggregation["consumed_jobs"], ["phase6-watch-agent"])
+        self.assertEqual(aggregation["incomplete_jobs"], [])
+
 
 def minimal_job(status: str = "succeeded") -> dict:
     return {
@@ -134,6 +182,52 @@ def minimal_aggregation() -> dict:
         "conflicts": [],
         "recommended_transition": None,
         "residual_risks": [],
+    }
+
+
+def minimal_job_recovery() -> dict:
+    previous_job = minimal_job("running")
+    previous_job["worker_id"] = "worker-old"
+    previous_job["updated_at"] = "2026-06-20T00:01:00Z"
+    new_job = dict(previous_job)
+    new_job["status"] = "queued"
+    new_job["started_at"] = None
+    new_job["completed_at"] = None
+    new_job["worker_id"] = None
+    new_job["updated_at"] = "2026-06-20T00:10:00Z"
+    return {
+        "schema_version": "0.2.0",
+        "run_id": "test-run",
+        "job_id": "claude-review-001",
+        "action": "requeue",
+        "requested_by": "codex",
+        "requested_at": "2026-06-20T00:10:00Z",
+        "reason": "scheduler heartbeat timed out",
+        "heartbeat_timeout_seconds": 60,
+        "artifact_correction_confirmed": False,
+        "artifact_warnings": [],
+        "stale_assessment": {
+            "job_id": "claude-review-001",
+            "classification": "stale",
+            "reasons": ["scheduler heartbeat timed out", "job updated_at timed out"],
+        },
+        "previous_job": previous_job,
+        "new_job": new_job,
+    }
+
+
+def minimal_claim_owner() -> dict:
+    return {
+        "schema_version": 2,
+        "run_id": "test-run",
+        "job_id": "claude-review-001",
+        "worker_id": "worker-a",
+        "claim_token": "a" * 32,
+        "claimed_at": "2026-06-20T00:01:00Z",
+        "lease_started_at": "2026-06-20T00:01:00Z",
+        "lease_heartbeat_at": "2026-06-20T00:01:00Z",
+        "lease_expires_at": "2026-06-20T00:02:00Z",
+        "lock_path": "jobs/claude-review-001/claim.lock",
     }
 
 
@@ -183,6 +277,22 @@ class AsyncJobArtifactSchemaTest(unittest.TestCase):
             with self.subTest(status=status):
                 self.assertEqual(validation_errors(JOB_SCHEMA, minimal_job(status)), [])
 
+    def test_job_schema_accepts_worker_identity_and_updated_at(self):
+        job = minimal_job("running")
+        job["worker_id"] = "scheduler-worker"
+        job["updated_at"] = "2026-06-20T00:01:00Z"
+
+        self.assertEqual(validation_errors(JOB_SCHEMA, job), [])
+
+    def test_job_schema_accepts_claim_fields(self):
+        job = minimal_job("running")
+        job["worker_id"] = "worker-a"
+        job["claim_token"] = "a" * 32
+        job["claim_started_at"] = "2026-06-20T00:01:00Z"
+        job["claim_updated_at"] = "2026-06-20T00:01:30Z"
+
+        self.assertEqual(validation_errors(JOB_SCHEMA, job), [])
+
     def test_job_schema_rejects_unknown_status(self):
         job = minimal_job("waiting")
 
@@ -192,6 +302,36 @@ class AsyncJobArtifactSchemaTest(unittest.TestCase):
 
     def test_aggregation_schema_accepts_minimal_payload(self):
         self.assertEqual(validation_errors(AGGREGATION_SCHEMA, minimal_aggregation()), [])
+
+    def test_job_recovery_schema_accepts_minimal_payload(self):
+        self.assertEqual(validation_errors(JOB_RECOVERY_SCHEMA, minimal_job_recovery()), [])
+
+    def test_claim_owner_schema_accepts_minimal_payload(self):
+        self.assertEqual(validation_errors(CLAIM_OWNER_SCHEMA, minimal_claim_owner()), [])
+
+    def test_claim_owner_schema_rejects_pid_field(self):
+        owner = minimal_claim_owner()
+        owner["pid"] = 12345
+
+        errors = validation_errors(CLAIM_OWNER_SCHEMA, owner)
+
+        self.assertTrue(errors)
+
+    def test_claim_owner_schema_rejects_missing_claim_token(self):
+        owner = minimal_claim_owner()
+        owner.pop("claim_token")
+
+        errors = validation_errors(CLAIM_OWNER_SCHEMA, owner)
+
+        self.assertTrue(errors)
+
+    def test_claim_owner_schema_rejects_malformed_claim_token(self):
+        owner = minimal_claim_owner()
+        owner["claim_token"] = "a" * 31
+
+        errors = validation_errors(CLAIM_OWNER_SCHEMA, owner)
+
+        self.assertTrue(errors)
 
     def test_aggregation_schema_rejects_unknown_transition(self):
         aggregation = minimal_aggregation()
@@ -237,7 +377,7 @@ class AsyncJobArtifactSchemaTest(unittest.TestCase):
 
 class AsyncJobEvidenceValidationTest(unittest.TestCase):
     def test_validate_accepts_terminal_agent_job_evidence(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             job_file = run_dir / "jobs" / "claude-review-001" / "job.json"
             write_json(job_file, minimal_job("succeeded"))
@@ -255,7 +395,7 @@ class AsyncJobEvidenceValidationTest(unittest.TestCase):
         self.assertEqual(result.errors, [])
 
     def test_validate_rejects_terminal_agent_job_without_completed_at(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             job_file = run_dir / "jobs" / "claude-review-001" / "job.json"
             job = minimal_job("succeeded")
@@ -278,7 +418,7 @@ class AsyncJobEvidenceValidationTest(unittest.TestCase):
         )
 
     def test_validate_rejects_agent_job_timestamp_order_violation(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             job_file = run_dir / "jobs" / "claude-review-001" / "job.json"
             job = minimal_job("succeeded")
@@ -325,7 +465,7 @@ class AsyncJobEvidenceValidationTest(unittest.TestCase):
         self.assertIn("started_at must be a valid ISO 8601 timestamp", errors)
 
     def test_validate_rejects_agent_job_run_id_mismatch(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             job_file = run_dir / "jobs" / "claude-review-001" / "job.json"
             job = minimal_job("succeeded")
@@ -351,7 +491,7 @@ class AsyncJobEvidenceValidationTest(unittest.TestCase):
         )
 
     def test_validate_rejects_non_terminal_agent_job_evidence(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             job_file = run_dir / "jobs" / "claude-review-001" / "job.json"
             write_json(job_file, minimal_job("running"))
@@ -372,7 +512,7 @@ class AsyncJobEvidenceValidationTest(unittest.TestCase):
         )
 
     def test_succeeded_job_directory_is_not_auto_indexed_as_evidence(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             job_file = run_dir / "jobs" / "claude-review-001" / "job.json"
             write_json(job_file, minimal_job("succeeded"))
@@ -384,7 +524,7 @@ class AsyncJobEvidenceValidationTest(unittest.TestCase):
         self.assertEqual(result.errors, [])
 
     def test_validate_rejects_invalid_agent_job_schema(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             job_file = run_dir / "jobs" / "claude-review-001" / "job.json"
             job = minimal_job("succeeded")
@@ -407,7 +547,7 @@ class AsyncJobEvidenceValidationTest(unittest.TestCase):
         )
 
     def test_validate_accepts_agent_result_evidence_with_matching_job(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             job_file = run_dir / "jobs" / "claude-review-001" / "job.json"
             result_file = run_dir / "jobs" / "claude-review-001" / "output.json"
@@ -431,7 +571,7 @@ class AsyncJobEvidenceValidationTest(unittest.TestCase):
         self.assertEqual(result.errors, [])
 
     def test_validate_rejects_invalid_agent_result_schema(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             job_file = run_dir / "jobs" / "claude-review-001" / "job.json"
             result_file = run_dir / "jobs" / "claude-review-001" / "output.json"
@@ -460,7 +600,7 @@ class AsyncJobEvidenceValidationTest(unittest.TestCase):
         )
 
     def test_validate_rejects_agent_result_run_id_mismatch(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             job_file = run_dir / "jobs" / "claude-review-001" / "job.json"
             result_file = run_dir / "jobs" / "claude-review-001" / "output.json"
@@ -493,7 +633,7 @@ class AsyncJobEvidenceValidationTest(unittest.TestCase):
         )
 
     def test_validate_rejects_agent_result_without_matching_agent_job(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             result_file = run_dir / "jobs" / "claude-review-001" / "output.json"
             write_json(result_file, minimal_agent_result())
@@ -518,7 +658,7 @@ class AsyncJobEvidenceValidationTest(unittest.TestCase):
         )
 
     def test_validate_rejects_agent_result_path_that_does_not_match_job_output_file(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             job_file = run_dir / "jobs" / "claude-review-001" / "job.json"
             result_file = run_dir / "jobs" / "claude-review-001" / "elsewhere.json"
@@ -545,7 +685,7 @@ class AsyncJobEvidenceValidationTest(unittest.TestCase):
         )
 
     def test_validate_rejects_agent_result_adapter_mismatch(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             job_file = run_dir / "jobs" / "claude-review-001" / "job.json"
             result_file = run_dir / "jobs" / "claude-review-001" / "output.json"
@@ -574,7 +714,7 @@ class AsyncJobEvidenceValidationTest(unittest.TestCase):
         )
 
     def test_validate_rejects_duplicate_agent_job_evidence(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             job_file = run_dir / "jobs" / "claude-review-001" / "job.json"
             duplicate_file = run_dir / "jobs" / "duplicate" / "job.json"
@@ -601,7 +741,7 @@ class AsyncJobEvidenceValidationTest(unittest.TestCase):
         )
 
     def test_validate_accepts_aggregation_evidence(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             job_file = run_dir / "jobs" / "claude-review-001" / "job.json"
             aggregation_file = run_dir / "jobs" / "aggregation.json"
@@ -624,8 +764,27 @@ class AsyncJobEvidenceValidationTest(unittest.TestCase):
 
         self.assertEqual(result.errors, [])
 
+    def test_validate_accepts_job_recovery_evidence(self):
+        with temporary_run_directory() as raw:
+            run_dir = Path(raw)
+            recovery_file = run_dir / "jobs" / "claude-review-001" / "recovery" / "requeue.json"
+            write_json(recovery_file, minimal_job_recovery())
+            state = minimal_state()
+            state["evidence"] = [
+                {
+                    "type": "job-recovery",
+                    "path": str(recovery_file.relative_to(ROOT)),
+                    "description": "Explicit stale-running requeue recovery artifact.",
+                }
+            ]
+            write_json(run_dir / "state.json", state)
+
+            result = cli.validate_run(run_dir, root=ROOT)
+
+        self.assertEqual(result.errors, [])
+
     def test_validate_aggregation_evidence_does_not_mutate_state_status(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             job_file = run_dir / "jobs" / "claude-review-001" / "job.json"
             aggregation_file = run_dir / "jobs" / "aggregation.json"
@@ -651,7 +810,7 @@ class AsyncJobEvidenceValidationTest(unittest.TestCase):
         self.assertEqual(saved["status"], "verified")
 
     def test_validate_accepts_incomplete_aggregation_job_outside_consumed_jobs(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             job_file = run_dir / "jobs" / "claude-review-001" / "job.json"
             aggregation_file = run_dir / "jobs" / "aggregation.json"
@@ -677,7 +836,7 @@ class AsyncJobEvidenceValidationTest(unittest.TestCase):
         self.assertEqual(result.errors, [])
 
     def test_validate_rejects_aggregation_run_id_mismatch(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             job_file = run_dir / "jobs" / "claude-review-001" / "job.json"
             aggregation_file = run_dir / "jobs" / "aggregation.json"
@@ -710,7 +869,7 @@ class AsyncJobEvidenceValidationTest(unittest.TestCase):
         )
 
     def test_validate_rejects_aggregation_consumed_job_without_agent_job_evidence(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             aggregation_file = run_dir / "jobs" / "aggregation.json"
             write_json(aggregation_file, minimal_aggregation())
@@ -735,7 +894,7 @@ class AsyncJobEvidenceValidationTest(unittest.TestCase):
         )
 
     def test_validate_rejects_aggregation_bucket_status_mismatch(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             job_file = run_dir / "jobs" / "claude-review-001" / "job.json"
             aggregation_file = run_dir / "jobs" / "aggregation.json"
@@ -768,7 +927,7 @@ class AsyncJobEvidenceValidationTest(unittest.TestCase):
         )
 
     def test_validate_rejects_incomplete_aggregation_job_with_terminal_agent_job(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             job_file = run_dir / "jobs" / "terminal-job" / "job.json"
             aggregation_file = run_dir / "jobs" / "aggregation.json"
@@ -805,7 +964,7 @@ class AsyncJobEvidenceValidationTest(unittest.TestCase):
         )
 
     def test_validate_rejects_invalid_aggregation_evidence(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             aggregation_file = run_dir / "jobs" / "aggregation.json"
             aggregation = minimal_aggregation()
@@ -828,7 +987,7 @@ class AsyncJobEvidenceValidationTest(unittest.TestCase):
         )
 
     def test_validate_rejects_aggregation_bucket_outside_consumed_jobs(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             aggregation_file = run_dir / "jobs" / "aggregation.json"
             aggregation = minimal_aggregation()
@@ -855,7 +1014,7 @@ class AsyncJobEvidenceValidationTest(unittest.TestCase):
         )
 
     def test_validate_rejects_aggregation_terminal_bucket_conflict(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             aggregation_file = run_dir / "jobs" / "aggregation.json"
             aggregation = minimal_aggregation()
@@ -878,7 +1037,7 @@ class AsyncJobEvidenceValidationTest(unittest.TestCase):
         )
 
     def test_validate_rejects_aggregation_incomplete_terminal_conflict(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             aggregation_file = run_dir / "jobs" / "aggregation.json"
             aggregation = minimal_aggregation()
@@ -901,7 +1060,7 @@ class AsyncJobEvidenceValidationTest(unittest.TestCase):
         )
 
     def test_validate_rejects_consumed_aggregation_job_without_classification(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             aggregation_file = run_dir / "jobs" / "aggregation.json"
             aggregation = minimal_aggregation()
@@ -926,7 +1085,7 @@ class AsyncJobEvidenceValidationTest(unittest.TestCase):
     def test_validate_rejects_duplicate_aggregation_job_ids(self):
         for bucket in cli.AGGREGATION_JOB_BUCKETS:
             with self.subTest(bucket=bucket):
-                with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+                with temporary_run_directory() as raw:
                     run_dir = Path(raw)
                     aggregation_file = run_dir / "jobs" / "aggregation.json"
                     aggregation = minimal_aggregation()
@@ -950,7 +1109,7 @@ class AsyncJobEvidenceValidationTest(unittest.TestCase):
                 )
 
     def test_validate_does_not_schema_validate_non_aggregation_evidence(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             review_output_file = run_dir / "reviews" / "review-output.json"
             aggregation = minimal_aggregation()
@@ -973,7 +1132,7 @@ class AsyncJobEvidenceValidationTest(unittest.TestCase):
         )
 
     def test_validate_reports_missing_aggregation_path_without_schema_error(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             missing_aggregation_file = run_dir / "jobs" / "missing-aggregation.json"
             state = minimal_state()
@@ -997,7 +1156,7 @@ class AsyncJobEvidenceValidationTest(unittest.TestCase):
         )
 
     def test_validate_does_not_read_aggregation_outside_repository(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             with tempfile.TemporaryDirectory() as outside_raw:
                 outside_aggregation = Path(outside_raw) / "aggregation.json"
@@ -1025,7 +1184,7 @@ class AsyncJobEvidenceValidationTest(unittest.TestCase):
         )
 
     def test_validate_does_not_read_agent_job_outside_repository(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             with tempfile.TemporaryDirectory() as outside_raw:
                 outside_job = Path(outside_raw) / "job.json"
@@ -1054,7 +1213,7 @@ class AsyncJobEvidenceValidationTest(unittest.TestCase):
         proof_job = ROOT / "proof-job.json"
         try:
             write_json(proof_job, minimal_job("running"))
-            with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+            with temporary_run_directory() as raw:
                 run_dir = Path(raw)
                 state = minimal_state()
                 state["evidence"] = [
@@ -1079,7 +1238,7 @@ class AsyncJobEvidenceValidationTest(unittest.TestCase):
         )
 
     def test_validate_reports_non_object_agent_job_schema_error(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as raw:
+        with temporary_run_directory() as raw:
             run_dir = Path(raw)
             job_file = run_dir / "jobs" / "claude-review-001" / "job.json"
             job_file.parent.mkdir(parents=True, exist_ok=True)
